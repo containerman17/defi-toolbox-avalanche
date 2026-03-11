@@ -1,0 +1,15 @@
+{
+  "name": "hayabusa-examples",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "hayabusa-pools": "file:../pools",
+    "hayabusa-router": "file:../router",
+    "viem": "^2.47.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "typescript": "^5.9.3"
+  }
+}

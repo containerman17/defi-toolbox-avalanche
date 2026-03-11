@@ -1,0 +1,5081 @@
+{
+  "block": 80341389,
+  "timestamp": "2026-03-14T07:12:53.185Z",
+  "pairs": [
+    {
+      "name": "10 USDC → WAVAX",
+      "token_in": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "token_out": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "amount_in": "10000000",
+      "decimals_in": 6,
+      "decimals_out": 18,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e0001b31f66aa3c1e785363f0875a1b74e27b85fd66c703989680080e6afd04d9d9c1007fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD0000000000000000000502030501a0de7fea0b0100010200000c02000203000001f400000a0004060101020204ff0000000000000000000000000000000000000000000000000000000011476e10eb79ddffa6f2585be526d2bd840c3e20b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e0000000000000000000000000000000000000000b31f66aa3c1e785363f0875a1b74e27b85fd66c700000000000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "AVAX",
+              "symbol": "AVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 62.839507565447036,
+              "nextValue": 62.839507565447036,
+              "stepValue": 62.839507565447036,
+              "in_value": 6.283950756544705,
+              "out_value": 0.653135428201947,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 62.839507565447036,
+              "nextValue": 62.839507565447036,
+              "stepValue": 62.839507565447036,
+              "in_value": 6.283950756544705,
+              "out_value": 0.653135428201947,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 0,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 37.160492434552964,
+              "nextValue": 37.160492434552964,
+              "stepValue": 37.160492434552964,
+              "in_value": 3.7160492434552967,
+              "out_value": 0.38630515342781174,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 3,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Wrapped AVAX",
+              "value": 37.160492434552964,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.38630515342781174,
+              "out_value": 0.38630515342781174,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 380084,
+        "api_out_amounts": [
+          "1038920861338943744"
+        ],
+        "simulated_out": "1038920861338943744"
+      }
+    },
+    {
+      "name": "100 USDC → WAVAX",
+      "token_in": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "token_out": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "amount_in": "100000000",
+      "decimals_in": 6,
+      "decimals_out": 18,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e0001b31f66aa3c1e785363f0875a1b74e27b85fd66c70405f5e100089028c4b77ff908007fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD0000000000000000000e05060f01008e91040301000101020101010068da9e03020001030200320196657ea00b03000402000105bc04400b030005020001013e4f770b040006020001e0c85a440b0400070200000c05000208000001f400000a000200000a000106000504000302060401000b0400090a0006150400010b0c010a1104000d0e08020eff000000000000000000000000000000000000000000000000000000000000000041fd792c9b83034c31666f602f4e315fbc2bd2ecb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e273551702c480e2b45407ba200eb5ad34bca89a52e587b9e7aa638d7eb7db5fe7447513bc4d0d28b71bd752508936dea5a032991f4a2997a506b1cdef01449c0ba930b6e2caca3def3ccbd7a3e58953411476e10eb79ddffa6f2585be526d2bd840c3e2000000000000000000000000000000000000000003030daa54b486f473807e2dd0b1dbc57c9c85c5dc891eb4cbdeff6e073e859e987815ed1505c2acd66ce3a6d8deb31c642af75d4f9056173e61bbd4a26debd39d5ed069770406fca10a0e4f8d2c743eb152b9d0fdc40c096757f570a51e494bd4b943e50b31f66aa3c1e785363f0875a1b74e27b85fd66c70000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Euro Coin",
+              "symbol": "EUROC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "GUNZ",
+              "symbol": "GUN",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Bitcoin",
+              "symbol": "BTC.b",
+              "decimals": 8,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "AVAX",
+              "symbol": "AVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh Volatile",
+              "value": 0.21753918541553915,
+              "nextValue": 0.21753918541553915,
+              "stepValue": 0.21753918541553915,
+              "in_value": 0.21753918541553924,
+              "out_value": 0.19059758756470388,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Euro Coin",
+                "symbol": "EUROC",
+                "decimals": 6,
+                "asset_id": "euroc",
+                "asset_type": "euro",
+                "is_rebasing": false,
+                "cgid": "euro-coin"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh Volatile",
+              "value": 0.21753918541553915,
+              "nextValue": 0.21753918541553915,
+              "stepValue": 0.21753918541553915,
+              "in_value": 0.21753918541553924,
+              "out_value": 0.19059758756470388,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Euro Coin",
+                "symbol": "EUROC",
+                "decimals": 6,
+                "asset_id": "euroc",
+                "asset_type": "euro",
+                "is_rebasing": false,
+                "cgid": "euro-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh Volatile",
+              "value": 0.15964643684893495,
+              "nextValue": 0.15964643684893495,
+              "stepValue": 0.15964643684893495,
+              "in_value": 0.159646436848935,
+              "out_value": 10.208422256672138,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "GUNZ",
+                "symbol": "GUN",
+                "decimals": 18,
+                "asset_id": "gun",
+                "asset_type": "gun",
+                "is_rebasing": false,
+                "cgid": "gunz"
+              }
+            },
+            {
+              "source": 3,
+              "target": 4,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh Volatile",
+              "value": 0.15964643684893495,
+              "nextValue": 0.15964643684893495,
+              "stepValue": 0.15964643684893495,
+              "in_value": 0.159646436848935,
+              "out_value": 10.208422256672138,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "GUNZ",
+                "symbol": "GUN",
+                "decimals": 18,
+                "asset_id": "gun",
+                "asset_type": "gun",
+                "is_rebasing": false,
+                "cgid": "gunz"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Uniswap V3",
+              "value": 58.5270271860833,
+              "nextValue": 58.5270271860833,
+              "stepValue": 58.5270271860833,
+              "in_value": 58.52702718608333,
+              "out_value": 0.0008280780133253714,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 5,
+              "target": 6,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Uniswap V3",
+              "value": 58.5270271860833,
+              "nextValue": 58.5270271860833,
+              "stepValue": 58.5270271860833,
+              "in_value": 58.52702718608333,
+              "out_value": 0.0008280780133253714,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 0.920552030583105,
+              "nextValue": 0.920552030583105,
+              "stepValue": 0.920552030583105,
+              "in_value": 0.9205520305831054,
+              "out_value": 0.000013025539085499801,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 5,
+              "target": 6,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 0.920552030583105,
+              "nextValue": 0.920552030583105,
+              "stepValue": 0.920552030583105,
+              "in_value": 0.9205520305831054,
+              "out_value": 0.000013025539085499801,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 0.19513237902258143,
+              "nextValue": 0.19513237902258143,
+              "stepValue": 0.19513237902258143,
+              "in_value": 0.19513237902258151,
+              "out_value": 0.020278665791412145,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 7,
+              "target": 8,
+              "sourceExtend": true,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 0.19513237902258143,
+              "nextValue": 0.19513237902258143,
+              "stepValue": 0.19513237902258143,
+              "in_value": 0.19513237902258151,
+              "out_value": 0.020278665791412145,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 8,
+              "target": 9,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 0.19513237902258143,
+              "nextValue": 0.19513237902258143,
+              "stepValue": 0.19513237902258143,
+              "in_value": 0.19513237902258151,
+              "out_value": 0.020278665791412145,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 0,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 35.104814629054104,
+              "nextValue": 35.104814629054104,
+              "stepValue": 35.104814629054104,
+              "in_value": 35.10481462905412,
+              "out_value": 3.6484652886717828,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 7,
+              "target": 8,
+              "sourceExtend": true,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 35.104814629054104,
+              "nextValue": 35.104814629054104,
+              "stepValue": 35.104814629054104,
+              "in_value": 35.10481462905412,
+              "out_value": 3.6484652886717828,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 8,
+              "target": 9,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 35.104814629054104,
+              "nextValue": 35.104814629054104,
+              "stepValue": 35.104814629054104,
+              "in_value": 35.10481462905412,
+              "out_value": 3.6484652886717828,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 0,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Uniswap V4",
+              "value": 4.87528815299243,
+              "nextValue": 4.87528815299243,
+              "stepValue": 4.87528815299243,
+              "in_value": 4.8752881529924315,
+              "out_value": 0.5067838456068122,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 10,
+              "target": 11,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 4.87528815299243,
+              "nextValue": 4.87528815299243,
+              "stepValue": 4.87528815299243,
+              "in_value": 4.8752881529924315,
+              "out_value": 0.5067838456068122,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 11,
+              "target": 9,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Wrapped AVAX",
+              "value": 4.87528815299243,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.5067838456068122,
+              "out_value": 0.5067838456068122,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 2,
+              "target": 9,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 0.21753918541553915,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.19059758756470388,
+              "out_value": 0.02261042795704651,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Euro Coin",
+                "symbol": "EUROC",
+                "decimals": 6,
+                "asset_id": "euroc",
+                "asset_type": "euro",
+                "is_rebasing": false,
+                "cgid": "euro-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 4,
+              "target": 9,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2.2",
+              "value": 0.15964643684893495,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 10.208422256672138,
+              "out_value": 0.016596014527022376,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "GUNZ",
+                "symbol": "GUN",
+                "decimals": 18,
+                "asset_id": "gun",
+                "asset_type": "gun",
+                "is_rebasing": false,
+                "cgid": "gunz"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 6,
+              "target": 9,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "WOOFi V2",
+              "value": 59.44757921666641,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0008411035524108712,
+              "out_value": 6.178231073038856,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 1205236,
+        "api_out_amounts": [
+          "10387768832935135232"
+        ],
+        "simulated_out": "10387768832935135232"
+      }
+    },
+    {
+      "name": "1 AVAX → USDC",
+      "token_in": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "token_out": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "amount_in": "1000000000000000000",
+      "decimals_in": 18,
+      "decimals_out": 6,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b31f66aa3c1e785363f0875a1b74e27b85fd66c70001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e080de0b6b3a76400000392a1457fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD0000000000000000001c070922010734e101030100010102000a0102d788ba030100010302001e010263a728030205010502011e0102c714f8030307010702011e0103d643d6030409010902011e0105cd69f403050b010b02011e0103e332b603060d010d02001e01028cbecc03070f010f02001e000b08011002010e040012000e12011e08030700000813001e0c030700000c14011e06030600000615001e04030317000417001e0a030600000a18001e022707191a1b00020e0b08011c1b010d7ffffffc150801011d1e010c250801011f1e0106150801001620010007080100112100ff000000008481acb47e6a943abc0fd041346d1baf382d305eb31f66aa3c1e785363f0875a1b74e27b85fd66c76d246c0493266596b0ac13cc2ffd6672e2d100dc5bcf3ed4b4afcac2eac8791c320f504e7e8d40d86a0c03c0b933875daf767bb90584ba696b71324327f382534916520f178bf9e201db4cd8172cc7d22612da8fc26efbca3cc3f8fd543bcba72b10ab59facb3892f9a8d55eb50fdeee00f2b3fa8a85ded5bf12ca918c7e8cb260f480e74fdb99f5e0de5e8b07dca207001d5c523749b0b4704d7b81535c6f1f494dd9f783daf777d3fb4303da4de795953592d0c2ea99c031b05ae03044c857c78afb5671dee96bb5c9e891af3063004a441ba4fab4ca3d6deb562627cc2be95d1492bba726e10eba57968a065f05ec53942dcce5087f56cf1d68f4e017ca3a793f59a2f01449c0ba930b6e2caca3def3ccbd7a3e58953401d806052d1d3926b4456567144375b192bf41b7214db107654ff987ad859f34125307783fc8e387d036414fa2bcbb802691491e323bff1348c5f4ba59414b3089ce2af0010e7523dea7e2b35d776ec7e1c110e1b1b4a1ded0caf3e42bfbdbb7b5d7ce1ce3234588ba202d0e3ffcee8e58514244f74b4ad9eeeeeb57642040be42185f49c52f7e9b38f8eeeee896cdeaac9615145c0ca09c8cd5c25bced6384caea2e71b631fa93683bcf256a8689dfa0e094fcd130966628846bfd36ff31a822705796e8cb8c18da7d7079b0fead91f3e65f86e8915cb59c1a4c66401c7c6066ec10b1cd4821e13b9fb063680ffa0832f1da4bafd5f2508ec2e2e425036063a374993b6d586e7f844cea2f87f50152665bcbc2c279d8d70855ee438445075f25c18a125ba6607543052a194c7198437980c041c805a1edcba50c1ce5db95118d24c2ad096400b6fbcd2ad8b24e7acbc21a1da64000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Magic Internet Money (MIM)",
+              "symbol": "MIM",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Elk",
+              "symbol": "ELK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Elk (Old)",
+              "symbol": "oELK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Mu Coin",
+              "symbol": "MU",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "PenguinToken",
+              "symbol": "PEFI",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Yak Token",
+              "symbol": "YAK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Frax Share",
+              "symbol": "FXS",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Frax",
+              "symbol": "FRAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC.e)",
+              "symbol": "USDC.e",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "DAI (DAI.e)",
+              "symbol": "DAI.e",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD (USDT.e)",
+              "symbol": "USDT.e",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "ThorusFi",
+              "value": 2.8150618343563845,
+              "nextValue": 2.8150618343563845,
+              "stepValue": 2.8150618343563845,
+              "in_value": 0.028150618343563846,
+              "out_value": 0.2716430521413017,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Swapsicle",
+              "value": 1.0788781120613555,
+              "nextValue": 1.0788781120613555,
+              "stepValue": 1.0788781120613555,
+              "in_value": 0.010788781120613556,
+              "out_value": 0.10409065586874262,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.8969658952538015,
+              "nextValue": 0.8969658952538015,
+              "stepValue": 0.8969658952538015,
+              "in_value": 0.008969658952538016,
+              "out_value": 6.544963832640635,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 1.03304238613709,
+              "nextValue": 1.03304238613709,
+              "stepValue": 1.03304238613709,
+              "in_value": 0.010330423861370902,
+              "out_value": 5.966700314657062,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Elk (Old)",
+                "symbol": "oELK",
+                "decimals": 18,
+                "asset_id": "oelk",
+                "asset_type": "oelk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 4,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "SushiSwap",
+              "value": 1.4115270909831394,
+              "nextValue": 1.4115270909831394,
+              "stepValue": 1.4115270909831394,
+              "in_value": 0.014115270909831395,
+              "out_value": 10.320330026544134,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Mu Coin",
+                "symbol": "MU",
+                "decimals": 18,
+                "asset_id": "mu-coin",
+                "asset_type": "mu-coin",
+                "is_rebasing": false,
+                "cgid": "mu-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 2.102565196059314,
+              "nextValue": 2.102565196059314,
+              "stepValue": 2.102565196059314,
+              "in_value": 0.02102565196059314,
+              "out_value": 92.64816616001255,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 6,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 1.3767487950544723,
+              "nextValue": 1.3767487950544723,
+              "stepValue": 1.3767487950544723,
+              "in_value": 0.013767487950544723,
+              "out_value": 0.0013399476581200647,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Yak Token",
+                "symbol": "YAK",
+                "decimals": 18,
+                "asset_id": "yak",
+                "asset_type": "yak",
+                "is_rebasing": false,
+                "cgid": "yield-yak"
+              }
+            },
+            {
+              "source": 0,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.8892899010858876,
+              "nextValue": 0.8892899010858876,
+              "stepValue": 0.8892899010858876,
+              "in_value": 0.008892899010858876,
+              "out_value": 0.12212431747932585,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Frax Share",
+                "symbol": "FXS",
+                "decimals": 18,
+                "asset_id": "fxs",
+                "asset_type": "fxs",
+                "is_rebasing": false,
+                "cgid": "frax-share"
+              }
+            },
+            {
+              "source": 0,
+              "target": 8,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 88.39592078900856,
+              "nextValue": 88.39592078900856,
+              "stepValue": 88.39592078900856,
+              "in_value": 0.8839592078900855,
+              "out_value": 8.497942573543323,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 8,
+              "target": 9,
+              "sourceExtend": true,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 88.39592078900856,
+              "nextValue": 88.39592078900856,
+              "stepValue": 88.39592078900856,
+              "in_value": 0.8839592078900855,
+              "out_value": 8.497942573543323,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 9,
+              "target": 10,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 88.39592078900856,
+              "nextValue": 88.39592078900856,
+              "stepValue": 88.39592078900856,
+              "in_value": 0.8839592078900855,
+              "out_value": 8.497942573543323,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 7,
+              "target": 11,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Fraxswap V2",
+              "value": 0.8892899010858876,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.12212431747932585,
+              "out_value": 0.08634429933640751,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Frax Share",
+                "symbol": "FXS",
+                "decimals": 18,
+                "asset_id": "fxs",
+                "asset_type": "fxs",
+                "is_rebasing": false,
+                "cgid": "frax-share"
+              },
+              "targetToken": {
+                "name": "Frax",
+                "symbol": "FRAX",
+                "decimals": 18,
+                "asset_id": "frax",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "frax"
+              }
+            },
+            {
+              "source": 4,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 1.4115270909831394,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 10.320330026544134,
+              "out_value": 0.13582317340385597,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Mu Coin",
+                "symbol": "MU",
+                "decimals": 18,
+                "asset_id": "mu-coin",
+                "asset_type": "mu-coin",
+                "is_rebasing": false,
+                "cgid": "mu-coin"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 6,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 1.3767487950544723,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0013399476581200647,
+              "out_value": 0.13247049252706278,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Yak Token",
+                "symbol": "YAK",
+                "decimals": 18,
+                "asset_id": "yak",
+                "asset_type": "yak",
+                "is_rebasing": false,
+                "cgid": "yield-yak"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 3,
+              "target": 13,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 1.03304238613709,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 5.966700314657062,
+              "out_value": 0.09938103648716372,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Elk (Old)",
+                "symbol": "oELK",
+                "decimals": 18,
+                "asset_id": "oelk",
+                "asset_type": "oelk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              },
+              "targetToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              }
+            },
+            {
+              "source": 2,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.8969658952538015,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 6.544963832640635,
+              "out_value": 0.0863599478046746,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              },
+              "targetToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              }
+            },
+            {
+              "source": 5,
+              "target": 13,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 2.102565196059314,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 92.64816616001255,
+              "out_value": 0.2024465596741135,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              },
+              "targetToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              }
+            },
+            {
+              "source": 1,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Curve Factory",
+              "value": 3.89393994641774,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.3757337080100443,
+              "out_value": 0.3745172941380341,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 12,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V3",
+              "value": 6.682215832455352,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.6428109600689529,
+              "out_value": 0.6428301748935203,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 13,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2.1",
+              "value": 1.5678037884977614,
+              "nextValue": 49.999999917067406,
+              "stepValue": 49.999999917067406,
+              "in_value": 0.15091379783032516,
+              "out_value": 0.15086892707434177,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 13,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2",
+              "value": 1.5678037936986429,
+              "nextValue": 50.000000082932594,
+              "stepValue": 50.000000082932594,
+              "in_value": 0.1509137983309521,
+              "out_value": 0.15086892757481984,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 14,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2.2",
+              "value": 0.8969658952538015,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0863599478046746,
+              "out_value": 0.0862734619000445,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 11,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "SoliSnek Stable",
+              "value": 0.8892899010858876,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.08634429933640751,
+              "out_value": 0.08556425585167915,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Frax",
+                "symbol": "FRAX",
+                "decimals": 18,
+                "asset_id": "frax",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "frax"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 2075364,
+        "api_out_amounts": [
+          "9609541"
+        ],
+        "simulated_out": "9609541"
+      }
+    },
+    {
+      "name": "10 AVAX → USDC",
+      "token_in": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "token_out": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "amount_in": "10000000000000000000",
+      "decimals_in": 18,
+      "decimals_out": 6,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b31f66aa3c1e785363f0875a1b74e27b85fd66c70001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e088ac7230489e800000405ba51a37fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD000000000000000000240a092a01011f29be030100010102000501cdb3a0e10b010003020001ca8788600b010004020001a5c9e6c70b0100050200011212044f0b010006020001188ff2611501000107020101180b0ba326010802090201013d302b3a030200010a02000a011d636878030200010b02001e012252079303030d010d02011e0124a9dec903040f010f02011e014008cb17030511011102011e0177773780030613011302011e019bb954b6030715011502001e00030817011702001e02000010040119001619011e0a03080000101a001e0e03080000141b011e08030700000e1c001e0603041e000c1e001e0c03070000121f001e0427082021220002100b02012322010f80000003150201012425010e2502010126250108150201001d27010207020100182800001102010929ff0000000000000000000000000000000000000000007c0781874f5f0e78a920b7a8c840813c69c6e746b31f66aa3c1e785363f0875a1b74e27b85fd66c78fef4fe4970a5d6bfa7c65871a2ebfd0f42aa8225ca009013f6b898d134b6798b336a4592f3b4af2b8bb4ffb0ba5cbfd217b41f51162a469b1c45b83a71ba3939cd6c50c674866e321bc6bba1c977dd0856b38bf1e2e367f747dd4d3951dda8a35f1bf60204f0620e7e7f07b780535711884835977679bba152b9d0fdc40c096757f570a51e494bd4b943e508481acb47e6a943abc0fd041346d1baf382d305e6d246c0493266596b0ac13cc2ffd6672e2d100dc5bcf3ed4b4afcac2eac8791c320f504e7e8d40d86a0c03c0b933875daf767bb90584ba696b71324327f382534916520f178bf9e201db4cd8172cc7d22612da8fc26efbca3cc3f8fd543bcba72b10ab59facb3892f9a8d55eb50fdeee00f2b3fa8a85ded5bf12ca918c7e8cb260f480e74fdb99f5e0de5e8b07dca207001d5c523749b0b4704d7b81535c6f1f494dd9f783daf777d3fb4303da4de795953592d0c2ea99c031b05ae03044c857c78afb5671dee96bb5c9e891af3063004a441ba4fab4ca3d6deb562627cc2be95d1492bba726e10eba57968a065f05ec53942dcce5087f56cf1d68f4e017ca3a793f59a201d806052d1d3926b4456567144375b192bf41b7214db107654ff987ad859f34125307783fc8e387d036414fa2bcbb802691491e323bff1348c5f4ba59414b3089ce2af0010e7523dea7e2b35d776ec7e1c110e1b1b4a1ded0caf3e42bfbdbb7b5d7ce1ce2b11d3002a2e49f1005e212e860f3b3ec73f985eeeeeb57642040be42185f49c52f7e9b38f8eeeee896cdeaac9615145c0ca09c8cd5c25bced6384caea2e71b631fa93683bcf256a8689dfa0e094fcd130966628846bfd36ff31a822705796e8cb8c18da7d7079b0fead91f3e65f86e8915cb59c1a4c66401c7c6066ec10b1cd4821e13b9fb063680ffa0832f1da4bafd5f2508ec2e2e425036063a374993b6d586e7f844cea2f87f50152665bcbc2c279d8d70855ee438445075f25c18a125ba6607543052a194c7198437980c041c805a1edcba50c1ce5db95118d24c2ad096400b6fbcd2ad8b24e7acbc21a1da64b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Bitcoin",
+              "symbol": "BTC.b",
+              "decimals": 8,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Magic Internet Money (MIM)",
+              "symbol": "MIM",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Elk",
+              "symbol": "ELK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Elk (Old)",
+              "symbol": "oELK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Mu Coin",
+              "symbol": "MU",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "PenguinToken",
+              "symbol": "PEFI",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Yak Token",
+              "symbol": "YAK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Frax Share",
+              "symbol": "FXS",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Frax",
+              "symbol": "FRAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC.e)",
+              "symbol": "USDC.e",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "DAI (DAI.e)",
+              "symbol": "DAI.e",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD (USDT.e)",
+              "symbol": "USDT.e",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Blackhole Volatile",
+              "value": 0.4381760567114966,
+              "nextValue": 0.4381760567114966,
+              "stepValue": 0.4381760567114966,
+              "in_value": 0.04381760567114967,
+              "out_value": 0.000005961897688199381,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Blackhole Volatile",
+              "value": 0.4381760567114966,
+              "nextValue": 0.4381760567114966,
+              "stepValue": 0.4381760567114966,
+              "in_value": 0.04381760567114967,
+              "out_value": 0.000005961897688199381,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Blackhole CL",
+              "value": 80.00013208614499,
+              "nextValue": 80.00013208614499,
+              "stepValue": 80.00013208614499,
+              "in_value": 8.0000132086145,
+              "out_value": 0.001088444255750357,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Blackhole CL",
+              "value": 80.00013208614499,
+              "nextValue": 80.00013208614499,
+              "stepValue": 80.00013208614499,
+              "in_value": 8.0000132086145,
+              "out_value": 0.001088444255750357,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 15.47585233359511,
+              "nextValue": 15.47585233359511,
+              "stepValue": 15.47585233359511,
+              "in_value": 1.5475852333595113,
+              "out_value": 0.00021055701557515097,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 15.47585233359511,
+              "nextValue": 15.47585233359511,
+              "stepValue": 15.47585233359511,
+              "in_value": 1.5475852333595113,
+              "out_value": 0.00021055701557515097,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 2.6460387956518456,
+              "nextValue": 2.6460387956518456,
+              "stepValue": 2.6460387956518456,
+              "in_value": 0.2646038795651846,
+              "out_value": 0.000036005241193922295,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 2.6460387956518456,
+              "nextValue": 2.6460387956518456,
+              "stepValue": 2.6460387956518456,
+              "in_value": 0.2646038795651846,
+              "out_value": 0.000036005241193922295,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V2",
+              "value": 0.10163181158015606,
+              "nextValue": 0.10163181158015606,
+              "stepValue": 0.10163181158015606,
+              "in_value": 0.010163181158015608,
+              "out_value": 0.0000013831225683757432,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V2",
+              "value": 0.10163181158015606,
+              "nextValue": 0.10163181158015606,
+              "stepValue": 0.10163181158015606,
+              "in_value": 0.010163181158015608,
+              "out_value": 0.0000013831225683757432,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "LFJ V2.2",
+              "value": 0.1283925621939244,
+              "nextValue": 0.1283925621939244,
+              "stepValue": 0.1283925621939244,
+              "in_value": 0.012839256219392442,
+              "out_value": 0.0000017473029958359499,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "LFJ V2.2",
+              "value": 0.1283925621939244,
+              "nextValue": 0.1283925621939244,
+              "stepValue": 0.1283925621939244,
+              "in_value": 0.012839256219392442,
+              "out_value": 0.0000017473029958359499,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Curve Crypto Registry",
+              "value": 0.11362042937510322,
+              "nextValue": 0.11362042937510322,
+              "stepValue": 0.11362042937510322,
+              "in_value": 0.011362042937510324,
+              "out_value": 0.0000015461795663320722,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Curve Crypto Registry",
+              "value": 0.11362042937510322,
+              "nextValue": 0.11362042937510322,
+              "stepValue": 0.11362042937510322,
+              "in_value": 0.011362042937510324,
+              "out_value": 0.0000015461795663320722,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "ThorusFi",
+              "value": 0.261999076784098,
+              "nextValue": 0.261999076784098,
+              "stepValue": 0.261999076784098,
+              "in_value": 0.026199907678409805,
+              "out_value": 0.2528285428218163,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              }
+            },
+            {
+              "source": 0,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Swapsicle",
+              "value": 0.09575961880203641,
+              "nextValue": 0.09575961880203641,
+              "stepValue": 0.09575961880203641,
+              "in_value": 0.009575961880203644,
+              "out_value": 0.09239314201955451,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              }
+            },
+            {
+              "source": 0,
+              "target": 4,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.09899261328060666,
+              "nextValue": 0.09899261328060666,
+              "stepValue": 0.09899261328060666,
+              "in_value": 0.009899261328060668,
+              "out_value": 7.223269842267998,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.09157362007125619,
+              "nextValue": 0.09157362007125619,
+              "stepValue": 0.09157362007125619,
+              "in_value": 0.00915736200712562,
+              "out_value": 5.289206531176296,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Elk (Old)",
+                "symbol": "oELK",
+                "decimals": 18,
+                "asset_id": "oelk",
+                "asset_type": "oelk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 6,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "SushiSwap",
+              "value": 0.1370312544194403,
+              "nextValue": 0.1370312544194403,
+              "stepValue": 0.1370312544194403,
+              "in_value": 0.013703125441944033,
+              "out_value": 10.01925564340625,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Mu Coin",
+                "symbol": "MU",
+                "decimals": 18,
+                "asset_id": "mu-coin",
+                "asset_type": "mu-coin",
+                "is_rebasing": false,
+                "cgid": "mu-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.19170497979656614,
+              "nextValue": 0.19170497979656614,
+              "stepValue": 0.19170497979656614,
+              "in_value": 0.019170497979656618,
+              "out_value": 84.47373610106605,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 8,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.13327461503669633,
+              "nextValue": 0.13327461503669633,
+              "stepValue": 0.13327461503669633,
+              "in_value": 0.013327461503669636,
+              "out_value": 0.0012971212941216255,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Yak Token",
+                "symbol": "YAK",
+                "decimals": 18,
+                "asset_id": "yak",
+                "asset_type": "yak",
+                "is_rebasing": false,
+                "cgid": "yield-yak"
+              }
+            },
+            {
+              "source": 0,
+              "target": 9,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.08582014655666327,
+              "nextValue": 0.08582014655666327,
+              "stepValue": 0.08582014655666327,
+              "in_value": 0.00858201465566633,
+              "out_value": 0.11785629728261017,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Frax Share",
+                "symbol": "FXS",
+                "decimals": 18,
+                "asset_id": "fxs",
+                "asset_type": "fxs",
+                "is_rebasing": false,
+                "cgid": "frax-share"
+              }
+            },
+            {
+              "source": 9,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Fraxswap V2",
+              "value": 0.08582014655666327,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.11785629728261017,
+              "out_value": 0.08332798598273887,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Frax Share",
+                "symbol": "FXS",
+                "decimals": 18,
+                "asset_id": "fxs",
+                "asset_type": "fxs",
+                "is_rebasing": false,
+                "cgid": "frax-share"
+              },
+              "targetToken": {
+                "name": "Frax",
+                "symbol": "FRAX",
+                "decimals": 18,
+                "asset_id": "frax",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "frax"
+              }
+            },
+            {
+              "source": 6,
+              "target": 11,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.1370312544194403,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 10.01925564340625,
+              "out_value": 0.13186087920316764,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Mu Coin",
+                "symbol": "MU",
+                "decimals": 18,
+                "asset_id": "mu-coin",
+                "asset_type": "mu-coin",
+                "is_rebasing": false,
+                "cgid": "mu-coin"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 8,
+              "target": 11,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.13327461503669633,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0012971212941216255,
+              "out_value": 0.12824016005722036,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Yak Token",
+                "symbol": "YAK",
+                "decimals": 18,
+                "asset_id": "yak",
+                "asset_type": "yak",
+                "is_rebasing": false,
+                "cgid": "yield-yak"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 5,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.09157362007125619,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 5.289206531176296,
+              "out_value": 0.08810036777292951,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Elk (Old)",
+                "symbol": "oELK",
+                "decimals": 18,
+                "asset_id": "oelk",
+                "asset_type": "oelk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              },
+              "targetToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              }
+            },
+            {
+              "source": 4,
+              "target": 13,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.09899261328060666,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 7.223269842267998,
+              "out_value": 0.09530531833703879,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              },
+              "targetToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              }
+            },
+            {
+              "source": 7,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.19170497979656614,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 84.47373610106605,
+              "out_value": 0.18460707924100042,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              },
+              "targetToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              }
+            },
+            {
+              "source": 3,
+              "target": 11,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Curve Factory",
+              "value": 0.35775869558613443,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.34522168484137083,
+              "out_value": 0.34410405333003874,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Magic Internet Money (MIM)",
+                "symbol": "MIM",
+                "decimals": 18,
+                "asset_id": "mim",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "magic-internet-money"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              }
+            },
+            {
+              "source": 11,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V3",
+              "value": 0.628064565042271,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.6042050925904268,
+              "out_value": 0.6042231539033127,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC.e)",
+                "symbol": "USDC.e",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin-avalanche-bridged-usdc-e"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 12,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2.1",
+              "value": 0.14163930018435902,
+              "nextValue": 50.00000008841043,
+              "stepValue": 50.00000008841043,
+              "in_value": 0.13635372374806679,
+              "out_value": 0.1363131820961192,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 12,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2",
+              "value": 0.14163929968346334,
+              "nextValue": 49.99999991158957,
+              "stepValue": 49.99999991158957,
+              "in_value": 0.13635372326586312,
+              "out_value": 0.13631318161405892,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 13,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V2.1",
+              "value": 0.09899261328060666,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.09530531833703879,
+              "out_value": 0.09520987209152966,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 10,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "SoliSnek Stable",
+              "value": 0.08582014655666327,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.08332798598273887,
+              "out_value": 0.08257538775202988,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Frax",
+                "symbol": "FRAX",
+                "decimals": 18,
+                "asset_id": "frax",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "frax"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 2,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "WOOFi V2",
+              "value": 98.90384407525264,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0013456450153381734,
+              "out_value": 95.09011307251703,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 2956332,
+        "api_out_amounts": [
+          "96096675"
+        ],
+        "simulated_out": "96096675"
+      }
+    },
+    {
+      "name": "10 USDC → USDt",
+      "token_in": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "token_out": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+      "amount_in": "10000000",
+      "decimals_in": 6,
+      "decimals_out": 6,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e00019702230a8ea53601f5cd2dc00fdbc13d4df4a8c70398968003988caf7fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD00000000000000000003010203000c010101020000001200000100ff0000000000000000000000000000b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7000000000000000000000000000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 100,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 10.000000000000002,
+              "out_value": 9.997487290819864,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 212972,
+        "api_out_amounts": [
+          "9997487"
+        ],
+        "simulated_out": "9997487"
+      }
+    },
+    {
+      "name": "100 USDC → USDt",
+      "token_in": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+      "token_out": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+      "amount_in": "100000000",
+      "decimals_in": 6,
+      "decimals_out": 6,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e00019702230a8ea53601f5cd2dc00fdbc13d4df4a8c70405f5e1000405f57ebc7fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD00000000000000000003010203000c010101020000001200000100ff0000000000000000000000000000b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7000000000000000000000000000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 100,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 100.00000000000004,
+              "out_value": 99.97484451582214,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 212972,
+        "api_out_amounts": [
+          "99974844"
+        ],
+        "simulated_out": "99974844"
+      }
+    },
+    {
+      "name": "1 AVAX → sAVAX",
+      "token_in": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "token_out": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be",
+      "amount_in": "1000000000000000000",
+      "decimals_in": 18,
+      "decimals_out": 18,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b31f66aa3c1e785363f0875a1b74e27b85fd66c700012b2c81e08f1af8835a78bb2a90ae924ace0ea4be080de0b6b3a7640000080b1384296db885807fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD00000000000000000005010206002b01010102030405ff0000000000000000000000000000000000000099a9a471dbe0dcc6855b4cd4bbabeccb1280f5e8b31f66aa3c1e785363f0875a1b74e27b85fd66c72b2c81e08f1af8835a78bb2a90ae924ace0ea4bed7da0de6ef4f51d6206bf2a35fcd2030f54c3f7b7d0394f8898fba73836bf12bd60622888770589500000000000000000000000000000000000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Staked AVAX",
+              "symbol": "sAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Balancer V3 StableSurge",
+              "value": 100,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 1,
+              "out_value": 0.7981268724440447,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Staked AVAX",
+                "symbol": "sAVAX",
+                "decimals": 18,
+                "asset_id": "savax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "benqi-liquid-staked-avax"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 204256,
+        "api_out_amounts": [
+          "798126872444044672"
+        ],
+        "simulated_out": "798126872444044672"
+      }
+    },
+    {
+      "name": "10 AVAX → sAVAX",
+      "token_in": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "token_out": "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be",
+      "amount_in": "10000000000000000000",
+      "decimals_in": 18,
+      "decimals_out": 18,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b31f66aa3c1e785363f0875a1b74e27b85fd66c700012b2c81e08f1af8835a78bb2a90ae924ace0ea4be088ac7230489e80000086ec2465b707d78007fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD0000000000000000000501020701d48db1f32b01010102030405000b0101060200ff000000000000000099a9a471dbe0dcc6855b4cd4bbabeccb1280f5e8b31f66aa3c1e785363f0875a1b74e27b85fd66c72b2c81e08f1af8835a78bb2a90ae924ace0ea4bed7da0de6ef4f51d6206bf2a35fcd2030f54c3f7b7d0394f8898fba73836bf12bd60622888770589565b9016c376604fe0af38c1e336ffcec0f8ecbbd0000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Staked AVAX",
+              "symbol": "sAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Balancer V3 StableSurge",
+              "value": 83.02870959030801,
+              "nextValue": 83.02870959030801,
+              "stepValue": 83.02870959030801,
+              "in_value": 8.302870959030804,
+              "out_value": 6.626569767202831,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Staked AVAX",
+                "symbol": "sAVAX",
+                "decimals": 18,
+                "asset_id": "savax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "benqi-liquid-staked-avax"
+              }
+            },
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 16.97129040969198,
+              "nextValue": 16.97129040969198,
+              "stepValue": 16.97129040969198,
+              "in_value": 1.6971290409691984,
+              "out_value": 1.3544490809943484,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Staked AVAX",
+                "symbol": "sAVAX",
+                "decimals": 18,
+                "asset_id": "savax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "benqi-liquid-staked-avax"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 305624,
+        "api_out_amounts": [
+          "7981018848197179392"
+        ],
+        "simulated_out": "7981018848197179392"
+      }
+    },
+    {
+      "name": "5 AVAX → USDt",
+      "token_in": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "token_out": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+      "amount_in": "5000000000000000000",
+      "decimals_in": 18,
+      "decimals_out": 6,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f90001b31f66aa3c1e785363f0875a1b74e27b85fd66c700019702230a8ea53601f5cd2dc00fdbc13d4df4a8c7084563918244f400000402dcff8b7fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD000000000000000000230b0b270102acc1c60601000102463dee03020001010200050181251ffc0b020003020001c9730e800b02000402000182b946100b0200050200010a33f4f80b0200060200010d5c42bd15020001070201010c8c908426020802090201010d3b5276030300010a02011e01203b49a6030300010b02011e01093ca2cb03040d010d02001e010e97495703050f010f02011e010f95d68c030611011102001e010d6964290b070012020001a2f75f710b0800130201000b090014020011dcc5931a0000100b0a0015160004000a0c030200001017011e08030200000c1801140a03041a000e1a001e0788f4bda8030200011b1c001e06030500011d1c001e120b0a001e1f00020c0a002009010001f400000a000805070000192100040a27072223240002040b0700252601000c0700162400000012000001001411070009240e0224ff000000000000000000000000000000000000000000000000000000000000007c0781874f5f0e78a920b7a8c840813c69c6e746b31f66aa3c1e785363f0875a1b74e27b85fd66c78fef4fe4970a5d6bfa7c65871a2ebfd0f42aa8225ca009013f6b898d134b6798b336a4592f3b4af2b8bb4ffb0ba5cbfd217b41f51162a469b1c45b83a71ba3939cd6c50c674866e321bc6bba1c977dd0856b38bf1e2e367f747dd4d3951dda8a35f1bf60204f0620e7e7f07b780535711884835977679bba152b9d0fdc40c096757f570a51e494bd4b943e50b78c8238bd907c42be45aebdb4a8c8a5d7b49755494dd9f783daf777d3fb4303da4de795953592d0161f750b753c7120599d07c352607f458ecb918e87b1cf8f0fd3e0243043642cea7164a67cb67e4d5bcf3ed4b4afcac2eac8791c320f504e7e8d40d86a0c03c0b933875daf767bb90584ba696b71324394231f103882033b6103785675038347693f9cd807099b26f36fcb7e086d5a879ec1261271319829c13fd9599f0bedd2da2c307f35bc03ba54a64332f01449c0ba930b6e2caca3def3ccbd7a3e589534840c5f0167e3a335be0938916962c38c16b948df71bd752508936dea5a032991f4a2997a506b1cdeb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e488f73cddda1de3664775ffd91623637383d64044c9b4e1ac6f24cde3660d5e4ef1ebf77c710c08488d23fc2df1e5d07e58105301a560cf92a4e6ecbeeeeeb57642040be42185f49c52f7e9b38f8eeee1bb5541eccda68a352649954d4c8ece6ad68338de896cdeaac9615145c0ca09c8cd5c25bced6384c07dca207001d5c523749b0b4704d7b81535c6f1f6111286604c6fabcd88633f80f4abaea15094f3d49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab0000000000000000000000000000000000000000c7198437980c041c805a1edcba50c1ce5db951180149123760957395f283af81fe8c904348aa33fcd586e7f844cea2f87f50152665bcbc2c279d8d709702230a8ea53601f5cd2dc00fdbc13d4df4a8c7d3e0b1d5a7f225498f2c1e88e1377c54a7925c3260781c2586d68229fde47564546784ab3faca9820000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "AVAX",
+              "symbol": "AVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Bitcoin",
+              "symbol": "BTC.b",
+              "decimals": 8,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "PenguinToken",
+              "symbol": "PEFI",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "LydiaFinance Token",
+              "symbol": "LYD",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Elk",
+              "symbol": "ELK",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "YetiSwap",
+              "symbol": "YTS",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Wrapped Ether (WETH.e)",
+              "symbol": "WETH.e",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Pangolin",
+              "symbol": "PNG",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD (USDT.e)",
+              "symbol": "USDT.e",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "DAI (DAI.e)",
+              "symbol": "DAI.e",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Wrapped AVAX",
+              "value": 1.0448561526015325,
+              "nextValue": 1.0448561526015325,
+              "stepValue": 1.0448561526015325,
+              "in_value": 0.05224280763007662,
+              "out_value": 0.05224280763007662,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Blackhole Volatile",
+              "value": 0.8791478452802084,
+              "nextValue": 0.8791478452802084,
+              "stepValue": 0.8791478452802084,
+              "in_value": 0.043957392264010416,
+              "out_value": 0.000005980916373453807,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Blackhole Volatile",
+              "value": 0.8791478452802084,
+              "nextValue": 0.8791478452802084,
+              "stepValue": 0.8791478452802084,
+              "in_value": 0.043957392264010416,
+              "out_value": 0.000005980916373453807,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Blackhole CL",
+              "value": 49.476665613465606,
+              "nextValue": 49.476665613465606,
+              "stepValue": 49.476665613465606,
+              "in_value": 2.47383328067328,
+              "out_value": 0.00033657841590834626,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Blackhole CL",
+              "value": 49.476665613465606,
+              "nextValue": 49.476665613465606,
+              "stepValue": 49.476665613465606,
+              "in_value": 2.47383328067328,
+              "out_value": 0.00033657841590834626,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 38.24339020426378,
+              "nextValue": 38.24339020426378,
+              "stepValue": 38.24339020426378,
+              "in_value": 1.9121695102131888,
+              "out_value": 0.00026016057997173346,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 38.24339020426378,
+              "nextValue": 38.24339020426378,
+              "stepValue": 38.24339020426378,
+              "in_value": 1.9121695102131888,
+              "out_value": 0.00026016057997173346,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 5.288152657646316,
+              "nextValue": 5.288152657646316,
+              "stepValue": 5.288152657646316,
+              "in_value": 0.2644076328823158,
+              "out_value": 0.00003597854080716573,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 5.288152657646316,
+              "nextValue": 5.288152657646316,
+              "stepValue": 5.288152657646316,
+              "in_value": 0.2644076328823158,
+              "out_value": 0.00003597854080716573,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V2",
+              "value": 0.20197818996103337,
+              "nextValue": 0.20197818996103337,
+              "stepValue": 0.20197818996103337,
+              "in_value": 0.010098909498051667,
+              "out_value": 0.0000013743780574624572,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V2",
+              "value": 0.20197818996103337,
+              "nextValue": 0.20197818996103337,
+              "stepValue": 0.20197818996103337,
+              "in_value": 0.010098909498051667,
+              "out_value": 0.0000013743780574624572,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "LFJ V2.2",
+              "value": 0.25394190134911776,
+              "nextValue": 0.25394190134911776,
+              "stepValue": 0.25394190134911776,
+              "in_value": 0.012697095067455885,
+              "out_value": 0.000001727966003132769,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "LFJ V2.2",
+              "value": 0.25394190134911776,
+              "nextValue": 0.25394190134911776,
+              "stepValue": 0.25394190134911776,
+              "in_value": 0.012697095067455885,
+              "out_value": 0.000001727966003132769,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 2,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Curve Crypto Registry",
+              "value": 0.22607302392564171,
+              "nextValue": 0.22607302392564171,
+              "stepValue": 0.22607302392564171,
+              "in_value": 0.011303651196282084,
+              "out_value": 0.0000015382350570731567,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Curve Crypto Registry",
+              "value": 0.22607302392564171,
+              "nextValue": 0.22607302392564171,
+              "stepValue": 0.22607302392564171,
+              "in_value": 0.011303651196282084,
+              "out_value": 0.0000015382350570731567,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 0,
+              "target": 4,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "LFJ V1",
+              "value": 0.22668607250054584,
+              "nextValue": 0.22668607250054584,
+              "stepValue": 0.22668607250054584,
+              "in_value": 0.011334303625027289,
+              "out_value": 49.944250965595764,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 4,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.5236511150827673,
+              "nextValue": 0.5236511150827673,
+              "stepValue": 0.5236511150827673,
+              "in_value": 0.02618255575413836,
+              "out_value": 115.37102398719824,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.13117267932110438,
+              "nextValue": 0.13117267932110438,
+              "stepValue": 0.13117267932110438,
+              "in_value": 0.006558633966055218,
+              "out_value": 1041.8390813879946,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "LydiaFinance Token",
+                "symbol": "LYD",
+                "decimals": 18,
+                "asset_id": "lyd",
+                "asset_type": "lyd",
+                "is_rebasing": false,
+                "cgid": "lydia-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 6,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.19973002180687466,
+              "nextValue": 0.19973002180687466,
+              "stepValue": 0.19973002180687466,
+              "in_value": 0.00998650109034373,
+              "out_value": 7.286926321978296,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              }
+            },
+            {
+              "source": 0,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "YetiSwap",
+              "value": 0.20118160225149995,
+              "nextValue": 0.20118160225149995,
+              "stepValue": 0.20118160225149995,
+              "in_value": 0.010059080112574996,
+              "out_value": 6018.2493542836755,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "YetiSwap",
+                "symbol": "YTS",
+                "decimals": 18,
+                "asset_id": "yts",
+                "asset_type": "yts",
+                "is_rebasing": false,
+                "cgid": "yetiswap"
+              }
+            },
+            {
+              "source": 0,
+              "target": 8,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Blackhole CL",
+              "value": 0.16258382370670454,
+              "nextValue": 0.16258382370670454,
+              "stepValue": 0.16258382370670454,
+              "in_value": 0.008129191185335227,
+              "out_value": 0.07812993389397223,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 8,
+              "target": 9,
+              "sourceExtend": true,
+              "targetExtend": true,
+              "label": "Blackhole CL",
+              "value": 0.16258382370670454,
+              "nextValue": 0.16258382370670454,
+              "stepValue": 0.16258382370670454,
+              "in_value": 0.008129191185335227,
+              "out_value": 0.07812993389397223,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 9,
+              "target": 10,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Blackhole CL",
+              "value": 0.16258382370670454,
+              "nextValue": 0.16258382370670454,
+              "stepValue": 0.16258382370670454,
+              "in_value": 0.008129191185335227,
+              "out_value": 0.07812993389397223,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 0,
+              "target": 11,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 0.257615805868715,
+              "nextValue": 0.257615805868715,
+              "stepValue": 0.257615805868715,
+              "in_value": 0.01288079029343575,
+              "out_value": 0.12382950011121975,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 12,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pharaoh V3",
+              "value": 1.6144526254447966,
+              "nextValue": 1.6144526254447966,
+              "stepValue": 1.6144526254447966,
+              "in_value": 0.08072263127223982,
+              "out_value": 0.776027157526026,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 12,
+              "target": 13,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 1.6144526254447966,
+              "nextValue": 1.6144526254447966,
+              "stepValue": 1.6144526254447966,
+              "in_value": 0.08072263127223982,
+              "out_value": 0.776027157526026,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 14,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 1.068720665523752,
+              "nextValue": 1.068720665523752,
+              "stepValue": 1.068720665523752,
+              "in_value": 0.05343603327618759,
+              "out_value": 0.0002471943682686202,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Wrapped Ether (WETH.e)",
+                "symbol": "WETH.e",
+                "decimals": 18,
+                "asset_id": "weth",
+                "asset_type": "eth",
+                "is_rebasing": false,
+                "cgid": "weth"
+              }
+            },
+            {
+              "source": 11,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 0.257615805868715,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.12382950011121975,
+              "out_value": 0.0000017523289364038535,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 7,
+              "target": 15,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "YetiSwap",
+              "value": 0.20118160225149995,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 6018.2493542836755,
+              "out_value": 3.3823035590690655,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "YetiSwap",
+                "symbol": "YTS",
+                "decimals": 18,
+                "asset_id": "yts",
+                "asset_type": "yts",
+                "is_rebasing": false,
+                "cgid": "yetiswap"
+              },
+              "targetToken": {
+                "name": "Pangolin",
+                "symbol": "PNG",
+                "decimals": 18,
+                "asset_id": "png",
+                "asset_type": "png",
+                "is_rebasing": false,
+                "cgid": "pangolin"
+              }
+            },
+            {
+              "source": 5,
+              "target": 15,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Lydia Finance",
+              "value": 0.13117267932110438,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 1041.8390813879946,
+              "out_value": 2.20607952124021,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "LydiaFinance Token",
+                "symbol": "LYD",
+                "decimals": 18,
+                "asset_id": "lyd",
+                "asset_type": "lyd",
+                "is_rebasing": false,
+                "cgid": "lydia-finance"
+              },
+              "targetToken": {
+                "name": "Pangolin",
+                "symbol": "PNG",
+                "decimals": 18,
+                "asset_id": "png",
+                "asset_type": "png",
+                "is_rebasing": false,
+                "cgid": "pangolin"
+              }
+            },
+            {
+              "source": 6,
+              "target": 16,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Elk Finance",
+              "value": 0.19973002180687466,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 7.286926321978296,
+              "out_value": 0.09614476173231493,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Elk",
+                "symbol": "ELK",
+                "decimals": 18,
+                "asset_id": "elk",
+                "asset_type": "elk",
+                "is_rebasing": false,
+                "cgid": "elk-finance"
+              },
+              "targetToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              }
+            },
+            {
+              "source": 4,
+              "target": 15,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.4014187269501585,
+              "nextValue": 53.49844491155349,
+              "stepValue": 53.49844491155349,
+              "in_value": 88.44110130100368,
+              "out_value": 6.748538637635576,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              },
+              "targetToken": {
+                "name": "Pangolin",
+                "symbol": "PNG",
+                "decimals": 18,
+                "asset_id": "png",
+                "asset_type": "png",
+                "is_rebasing": false,
+                "cgid": "pangolin"
+              }
+            },
+            {
+              "source": 4,
+              "target": 17,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin",
+              "value": 0.34891846063315457,
+              "nextValue": 46.501555088446516,
+              "stepValue": 46.501555088446516,
+              "in_value": 76.87417365179033,
+              "out_value": 0.1680182502122146,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "PenguinToken",
+                "symbol": "PEFI",
+                "decimals": 18,
+                "asset_id": "pefi",
+                "asset_type": "pefi",
+                "is_rebasing": false,
+                "cgid": "penguin-finance"
+              },
+              "targetToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              }
+            },
+            {
+              "source": 14,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 1.068720665523752,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0002471943682686202,
+              "out_value": 0.000007270363367953801,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Wrapped Ether (WETH.e)",
+                "symbol": "WETH.e",
+                "decimals": 18,
+                "asset_id": "weth",
+                "asset_type": "eth",
+                "is_rebasing": false,
+                "cgid": "weth"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 1,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 1.0448561526015325,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.05224280763007662,
+              "out_value": 0.000007107612745226266,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 16,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Kyber DMM",
+              "value": 0.19973002180687466,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.09614476173231493,
+              "out_value": 0.09603665805901127,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Tether USD (USDT.e)",
+                "symbol": "USDT.e",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether-avalanche-bridged-usdt-e"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 17,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Curve Factory",
+              "value": 0.34891846063315457,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.1680182502122146,
+              "out_value": 0.16789592306534554,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "DAI (DAI.e)",
+                "symbol": "DAI.e",
+                "decimals": 18,
+                "asset_id": "dai",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "dai"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 15,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 0.7337730085227627,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 12.336921717944852,
+              "out_value": 0.35295645650078156,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Pangolin",
+                "symbol": "PNG",
+                "decimals": 18,
+                "asset_id": "png",
+                "asset_type": "png",
+                "is_rebasing": false,
+                "cgid": "pangolin"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 13,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 1.6144526254447966,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.776027157526026,
+              "out_value": 0.7758322022507148,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            },
+            {
+              "source": 3,
+              "target": 10,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "WOOFi V2",
+              "value": 96.94054205988571,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0006594693372279515,
+              "out_value": 46.59095078975091,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              },
+              "targetToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 3027472,
+        "api_out_amounts": [
+          "48037771"
+        ],
+        "simulated_out": "48037771"
+      }
+    },
+    {
+      "name": "50 USDt → WAVAX",
+      "token_in": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+      "token_out": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+      "amount_in": "50000000",
+      "decimals_in": 6,
+      "decimals_out": 18,
+      "odos": {
+        "tx_to": "0x0D05a7D3448512B78fa8A9e46c4872C88C4a0D05",
+        "tx_data": "0x83bd37f900019702230a8ea53601f5cd2dc00fdbc13d4df4a8c70001b31f66aa3c1e785363f0875a1b74e27b85fd66c70402faf080084818844098ee9c007fffff00013f0F8A28AC15b95E7d9D3B6e9422d3D0aE64197f00000001000000000000000000000000000000000000dEaD0000000000000000000903050a0103c252480b0100010201000c02000203010000120000010005da260cd80000054acffb6c0b0300040300040c04000305000001f400000a0008060101060b0100060701000b0100080300020209ff0000000000000000000000000000186825418d491ef8bedf98cf7a00f68517ae2f579702230a8ea53601f5cd2dc00fdbc13d4df4a8c7b97ef9ef8734c71904d8002f8b6bc66dd9c48a6e2e587b9e7aa638d7eb7db5fe7447513bc4d0d28b00000000000000000000000000000000000000005ca009013f6b898d134b6798b336a4592f3b4af2152b9d0fdc40c096757f570a51e494bd4b943e5011476e10eb79ddffa6f2585be526d2bd840c3e20b31f66aa3c1e785363f0875a1b74e27b85fd66c7000000000000000000000000",
+        "path_viz": {
+          "nodes": [
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "Wrapped AVAX",
+              "symbol": "WAVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Tether USD",
+              "symbol": "USDT",
+              "decimals": 6,
+              "visible": false,
+              "width": 50
+            },
+            {
+              "name": "USD Coin (USDC)",
+              "symbol": "USDC",
+              "decimals": 6,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "Bitcoin",
+              "symbol": "BTC.b",
+              "decimals": 8,
+              "visible": true,
+              "width": 50
+            },
+            {
+              "name": "AVAX",
+              "symbol": "AVAX",
+              "decimals": 18,
+              "visible": true,
+              "width": 50
+            }
+          ],
+          "links": [
+            {
+              "source": 0,
+              "target": 1,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 1.4683859654706966,
+              "nextValue": 1.4683859654706966,
+              "stepValue": 1.4683859654706966,
+              "in_value": 0.7341929827353482,
+              "out_value": 0.07632272135939562,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 1,
+              "target": 2,
+              "sourceExtend": true,
+              "targetExtend": true,
+              "label": "Pangolin V3",
+              "value": 1.4683859654706966,
+              "nextValue": 1.4683859654706966,
+              "stepValue": 1.4683859654706966,
+              "in_value": 0.7341929827353482,
+              "out_value": 0.07632272135939562,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 2,
+              "target": 3,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 1.4683859654706966,
+              "nextValue": 1.4683859654706966,
+              "stepValue": 1.4683859654706966,
+              "in_value": 0.7341929827353482,
+              "out_value": 0.07632272135939562,
+              "edge_len": 3,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 0,
+              "target": 4,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 14.56857904038924,
+              "nextValue": 14.56857904038924,
+              "stepValue": 14.56857904038924,
+              "in_value": 7.284289520194618,
+              "out_value": 7.285856667507992,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 0,
+              "target": 5,
+              "sourceExtend": false,
+              "targetExtend": true,
+              "label": "Uniswap V4",
+              "value": 83.96303499414007,
+              "nextValue": 83.96303499414007,
+              "stepValue": 83.96303499414007,
+              "in_value": 41.98151749707003,
+              "out_value": 41.99054943109386,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 5,
+              "target": 6,
+              "sourceExtend": true,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 83.96303499414007,
+              "nextValue": 83.96303499414007,
+              "stepValue": 83.96303499414007,
+              "in_value": 41.98151749707003,
+              "out_value": 41.99054943109386,
+              "edge_len": 2,
+              "sourceToken": {
+                "name": "Tether USD",
+                "symbol": "USDT",
+                "decimals": 6,
+                "asset_id": "usdt",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "tether"
+              },
+              "targetToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              }
+            },
+            {
+              "source": 4,
+              "target": 7,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V3",
+              "value": 4.257464069715259,
+              "nextValue": 29.223605527430408,
+              "stepValue": 29.223605527430408,
+              "in_value": 2.1291900118065232,
+              "out_value": 0.0000301263813445919,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              }
+            },
+            {
+              "source": 4,
+              "target": 8,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Uniswap V4",
+              "value": 10.311114970673986,
+              "nextValue": 70.77639447256959,
+              "stepValue": 70.77639447256959,
+              "in_value": 5.156666655701471,
+              "out_value": 0.5360250456746687,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 8,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Wrapped AVAX",
+              "value": 10.311114970673986,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.5360250456746687,
+              "out_value": 0.5360250456746687,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "AVAX",
+                "symbol": "AVAX",
+                "decimals": 18,
+                "asset_id": "avax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 7,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pharaoh V3",
+              "value": 4.257464069715259,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 0.0000301263813445919,
+              "out_value": 0.22125929659516425,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "Bitcoin",
+                "symbol": "BTC.b",
+                "decimals": 8,
+                "asset_id": "btc",
+                "asset_type": "btc",
+                "is_rebasing": false,
+                "cgid": "bitcoin-avalanche-bridged-btc-b"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            },
+            {
+              "source": 6,
+              "target": 3,
+              "sourceExtend": false,
+              "targetExtend": false,
+              "label": "Pangolin V3",
+              "value": 83.96303499414007,
+              "nextValue": 100,
+              "stepValue": 100,
+              "in_value": 41.99054943109386,
+              "out_value": 4.364039342724363,
+              "edge_len": 1,
+              "sourceToken": {
+                "name": "USD Coin (USDC)",
+                "symbol": "USDC",
+                "decimals": 6,
+                "asset_id": "usdc",
+                "asset_type": "usd",
+                "is_rebasing": false,
+                "cgid": "usd-coin"
+              },
+              "targetToken": {
+                "name": "Wrapped AVAX",
+                "symbol": "WAVAX",
+                "decimals": 18,
+                "asset_id": "wavax",
+                "asset_type": "avax",
+                "is_rebasing": false,
+                "cgid": "avalanche-2"
+              }
+            }
+          ]
+        },
+        "gas_estimate": 796204,
+        "api_out_amounts": [
+          "5195047583150414848"
+        ],
+        "simulated_out": "5195047583150414848"
+      }
+    }
+  ]
+}

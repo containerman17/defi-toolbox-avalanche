@@ -1,0 +1,1229 @@
+// Reads tx hashes from txs.txt, replays each at block-1 (start of block)
+// via debug_traceCall, extracts routes from Transfer logs, and writes
+// HayabusaRouter payloads to payloads/<hash>.json.
+//
+// Replaying at block-1 ensures the expectedOut reflects block-start state,
+// filtering out backruns (txs that revert without preceding state setup).
+//
+// Usage: node convert.ts [txs.txt]
+// Requires local RPC with debug_traceCall support.
+
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { createPublicClient, http, decodeAbiParameters, encodeAbiParameters, type Hex, type Log } from "viem";
+import { avalanche } from "viem/chains";
+import { loadPools, ERC4626_VAULTS, type StoredPool } from "hayabusa-pools";
+
+// --- Constants ---
+
+const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const V4_SWAP_TOPIC = "0x40e9cecb9f5f1f1c5b9c97dec2917b7ee92e57ba5563708daca94dd84ad7112f";
+const WOMBAT_SWAP_TOPIC = "0x54787c404bb33c88e86f4baf88183a3b0141d0a848e6a9f7a13b66ae3a9b73d1";
+const ZERO_ADDR = "0x0000000000000000000000000000000000000000";
+const WAVAX = "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7";
+const WOOFI_ROUTER = "0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7";
+const WOOPP_ADDRESS = "0x5520385bfcf07ec87c4c53a7d8d65595dff69fa4";
+const BALANCER_V3_VAULT = "0xba1333333333a1ba1108e8412f11850a5c319ba9";
+
+// Bridge-equivalent tokens: .e (bridged) versions have ~1:1 value with their
+// native counterparts. Platypus/Wombat pools swap between these at near-parity.
+const BRIDGE_EQUIVALENTS: Record<string, string> = {
+  "0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC.e → USDC
+  "0xc7198437980c041c805a1edcba50c1ce5db95118": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7", // USDt.e → USDt
+};
+
+function tokenMatchesOutput(token: string, outputToken: string): boolean {
+  if (token === outputToken) return true;
+  return BRIDGE_EQUIVALENTS[token] === outputToken;
+}
+
+// RFQ / off-chain pools — not simulatable via on-chain swap().
+// IMPORTANT: This is a manually curated allowlist. Do NOT replace with heuristics.
+// If a pool uses off-chain signed quotes (Hashflow, Dexalot, etc.) or is otherwise
+// not reproducible via eth_call, add its address here. Keep the list explicit —
+// even if it gets long, that's fine. We want exact control over what gets skipped.
+const RFQ_POOLS = new Set([
+  "0xeed3c159f3a96ab8d41c8b9ca49ee1e5071a7cdd", // Dexalot MainnetRFQ (impl 0x64AE65F4)
+  "0x012cb12e50e0467f4844dc0046d2604fce940ad7", // Hashflow RFQ pool (EIP-1167 proxy)
+  "0x6047b384d58dc7f8f6fef85d75754e6928f06484", // Hashflow token vault (custody for 0x012cb12e)
+  "0xaba7ed514217d51630053d73d358ac2502d3f9bb", // WooPP V2 — different from WooPP V1 (0x5520385b), not reachable via WooFi Router
+]);
+
+const KNOWN_TOKENS: Record<string, { symbol: string; decimals: number }> = {
+  "0x0000000000000000000000000000000000000000": { symbol: "AVAX", decimals: 18 },
+  "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7": { symbol: "WAVAX", decimals: 18 },
+  "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e": { symbol: "USDC", decimals: 6 },
+  "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7": { symbol: "USDt", decimals: 6 },
+  "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab": { symbol: "WETH.e", decimals: 18 },
+  "0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be": { symbol: "sAVAX", decimals: 18 },
+  "0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664": { symbol: "USDC.e", decimals: 6 },
+  "0xc7198437980c041c805a1edcba50c1ce5db95118": { symbol: "USDt.e", decimals: 6 },
+};
+
+function tok(addr: string): string {
+  return KNOWN_TOKENS[addr.toLowerCase()]?.symbol ?? addr.slice(0, 10);
+}
+
+// --- Router detection ---
+
+interface RouterDef {
+  name: string;
+  address: string;
+  swapTopic: string;
+  parseSwapEvent(data: string): { inputToken: string; outputToken: string; inputAmount: bigint; outputAmount: bigint };
+}
+
+const ROUTERS: RouterDef[] = [
+  {
+    name: "odos",
+    address: "0x0d05a7d3448512b78fa8a9e46c4872c88c4a0d05",
+    swapTopic: "0x69db20ca9e32403e6c56e5193b3e3b2827ae5c430ccfdea392ba950d2d1ab2bc",
+    parseSwapEvent(data: string) {
+      return {
+        inputAmount: BigInt("0x" + data.slice(66, 130)),
+        inputToken: ("0x" + data.slice(154, 194)).toLowerCase(),
+        outputAmount: BigInt("0x" + data.slice(194, 258)),
+        outputToken: ("0x" + data.slice(282, 322)).toLowerCase(),
+      };
+    },
+  },
+  {
+    name: "lfj",
+    address: "0x45a62b090df48243f12a21897e7ed91863e2c86b",
+    swapTopic: "0xd9a8cfa901e597f6bbb7ea94478cf9ad6f38d0dc3fd24d493e99cb40692e39f1",
+    parseSwapEvent(data: string) {
+      return {
+        inputToken: ("0x" + data.slice(90, 130)).toLowerCase(),
+        outputToken: ("0x" + data.slice(154, 194)).toLowerCase(),
+        inputAmount: BigInt("0x" + data.slice(194, 258)),
+        outputAmount: BigInt("0x" + data.slice(258, 322)),
+      };
+    },
+  },
+];
+
+// --- Transfer parsing ---
+
+interface TransferEvent {
+  token: string;
+  from: string;
+  to: string;
+  amount: bigint;
+  logIndex: number;
+}
+
+function parseTransfers(logs: Log[]): TransferEvent[] {
+  const transfers: TransferEvent[] = [];
+  for (const log of logs) {
+    if (log.topics[0] === TRANSFER_TOPIC && log.topics.length >= 3) {
+      transfers.push({
+        token: log.address.toLowerCase(),
+        from: ("0x" + log.topics[1]!.slice(26)).toLowerCase(),
+        to: ("0x" + log.topics[2]!.slice(26)).toLowerCase(),
+        amount: BigInt(log.data),
+        logIndex: log.logIndex ?? 0,
+      });
+    }
+  }
+  return transfers;
+}
+
+// --- Trace log parsing ---
+
+interface TraceLog {
+  address: string;
+  topics: string[];
+  data: string;
+}
+
+/** Recursively collect all emitted logs from a callTracer trace (withLog: true) */
+function collectTraceLogs(call: any): TraceLog[] {
+  const logs: TraceLog[] = [];
+  if (call.logs) {
+    for (const log of call.logs) {
+      logs.push({ address: log.address.toLowerCase(), topics: log.topics, data: log.data });
+    }
+  }
+  if (call.calls) {
+    for (const sub of call.calls) logs.push(...collectTraceLogs(sub));
+  }
+  return logs;
+}
+
+/** Parse Transfer events from trace logs */
+function parseTraceTransfers(traceLogs: TraceLog[]): TransferEvent[] {
+  const transfers: TransferEvent[] = [];
+  for (let i = 0; i < traceLogs.length; i++) {
+    const log = traceLogs[i];
+    if (log.topics[0] === TRANSFER_TOPIC && log.topics.length >= 3) {
+      transfers.push({
+        token: log.address,
+        from: ("0x" + log.topics[1].slice(26)).toLowerCase(),
+        to: ("0x" + log.topics[2].slice(26)).toLowerCase(),
+        amount: BigInt(log.data),
+        logIndex: i,
+      });
+    }
+  }
+  return transfers;
+}
+
+// --- Split detection ---
+
+function detectSplit(transfers: TransferEvent[], excludeAddrs: Set<string>): boolean {
+  const senders = new Set<string>();
+  for (const t of transfers) senders.add(t.from);
+
+  const fanOut = new Map<string, Set<string>>();
+  const ZERO = "0x0000000000000000000000000000000000000000";
+  for (const t of transfers) {
+    if (excludeAddrs.has(t.from) || excludeAddrs.has(t.to)) continue;
+    if (t.from === ZERO) continue;
+    if (!senders.has(t.to)) continue;
+    const key = `${t.from}:${t.token}`;
+    if (!fanOut.has(key)) fanOut.set(key, new Set());
+    fanOut.get(key)!.add(t.to);
+  }
+  for (const [, recipients] of fanOut) {
+    if (recipients.size >= 2) return true;
+  }
+  return false;
+}
+
+// --- Pool hop extraction from Transfers ---
+
+interface PoolHop {
+  pool: string;
+  tokenIn: string;
+  tokenOut: string;
+}
+
+interface TraceStep {
+  pool: string;
+  tokenIn: string;
+  tokenOut: string;
+  amountIn: bigint;
+  logIndex: number;
+  /** For Balancer V3 buffered swaps: wrappedIn address */
+  bufWrappedIn?: string;
+  /** For Balancer V3 buffered swaps: Balancer pool address */
+  bufPool?: string;
+  /** For Balancer V3 buffered swaps: wrappedOut address */
+  bufWrappedOut?: string;
+  /** True if this step was created by per-transfer splitting */
+  perTransferSplit?: boolean;
+}
+
+interface ParsedV4Extra {
+  id?: string;
+  fee?: number;
+  hooks?: string;
+}
+
+interface SwapStep {
+  amountIn: string;
+  pools: string[];
+  poolTypes: number[];
+  tokens: string[];
+  extraDatas: string[];
+  route: string; // human-readable
+}
+
+const V4_POOL_MANAGER = "0x06380c0e0912312b5150364b9dc4542ba0dbbc85";
+
+function parseV4PoolId(extraData?: string): string | undefined {
+  if (!extraData) return undefined;
+  for (const part of extraData.split(",")) {
+    const [key, value] = part.split("=");
+    if (key === "id" && value) return value.toLowerCase();
+  }
+  return undefined;
+}
+
+function parseV4Extra(extraData?: string): ParsedV4Extra {
+  const parsed: ParsedV4Extra = {};
+  if (!extraData) return parsed;
+
+  for (const part of extraData.split(",")) {
+    const [key, value] = part.split("=");
+    if (!key || value === undefined) continue;
+    if (key === "id") parsed.id = value.toLowerCase();
+    if (key === "fee") parsed.fee = Number(value);
+    if (key === "hooks") parsed.hooks = value.toLowerCase();
+  }
+
+  return parsed;
+}
+
+function buildV4PoolIdMap(poolMap: Map<string, StoredPool>): Map<string, StoredPool> {
+  const v4ById = new Map<string, StoredPool>();
+  for (const [, pool] of poolMap) {
+    if (pool.poolType !== 9) continue;
+    const id = parseV4PoolId(pool.extraData);
+    if (id) v4ById.set(id, pool);
+  }
+  return v4ById;
+}
+
+function isPoolAddr(addr: string, poolMap: Map<string, StoredPool>): boolean {
+  return poolMap.has(addr) || addr === V4_POOL_MANAGER || addr === WOOPP_ADDRESS;
+}
+
+function findPool(addr: string, tokenIn: string, tokenOut: string, poolMap: Map<string, StoredPool>): StoredPool | undefined {
+  if (poolMap.has(addr)) return poolMap.get(addr)!;
+  // Balancer V3 vault — used for buffered swaps; return a synthetic pool entry
+  if (addr === BALANCER_V3_VAULT) {
+    return {
+      address: BALANCER_V3_VAULT,
+      providerName: "balancer_v3_buffered",
+      poolType: 11 as any,
+      tokens: [tokenIn, tokenOut],
+      latestSwapBlock: 0,
+    };
+  }
+  if (addr === WOOPP_ADDRESS) {
+    for (const [, pool] of poolMap) {
+      if (pool.poolType !== 5) continue;
+      if (pool.address.toLowerCase() !== WOOFI_ROUTER) continue;
+      const toks = pool.tokens.map(t => t.toLowerCase());
+      if (toks.includes(tokenIn) && toks.includes(tokenOut)) return pool;
+    }
+  }
+  if (addr === V4_POOL_MANAGER) {
+    const candidates: StoredPool[] = [];
+    for (const [, pool] of poolMap) {
+      if (pool.poolType !== 9) continue;
+      const toks = pool.tokens.map(t => t.toLowerCase());
+      if (!toks.includes(tokenIn) || !toks.includes(tokenOut)) continue;
+
+      const { hooks, fee } = parseV4Extra(pool.extraData);
+      if (hooks && hooks !== ZERO_ADDR) continue;
+      if (fee !== undefined && fee >= 100000) continue;
+
+      candidates.push(pool);
+    }
+    candidates.sort((a, b) => b.latestSwapBlock - a.latestSwapBlock);
+    return candidates[0];
+  }
+  return undefined;
+}
+
+function extractPoolHops(transfers: TransferEvent[], poolMap: Map<string, StoredPool>): PoolHop[] {
+  const hops: PoolHop[] = [];
+  const seen = new Set<string>();
+  const addrs = new Set<string>();
+  for (const t of transfers) { addrs.add(t.from); addrs.add(t.to); }
+
+  for (const addr of addrs) {
+    if (addr === ZERO_ADDR || seen.has(addr)) continue;
+    if (!poolMap.has(addr)) continue;
+    const incoming = transfers.filter(t => t.to === addr && t.from !== ZERO_ADDR);
+    const outgoing = transfers.filter(t => t.from === addr && t.to !== ZERO_ADDR);
+    if (incoming.length > 0 && outgoing.length > 0) {
+      seen.add(addr);
+      hops.push({ pool: addr, tokenIn: incoming[0].token, tokenOut: outgoing[0].token });
+    }
+  }
+
+  hops.sort((a, b) => {
+    const aIdx = transfers.find(t => t.to === a.pool)?.logIndex ?? 0;
+    const bIdx = transfers.find(t => t.to === b.pool)?.logIndex ?? 0;
+    return aIdx - bIdx;
+  });
+  return hops;
+}
+
+/** Extract Wombat swap steps from trace logs by detecting the Wombat Swap event.
+ *  The Wombat Swap event encodes fromToken and toToken in the data field (first 64 bytes).
+ *  The actual amounts are determined from surrounding Transfer events. */
+function extractWombatTraceSteps(
+  traceLogs: TraceLog[],
+  transfers: TransferEvent[],
+  poolMap: Map<string, StoredPool>,
+): TraceStep[] {
+  const steps: TraceStep[] = [];
+
+  for (let i = 0; i < traceLogs.length; i++) {
+    const log = traceLogs[i];
+    if (log.topics[0] !== WOMBAT_SWAP_TOPIC) continue;
+
+    const poolAddr = log.address.toLowerCase();
+    if (!poolMap.has(poolAddr)) continue;
+
+    // Wombat Swap event data: fromToken (address, padded) + toToken (address, padded) + fromAmount + toAmount
+    const data = log.data;
+    if (data.length < 130) continue; // at least 2 x 32 bytes
+    const fromToken = ("0x" + data.slice(26, 66)).toLowerCase();
+    const toToken = ("0x" + data.slice(90, 130)).toLowerCase();
+
+    // Find the amount of fromToken transferred to the Wombat router/pool area around this event
+    // The amountIn is determined from the Transfer log of fromToken closest before this Wombat event
+    let amountIn = 0n;
+    for (let j = i - 1; j >= 0; j--) {
+      const tl = traceLogs[j];
+      if (tl.topics[0] !== TRANSFER_TOPIC) continue;
+      if (tl.address.toLowerCase() !== fromToken) continue;
+      amountIn = BigInt(tl.data);
+      break;
+    }
+    if (amountIn === 0n) continue;
+
+    steps.push({
+      pool: poolAddr,
+      tokenIn: fromToken,
+      tokenOut: toToken,
+      amountIn,
+      logIndex: i,
+    });
+  }
+
+  return steps;
+}
+
+/** Detect Balancer V3 buffered swaps: underlying_in → wrap → vault swap → unwrap → underlying_out.
+ *  Only detects full 3-step buffered swaps where both input and output are underlying tokens
+ *  that get wrapped/unwrapped through the vault's internal ERC4626 buffers.
+ */
+const BALANCER_V3_SWAP_TOPIC = "0x0874b2d545cb271cdbda4e093020c452328b24af12382ed62c4d00f5c26709db";
+
+function extractBalancerBufferedTraceSteps(
+  traceLogs: TraceLog[],
+  transfers: TransferEvent[],
+  poolMap: Map<string, StoredPool>,
+): TraceStep[] {
+  const steps: TraceStep[] = [];
+
+  for (let i = 0; i < traceLogs.length; i++) {
+    const log = traceLogs[i];
+    if (log.address.toLowerCase() !== BALANCER_V3_VAULT) continue;
+    if (log.topics[0] !== BALANCER_V3_SWAP_TOPIC) continue;
+    if (log.topics.length < 4) continue;
+
+    const balPool = ("0x" + log.topics[1].slice(26)).toLowerCase();
+    const swapTokenIn = ("0x" + log.topics[2].slice(26)).toLowerCase();
+    const swapTokenOut = ("0x" + log.topics[3].slice(26)).toLowerCase();
+
+    const stored = poolMap.get(balPool);
+    if (!stored || stored.poolType !== 6) continue;
+
+    // For a full buffered swap: the swapTokenIn should be a wrapped ERC4626 token,
+    // NOT a direct pool token that's also an underlying somewhere.
+    // Detect by checking if the input token (swapTokenIn) is NOT the same as any token
+    // that was transferred TO the vault before this event.
+
+    // Find the underlying token transferred TO the vault before this swap event
+    let underlyingIn: string | undefined;
+    let amountIn = 0n;
+    let transferIdx = i;
+    for (let j = i - 1; j >= Math.max(0, i - 50); j--) {
+      const tl = traceLogs[j];
+      if (tl.topics[0] !== TRANSFER_TOPIC) continue;
+      const to = ("0x" + tl.topics[2].slice(26)).toLowerCase();
+      const token = tl.address.toLowerCase();
+      // Must be a transfer TO the vault of a different token than the swap tokens
+      if (to === BALANCER_V3_VAULT && token !== swapTokenIn && token !== swapTokenOut) {
+        underlyingIn = token;
+        amountIn = BigInt(tl.data);
+        transferIdx = j;
+        break;
+      }
+    }
+    if (underlyingIn && amountIn > 0n) {
+      // Fully buffered swap: both input and output go through ERC4626 wrap/unwrap
+      // Find the underlying output token transferred FROM the vault after this swap event
+      let underlyingOut: string | undefined;
+      for (let j = i + 1; j < Math.min(traceLogs.length, i + 50); j++) {
+        const tl = traceLogs[j];
+        if (tl.topics[0] !== TRANSFER_TOPIC) continue;
+        const from = ("0x" + tl.topics[1].slice(26)).toLowerCase();
+        const token = tl.address.toLowerCase();
+        if (from === BALANCER_V3_VAULT && token !== swapTokenIn && token !== swapTokenOut) {
+          underlyingOut = token;
+          break;
+        }
+      }
+      if (!underlyingOut) continue;
+      if (underlyingIn === underlyingOut) continue;
+
+      steps.push({
+        pool: BALANCER_V3_VAULT,
+        tokenIn: underlyingIn,
+        tokenOut: underlyingOut,
+        amountIn,
+        logIndex: transferIdx,
+        bufWrappedIn: swapTokenIn,
+        bufPool: balPool,
+        bufWrappedOut: swapTokenOut,
+      });
+      continue;
+    }
+
+    // Half-buffered swap: input token IS a direct pool token (no wrapping needed),
+    // but output goes through ERC4626 unwrap. E.g. stAVAX → [BalV3 pool] → waAvaSAVAX → sAVAX.
+    // Detect by finding swapTokenIn transferred TO the vault before the swap event.
+    let halfAmountIn = 0n;
+    let halfTransferIdx = i;
+    for (let j = i - 1; j >= Math.max(0, i - 50); j--) {
+      const tl = traceLogs[j];
+      if (tl.topics[0] !== TRANSFER_TOPIC) continue;
+      const to = ("0x" + tl.topics[2].slice(26)).toLowerCase();
+      const token = tl.address.toLowerCase();
+      if (to === BALANCER_V3_VAULT && token === swapTokenIn) {
+        halfAmountIn = BigInt(tl.data);
+        halfTransferIdx = j;
+        break;
+      }
+    }
+    if (halfAmountIn === 0n) continue;
+
+    // Check if output side has an ERC4626 unwrap: underlying token transferred FROM vault after swap
+    let halfUnderlyingOut: string | undefined;
+    for (let j = i + 1; j < Math.min(traceLogs.length, i + 50); j++) {
+      const tl = traceLogs[j];
+      if (tl.topics[0] !== TRANSFER_TOPIC) continue;
+      const from = ("0x" + tl.topics[1].slice(26)).toLowerCase();
+      const token = tl.address.toLowerCase();
+      if (from === BALANCER_V3_VAULT && token !== swapTokenIn && token !== swapTokenOut) {
+        halfUnderlyingOut = token;
+        break;
+      }
+    }
+    if (!halfUnderlyingOut) continue;
+
+    // Emit as a BalV3 pool swap (type 6): swapTokenIn → swapTokenOut.
+    // buildPayload's findTailHops will chain the ERC4626 unwrap (swapTokenOut → underlyingOut).
+    steps.push({
+      pool: balPool,
+      tokenIn: swapTokenIn,
+      tokenOut: swapTokenOut,
+      amountIn: halfAmountIn,
+      logIndex: halfTransferIdx,
+    });
+  }
+
+  return steps;
+}
+
+function extractV4TraceSteps(traceLogs: TraceLog[], v4PoolIdMap: Map<string, StoredPool>): TraceStep[] {
+  const steps: TraceStep[] = [];
+
+  for (let i = 0; i < traceLogs.length; i++) {
+    const log = traceLogs[i];
+    if (log.address !== V4_POOL_MANAGER) continue;
+    if (log.topics[0] !== V4_SWAP_TOPIC || !log.topics[1]) continue;
+
+    const pool = v4PoolIdMap.get(log.topics[1].toLowerCase());
+    if (!pool || pool.tokens.length < 2) continue;
+
+    let amount0: bigint;
+    let amount1: bigint;
+    try {
+      [amount0, amount1] = decodeAbiParameters(
+        [
+          { type: "int128" },
+          { type: "int128" },
+          { type: "uint160" },
+          { type: "uint128" },
+          { type: "int24" },
+          { type: "uint24" },
+        ],
+        log.data as Hex,
+      );
+    } catch {
+      continue;
+    }
+
+    const token0 = pool.tokens[0].toLowerCase();
+    const token1 = pool.tokens[1].toLowerCase();
+
+    if (amount0 < 0n && amount1 >= 0n) {
+      steps.push({
+        pool: pool.address.toLowerCase(),
+        tokenIn: token0,
+        tokenOut: token1,
+        amountIn: -amount0,
+        logIndex: i,
+      });
+    } else if (amount1 < 0n && amount0 >= 0n) {
+      steps.push({
+        pool: pool.address.toLowerCase(),
+        tokenIn: token1,
+        tokenOut: token0,
+        amountIn: -amount1,
+        logIndex: i,
+      });
+    }
+  }
+
+  return steps;
+}
+
+// --- Split step extraction ---
+
+function extractSplitSteps(
+  transfers: TransferEvent[],
+  poolMap: Map<string, StoredPool>,
+  traceLogs: TraceLog[],
+  v4PoolIdMap: Map<string, StoredPool>,
+): TraceStep[] {
+  const steps: TraceStep[] = [];
+
+  const addrs = new Set<string>();
+  for (const t of transfers) { addrs.add(t.from); addrs.add(t.to); }
+
+  for (const addr of addrs) {
+    if (addr === ZERO_ADDR || addr === V4_POOL_MANAGER) continue;
+    if (!isPoolAddr(addr, poolMap)) continue;
+
+    const incoming = transfers.filter(t => t.to === addr && t.from !== ZERO_ADDR);
+    const outgoing = transfers.filter(t => t.from === addr && t.to !== ZERO_ADDR);
+    if (incoming.length === 0 || outgoing.length === 0) continue;
+
+    // Group incoming transfers by token
+    const inByToken = new Map<string, TransferEvent[]>();
+    for (const t of incoming) {
+      const arr = inByToken.get(t.token);
+      if (arr) arr.push(t);
+      else inByToken.set(t.token, [t]);
+    }
+
+    const outByToken = new Map<string, bigint>();
+    for (const t of outgoing) {
+      outByToken.set(t.token, (outByToken.get(t.token) ?? 0n) + t.amount);
+    }
+
+    // Per-transfer split: when a pool receives multiple transfers of the same token
+    // AND produces multiple output transfers of the same output token, create separate
+    // steps for each input transfer. This handles cases where the aggregator sends
+    // the input in batches, each destined for a different downstream route.
+    const outCountByToken = new Map<string, number>();
+    for (const t of outgoing) {
+      outCountByToken.set(t.token, (outCountByToken.get(t.token) ?? 0) + 1);
+    }
+
+    for (const [tokenIn, inTransfers] of inByToken) {
+      for (const [tokenOut] of outByToken) {
+        if (tokenOut === tokenIn) continue;
+        const outCount = outCountByToken.get(tokenOut) ?? 0;
+        // Split when multiple input transfers AND multiple output transfers of
+        // the corresponding token, indicating distinct batched swaps
+        if (inTransfers.length > 1 && outCount > 1 && inTransfers.length === outCount) {
+          for (const t of inTransfers) {
+            steps.push({ pool: addr, tokenIn, tokenOut, amountIn: t.amount, logIndex: t.logIndex, perTransferSplit: true });
+          }
+        } else {
+          const total = inTransfers.reduce((s, t) => s + t.amount, 0n);
+          const minIdx = Math.min(...inTransfers.map(t => t.logIndex));
+          steps.push({ pool: addr, tokenIn, tokenOut, amountIn: total, logIndex: minIdx });
+        }
+      }
+    }
+  }
+
+  steps.push(...extractV4TraceSteps(traceLogs, v4PoolIdMap));
+  steps.sort((a, b) => a.logIndex - b.logIndex);
+  return steps;
+}
+
+// --- Tail hop finder for extending split steps ---
+
+/** Find a short (1-2 hop) path from intermediateToken to targetToken.
+ *  Prefers Balancer V3 swap + ERC4626 unwrap routes (trace-verified paths),
+ *  then falls back to 1-hop pool scanning. */
+function findTailHops(
+  intermediateToken: string,
+  targetToken: string,
+  poolMap: Map<string, StoredPool>,
+  traceLogs?: TraceLog[],
+): { pool: string; poolType: number; extraData: string; providerName: string; tokenOut: string }[] {
+  // Strategy 1: Find a Balancer V3 swap involving intermediateToken from the trace,
+  // followed by an ERC4626 unwrap to targetToken.
+  if (traceLogs) {
+    for (let i = 0; i < traceLogs.length; i++) {
+      const log = traceLogs[i];
+      if (log.address.toLowerCase() !== BALANCER_V3_VAULT) continue;
+      if (log.topics[0] !== BALANCER_V3_SWAP_TOPIC) continue;
+      if (log.topics.length < 4) continue;
+
+      const balPool = ("0x" + log.topics[1].slice(26)).toLowerCase();
+      const swapTokenIn = ("0x" + log.topics[2].slice(26)).toLowerCase();
+      const swapTokenOut = ("0x" + log.topics[3].slice(26)).toLowerCase();
+
+      // Check if the intermediateToken is the input to this Balancer swap
+      if (swapTokenIn !== intermediateToken) continue;
+
+      // Check if balPool is in poolMap
+      const stored = poolMap.get(balPool);
+      if (!stored || stored.poolType !== 6) continue;
+
+      // Now check if swapTokenOut can be unwrapped to targetToken via ERC4626
+      const erc4626 = poolMap.get(swapTokenOut.toLowerCase());
+      if (erc4626 && erc4626.poolType === 10) {
+        const toks = erc4626.tokens.map(t => t.toLowerCase());
+        if (toks.includes(targetToken)) {
+          const f1 = hopToSwapFields({ pool: balPool, tokenIn: intermediateToken, tokenOut: swapTokenOut }, poolMap);
+          const f2 = hopToSwapFields({ pool: swapTokenOut, tokenIn: swapTokenOut, tokenOut: targetToken }, poolMap);
+          if (f1 && f2) return [{ ...f1, tokenOut: swapTokenOut }, { ...f2, tokenOut: targetToken }];
+        }
+      }
+    }
+  }
+
+  // Strategy 2: Direct 1-hop via known pools — but prefer ERC4626 / Balancer pools
+  // over low-liquidity AMM pools
+  let bestHop: { pool: string; poolType: number; extraData: string; providerName: string; tokenOut: string } | undefined;
+  for (const [addr, stored] of poolMap) {
+    const toks = stored.tokens.map(t => t.toLowerCase());
+    if (toks.includes(intermediateToken) && toks.includes(targetToken)) {
+      const f = hopToSwapFields({ pool: addr, tokenIn: intermediateToken, tokenOut: targetToken }, poolMap);
+      if (f) {
+        // Prefer Balancer V3 and ERC4626 pools over AMM pools for liquid staking routes
+        if (!bestHop || stored.poolType === 6 || stored.poolType === 10 || stored.poolType === 11) {
+          bestHop = { ...f, tokenOut: targetToken };
+          if (stored.poolType === 6 || stored.poolType === 10 || stored.poolType === 11) break;
+        }
+      }
+    }
+  }
+  if (bestHop) return [bestHop];
+
+  // Strategy 3: 2-hop — intermediateToken → midToken → targetToken via ERC4626 unwrap
+  for (const [addr1, stored1] of poolMap) {
+    const toks1 = stored1.tokens.map(t => t.toLowerCase());
+    if (!toks1.includes(intermediateToken)) continue;
+    if (stored1.poolType !== 6) continue; // Prefer Balancer V3 for first hop
+    for (const midToken of toks1) {
+      if (midToken === intermediateToken) continue;
+      const erc4626 = poolMap.get(midToken);
+      if (erc4626 && erc4626.poolType === 10) {
+        const erc4626Toks = erc4626.tokens.map(t => t.toLowerCase());
+        if (erc4626Toks.includes(targetToken)) {
+          const f1 = hopToSwapFields({ pool: addr1, tokenIn: intermediateToken, tokenOut: midToken }, poolMap);
+          const f2 = hopToSwapFields({ pool: midToken, tokenIn: midToken, tokenOut: targetToken }, poolMap);
+          if (f1 && f2) return [{ ...f1, tokenOut: midToken }, { ...f2, tokenOut: targetToken }];
+        }
+      }
+    }
+  }
+
+  return [];
+}
+
+// --- Payload generation ---
+
+interface Payload {
+  block: number;
+  txHash: string;
+  source: string;
+  isSplit: boolean;
+  inputToken: string;
+  outputToken: string;
+  amountIn: string;
+  expectedOut: string;
+  gasUsed: number;
+  supported: boolean;
+  unsupportedReason?: string;
+  pools?: string[];
+  poolTypes?: number[];
+  tokens?: string[];
+  extraDatas?: string[];
+  steps?: SwapStep[];
+  route?: string;
+}
+
+function hopToSwapFields(hop: { pool: string; tokenIn: string; tokenOut: string; bufWrappedIn?: string; bufPool?: string; bufWrappedOut?: string }, poolMap: Map<string, StoredPool>):
+  { pool: string; poolType: number; extraData: string; providerName: string } | undefined {
+  const stored = findPool(hop.pool, hop.tokenIn, hop.tokenOut, poolMap);
+  if (!stored) return undefined;
+  if (stored.poolType === 9) {
+    return { pool: "0x06380C0e0912312B5150364B9DC4542BA0DbBc85", poolType: 9, extraData: stored.extraData ?? "", providerName: stored.providerName };
+  }
+  // Balancer V3 buffered: encode extraData as abi.encode(wrappedIn, pool, wrappedOut)
+  if (stored.poolType === 11 && hop.bufWrappedIn && hop.bufPool && hop.bufWrappedOut) {
+    const extraData = encodeAbiParameters(
+      [{ type: "address" }, { type: "address" }, { type: "address" }],
+      [hop.bufWrappedIn as Hex, hop.bufPool as Hex, hop.bufWrappedOut as Hex],
+    );
+    return { pool: BALANCER_V3_VAULT, poolType: 11, extraData, providerName: "balancer_v3_buffered" };
+  }
+  return { pool: stored.address, poolType: stored.poolType, extraData: "", providerName: stored.providerName };
+}
+
+function buildPayload(
+  txHash: string,
+  blockNumber: number,
+  source: string,
+  isSplit: boolean,
+  inputToken: string,
+  outputToken: string,
+  inputAmount: bigint,
+  outputAmount: bigint,
+  gasUsed: bigint,
+  hops: PoolHop[],
+  poolMap: Map<string, StoredPool>,
+  splitSteps: TraceStep[] = [],
+  traceLogs: TraceLog[] = [],
+  transfers: TransferEvent[] = [],
+): Payload {
+  const base: Payload = {
+    block: blockNumber,
+    txHash,
+    source,
+    isSplit,
+    inputToken,
+    outputToken,
+    amountIn: inputAmount.toString(),
+    expectedOut: outputAmount.toString(),
+    gasUsed: Number(gasUsed),
+    supported: false,
+  };
+
+  if (isSplit) {
+    if (splitSteps.length === 0) {
+      base.unsupportedReason = "split route: no pool swaps detected";
+      base.route = `SPLIT: ${hops.length} pools`;
+      return base;
+    }
+
+    const missingPools: string[] = [];
+    for (const step of splitSteps) {
+      if (!findPool(step.pool, step.tokenIn, step.tokenOut, poolMap)) missingPools.push(step.pool);
+    }
+    if (missingPools.length > 0) {
+      base.unsupportedReason = `missing pools: ${[...new Set(missingPools)].join(", ")}`;
+      base.route = `SPLIT(${splitSteps.length}): ${splitSteps.map(s => `${tok(s.tokenIn)}→${tok(s.tokenOut)}`).join(", ")}`;
+      return base;
+    }
+
+    // Build a set of all step input tokens, so we know which intermediates
+    // are consumed by other steps (and thus shouldn't be tail-extended).
+    // This will be rebuilt after chaining to exclude consumed downstream steps.
+    let stepInputTokens = new Set(splitSteps.map(s => s.tokenIn));
+
+    // Transfer-based chaining: chain upstream→downstream steps when the intermediate
+    // token flows from upstream pool to downstream pool (directly or via non-pool
+    // intermediary like the router), AND the downstream pool receives that intermediate
+    // ONLY from this upstream pool path (no other independent sources).
+    const poolAddrs = new Set(splitSteps.map(s => s.pool));
+    const chainedDownstream = new Set<number>(); // indices of steps consumed by chaining
+    const chainMap = new Map<number, number>(); // upstream index → downstream index
+
+    // Build a map: for each (token, recipient pool), track the set of source pools
+    // that ultimately feed it (tracing through non-pool intermediaries)
+    const tokenFlows = new Map<string, Set<string>>(); // "token:toPool" → set of from-pools
+    for (const t of transfers) {
+      if (t.from === ZERO_ADDR || t.to === ZERO_ADDR) continue;
+      if (!poolAddrs.has(t.to)) continue; // only care about transfers TO pools
+
+      if (poolAddrs.has(t.from)) {
+        // Direct pool→pool transfer
+        const key = `${t.token}:${t.to}`;
+        let s = tokenFlows.get(key);
+        if (!s) { s = new Set(); tokenFlows.set(key, s); }
+        s.add(t.from);
+      } else {
+        // Transfer from non-pool (e.g. router) → trace back to see which pool
+        // sent this token to the non-pool intermediary
+        const feeders = transfers.filter(
+          f => f.to === t.from && f.token === t.token && f.from !== ZERO_ADDR && f.logIndex < t.logIndex
+        );
+        const key = `${t.token}:${t.to}`;
+        let s = tokenFlows.get(key);
+        if (!s) { s = new Set(); tokenFlows.set(key, s); }
+        for (const f of feeders) {
+          if (poolAddrs.has(f.from)) s.add(f.from);
+        }
+      }
+    }
+
+    for (let i = 0; i < splitSteps.length; i++) {
+      const up = splitSteps[i];
+      if (up.tokenOut === outputToken) continue;
+      // Only chain steps created by per-transfer splitting, where each step
+      // represents a distinct batch flowing to a specific downstream pool
+      if (!up.perTransferSplit) continue;
+
+      for (let j = 0; j < splitSteps.length; j++) {
+        if (j === i || chainedDownstream.has(j)) continue;
+        const down = splitSteps[j];
+        if (down.tokenIn !== up.tokenOut) continue;
+        if (down.tokenOut === up.tokenIn) continue;
+
+        // Check if the upstream pool is the ONLY source of this intermediate to the downstream pool
+        const key = `${up.tokenOut}:${down.pool}`;
+        const sources = tokenFlows.get(key);
+        if (!sources || sources.size !== 1 || !sources.has(up.pool)) continue;
+
+        chainMap.set(i, j);
+        chainedDownstream.add(j);
+        break;
+      }
+    }
+
+    // Rebuild stepInputTokens excluding chained downstream steps
+    stepInputTokens = new Set(
+      splitSteps.filter((_, i) => !chainedDownstream.has(i)).map(s => s.tokenIn)
+    );
+
+    const steps: SwapStep[] = [];
+    const routeParts: string[] = [];
+    for (let si = 0; si < splitSteps.length; si++) {
+      if (chainedDownstream.has(si)) continue; // consumed by an upstream chain
+
+      const step = splitSteps[si];
+      const f = hopToSwapFields(step, poolMap)!;
+
+      // If this step is chained to a downstream step, build a multi-hop step
+      if (chainMap.has(si)) {
+        const downIdx = chainMap.get(si)!;
+        const downStep = splitSteps[downIdx];
+        const df = hopToSwapFields(downStep, poolMap)!;
+
+        const allPools = [f.pool, df.pool];
+        const allPoolTypes = [f.poolType, df.poolType];
+        const allTokens = [step.tokenIn, step.tokenOut, downStep.tokenOut];
+        const allExtraDatas = [f.extraData, df.extraData];
+        const routeStr = `${f.providerName}(${tok(step.tokenIn)}→${tok(step.tokenOut)})→${df.providerName}(${tok(step.tokenOut)}→${tok(downStep.tokenOut)})`;
+        steps.push({
+          amountIn: step.amountIn.toString(),
+          pools: allPools,
+          poolTypes: allPoolTypes,
+          tokens: allTokens,
+          extraDatas: allExtraDatas,
+          route: routeStr,
+        });
+        routeParts.push(`[${step.amountIn}] ${routeStr}`);
+        continue;
+      }
+
+      // For per-transfer-split steps that weren't chained: try to reuse a sibling's
+      // downstream pool (a sibling = same upstream pool, same tokenIn/tokenOut, but chained).
+      if (step.perTransferSplit && step.tokenOut !== outputToken && !stepInputTokens.has(step.tokenOut)) {
+        let siblingFound = false;
+        for (let sj = 0; sj < splitSteps.length; sj++) {
+          if (!chainMap.has(sj)) continue;
+          const sib = splitSteps[sj];
+          if (sib.pool === step.pool && sib.tokenIn === step.tokenIn && sib.tokenOut === step.tokenOut) {
+            // Reuse the sibling's chained downstream
+            const downIdx = chainMap.get(sj)!;
+            const downStep = splitSteps[downIdx];
+            const df = hopToSwapFields(downStep, poolMap)!;
+
+            const allPools = [f.pool, df.pool];
+            const allPoolTypes = [f.poolType, df.poolType];
+            const allTokens = [step.tokenIn, step.tokenOut, downStep.tokenOut];
+            const allExtraDatas = [f.extraData, df.extraData];
+            const routeStr = `${f.providerName}(${tok(step.tokenIn)}→${tok(step.tokenOut)})→${df.providerName}(${tok(step.tokenOut)}→${tok(downStep.tokenOut)})`;
+            steps.push({
+              amountIn: step.amountIn.toString(),
+              pools: allPools,
+              poolTypes: allPoolTypes,
+              tokens: allTokens,
+              extraDatas: allExtraDatas,
+              route: routeStr,
+            });
+            routeParts.push(`[${step.amountIn}] ${routeStr}`);
+            siblingFound = true;
+            break;
+          }
+        }
+        if (siblingFound) continue;
+      }
+
+      // If this step produces an intermediate token (not the final output token)
+      // AND no other step consumes that intermediate, try to extend with tail hops.
+      if (step.tokenOut !== outputToken && !stepInputTokens.has(step.tokenOut)) {
+        const tailHops = findTailHops(step.tokenOut, outputToken, poolMap, traceLogs);
+        if (tailHops.length > 0) {
+          const allPools = [f.pool, ...tailHops.map(h => h.pool)];
+          const allPoolTypes = [f.poolType, ...tailHops.map(h => h.poolType)];
+          const allTokens = [step.tokenIn, step.tokenOut, ...tailHops.map(h => h.tokenOut)];
+          const allExtraDatas = [f.extraData, ...tailHops.map(h => h.extraData)];
+          const routeStr = [f.providerName, ...tailHops.map(h => h.providerName)]
+            .map((pn, i) => `${pn}(${tok(allTokens[i])}→${tok(allTokens[i + 1])})`)
+            .join("→");
+          steps.push({
+            amountIn: step.amountIn.toString(),
+            pools: allPools,
+            poolTypes: allPoolTypes,
+            tokens: allTokens,
+            extraDatas: allExtraDatas,
+            route: routeStr,
+          });
+          routeParts.push(`[${step.amountIn}] ${routeStr}`);
+          continue;
+        }
+      }
+
+      steps.push({
+        amountIn: step.amountIn.toString(),
+        pools: [f.pool],
+        poolTypes: [f.poolType],
+        tokens: [step.tokenIn, step.tokenOut],
+        extraDatas: [f.extraData],
+        route: `${f.providerName}(${tok(step.tokenIn)}→${tok(step.tokenOut)})`,
+      });
+      routeParts.push(`[${step.amountIn}] ${f.providerName}(${tok(step.tokenIn)}→${tok(step.tokenOut)})`);
+    }
+
+    const producesOutput = steps.some(s => tokenMatchesOutput(s.tokens[s.tokens.length - 1], outputToken));
+    if (!producesOutput) {
+      base.unsupportedReason = `no step produces output token ${tok(outputToken)}`;
+      base.route = `SPLIT(${steps.length}): ${routeParts.join(" → ")}`;
+      return base;
+    }
+
+    base.supported = true;
+    base.steps = steps;
+    base.route = `SPLIT(${steps.length}): ${routeParts.join(" → ")}`;
+    return base;
+  }
+
+  if (hops.length === 0) {
+    base.unsupportedReason = "no swap events detected";
+    return base;
+  }
+
+  const missingPools: string[] = [];
+  for (const hop of hops) {
+    if (!findPool(hop.pool, hop.tokenIn, hop.tokenOut, poolMap)) missingPools.push(hop.pool);
+  }
+  if (missingPools.length > 0) {
+    base.unsupportedReason = `missing pools: ${missingPools.join(", ")}`;
+    base.route = hops.map(h => `${h.pool} ${tok(h.tokenIn)}→${tok(h.tokenOut)}`).join(" → ");
+    return base;
+  }
+
+  const pools: string[] = [];
+  const poolTypes: number[] = [];
+  const tokens: string[] = [hops[0].tokenIn];
+  const extraDatas: string[] = [];
+  const routeParts: string[] = [];
+
+  for (const hop of hops) {
+    const f = hopToSwapFields(hop, poolMap)!;
+    pools.push(f.pool);
+    poolTypes.push(f.poolType);
+    tokens.push(hop.tokenOut);
+    extraDatas.push(f.extraData);
+    routeParts.push(`${f.providerName}(${tok(hop.tokenIn)}→${tok(hop.tokenOut)})`);
+  }
+
+  // Validate that the route actually reaches the output token
+  const lastToken = hops[hops.length - 1].tokenOut;
+  if (lastToken !== outputToken) {
+    base.unsupportedReason = `route ends at ${tok(lastToken)}, not ${tok(outputToken)} (missing pool in catalog)`;
+    base.route = routeParts.join(" → ");
+    return base;
+  }
+
+  base.supported = true;
+  base.pools = pools;
+  base.poolTypes = poolTypes;
+  base.tokens = tokens;
+  base.extraDatas = extraDatas;
+  base.route = routeParts.join(" → ");
+  return base;
+}
+
+// --- Main ---
+
+async function main() {
+  const txsFile = process.argv[2] ?? path.join(import.meta.dirname!, "txs.txt");
+  const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
+  const poolsPath = path.resolve(import.meta.dirname!, "../../pools/data/pools.txt");
+  const outDir = path.join(import.meta.dirname!, "payloads");
+
+  const { pools: poolMap } = loadPools(poolsPath);
+  // Inject ERC4626 vaults so BalV3 half-buffered swaps can chain to ERC4626 unwrap
+  for (const v of ERC4626_VAULTS) {
+    if (!poolMap.has(v.address.toLowerCase())) {
+      poolMap.set(v.address.toLowerCase(), v as StoredPool);
+    }
+  }
+  console.log(`Loaded ${poolMap.size} pools from pools.txt`);
+
+  const content = fs.readFileSync(txsFile, "utf-8");
+  const hashes = content.split("\n")
+    .map(line => line.replace(/#.*/, "").trim())
+    .filter(line => line.startsWith("0x")) as Hex[];
+
+  console.log(`Processing ${hashes.length} transactions...\n`);
+
+  const client = createPublicClient({
+    chain: avalanche,
+    transport: http(rpcUrl),
+  });
+
+  if (fs.existsSync(outDir)) fs.rmSync(outDir, { recursive: true });
+  fs.mkdirSync(outDir, { recursive: true });
+
+  for (const txHash of hashes) {
+    const [receipt, tx] = await Promise.all([
+      client.getTransactionReceipt({ hash: txHash }),
+      client.getTransaction({ hash: txHash }),
+    ]);
+
+    if (!receipt || receipt.status !== "success") {
+      console.log(`${txHash.slice(0, 10)}: SKIP (reverted or missing)`);
+      continue;
+    }
+
+    // Detect router from original receipt
+    let router: RouterDef | undefined;
+    let swapLog: Log | undefined;
+    for (const r of ROUTERS) {
+      swapLog = (receipt.logs as Log[]).find(
+        l => l.topics[0] === r.swapTopic && l.address.toLowerCase() === r.address.toLowerCase()
+      );
+      if (swapLog) { router = r; break; }
+    }
+
+    if (!router || !swapLog) {
+      console.log(`${txHash.slice(0, 10)}: SKIP (no recognized swap event)`);
+      continue;
+    }
+
+    let { inputToken, outputToken, inputAmount } = router.parseSwapEvent(swapLog.data);
+    if (inputToken === ZERO_ADDR) inputToken = WAVAX;
+    if (outputToken === ZERO_ADDR) outputToken = WAVAX;
+
+    // Skip txs that touch RFQ pools (check original receipt)
+    const receiptTransfers = parseTransfers(receipt.logs as Log[]);
+    const usesRfq = receiptTransfers.some(t => RFQ_POOLS.has(t.from) || RFQ_POOLS.has(t.to));
+    if (usesRfq) {
+      console.log(`SKIP ${txHash.slice(0, 10)} [${router.name}] ${tok(inputToken)}→${tok(outputToken)} — uses RFQ pool`);
+      continue;
+    }
+
+    // Replay original tx at block-1 (start-of-block state)
+    const parentBlock = `0x${(receipt.blockNumber - 1n).toString(16)}`;
+    let trace: any;
+    try {
+      trace = await client.request({
+        method: "debug_traceCall" as any,
+        params: [
+          {
+            from: tx.from,
+            to: tx.to,
+            data: tx.input,
+            value: tx.value ? `0x${tx.value.toString(16)}` : undefined,
+            gas: "0x1C9C380", // 30M
+          },
+          parentBlock,
+          {
+            tracer: "callTracer",
+            tracerConfig: { withLog: true },
+          },
+        ] as any,
+      });
+    } catch (err: any) {
+      console.log(`SKIP ${txHash.slice(0, 10)} [${router.name}] ${tok(inputToken)}→${tok(outputToken)} — replay failed: ${err.message?.slice(0, 80)}`);
+      continue;
+    }
+
+    if ((trace as any).error) {
+      console.log(`SKIP ${txHash.slice(0, 10)} [${router.name}] ${tok(inputToken)}→${tok(outputToken)} — reverts at block start (backrun?)`);
+      continue;
+    }
+
+    // Parse Transfer events from the replay trace
+    const traceLogs = collectTraceLogs(trace);
+    const transfers = parseTraceTransfers(traceLogs);
+
+    // Calculate output amount from replay: sum of outputToken transfers to tx.from
+    const txSender = tx.from.toLowerCase();
+    const replayOutputAmount = transfers
+      .filter(t => t.token === outputToken && t.to === txSender)
+      .reduce((sum, t) => sum + t.amount, 0n);
+
+    if (replayOutputAmount === 0n) {
+      console.log(`SKIP ${txHash.slice(0, 10)} [${router.name}] ${tok(inputToken)}→${tok(outputToken)} — replay produced 0 output`);
+      continue;
+    }
+
+    const excludeAddrs = new Set([
+      router.address.toLowerCase(),
+      txSender,
+      ...ROUTERS.map(r => r.address.toLowerCase()),
+    ]);
+
+    const isSplit = detectSplit(transfers, excludeAddrs);
+    const v4PoolIdMap = buildV4PoolIdMap(poolMap);
+    const hops = extractPoolHops(transfers, poolMap);
+    const wombatSteps = extractWombatTraceSteps(traceLogs, transfers, poolMap);
+    const balancerBufferedSteps = extractBalancerBufferedTraceSteps(traceLogs, transfers, poolMap);
+
+    // For single routes: merge Wombat/Platypus hops into hops list
+    if (!isSplit && hops.length === 0 && wombatSteps.length > 0) {
+      for (const ws of wombatSteps) {
+        hops.push({ pool: ws.pool, tokenIn: ws.tokenIn, tokenOut: ws.tokenOut });
+      }
+    }
+
+    // If single-path and the first hop's tokenIn doesn't match the swap event's inputToken,
+    // check if a Wombat/Platypus step bridges the gap (e.g. USDC→USDt.e before lfj_v1).
+    if (!isSplit && hops.length > 0 && hops[0].tokenIn !== inputToken && wombatSteps.length > 0) {
+      const bridgeStep = wombatSteps.find(s => s.tokenIn === inputToken && s.tokenOut === hops[0].tokenIn);
+      if (bridgeStep) {
+        hops.unshift({ pool: bridgeStep.pool, tokenIn: bridgeStep.tokenIn, tokenOut: bridgeStep.tokenOut });
+      }
+    }
+
+    // V4 single-hop fallback: when no standard pool hops found and not a split,
+    // check for V4 Swap events (e.g. USDt→USDC through PoolManager singleton).
+    // Route these through the split path which already handles V4 steps.
+    let v4SingleHop = false;
+    if (!isSplit && hops.length === 0) {
+      const v4Steps = extractV4TraceSteps(traceLogs, v4PoolIdMap);
+      if (v4Steps.length > 0) {
+        v4SingleHop = true;
+      }
+    }
+
+    const splitSteps = (isSplit || v4SingleHop) ? extractSplitSteps(transfers, poolMap, traceLogs, v4PoolIdMap) : [];
+    // Merge Wombat and Balancer buffered steps into split steps (avoiding duplicates)
+    if (isSplit || v4SingleHop) {
+      const splitPoolTokenSet = new Set(splitSteps.map(s => `${s.pool}:${s.tokenIn}:${s.tokenOut}`));
+      for (const ws of [...wombatSteps, ...balancerBufferedSteps]) {
+        // For buffered swaps, include bufPool in the dedup key so two different
+        // Balancer V3 buffered pools swapping the same underlying token pair are
+        // not collapsed into one (e.g. two USDC→USDt buffered swaps via distinct pools).
+        const key = ws.bufPool
+          ? `${ws.pool}:${ws.tokenIn}:${ws.tokenOut}:${ws.bufPool}`
+          : `${ws.pool}:${ws.tokenIn}:${ws.tokenOut}`;
+        if (!splitPoolTokenSet.has(key)) {
+          splitSteps.push(ws);
+          splitPoolTokenSet.add(key);
+        }
+      }
+      splitSteps.sort((a, b) => a.logIndex - b.logIndex);
+    }
+
+    const payload = buildPayload(
+      txHash,
+      Number(receipt.blockNumber),
+      router.name,
+      isSplit || v4SingleHop,
+      inputToken,
+      outputToken,
+      inputAmount,
+      replayOutputAmount,
+      receipt.gasUsed,
+      hops,
+      poolMap,
+      splitSteps,
+      traceLogs,
+      transfers,
+    );
+
+    const outFile = path.join(outDir, `${txHash}.json`);
+    fs.writeFileSync(outFile, JSON.stringify(payload, null, 2) + "\n");
+
+    const tag = payload.supported ? "✓" : "✗";
+    const reason = payload.supported ? payload.route : payload.unsupportedReason;
+    console.log(`${tag} ${txHash.slice(0, 10)} [${router.name}] ${tok(inputToken)}→${tok(outputToken)} ${payload.isSplit ? "SPLIT" : "SINGLE"} — ${reason}`);
+  }
+}
+
+main().catch(console.error);

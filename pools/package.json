@@ -1,0 +1,21 @@
+{
+  "name": "hayabusa-pools",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "files": [
+    "*.ts",
+    "providers/",
+    "data/"
+  ],
+  "scripts": {
+    "discover": "node discovery.ts"
+  },
+  "dependencies": {
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.4.0",
+    "typescript": "^5.9.3"
+  }
+}

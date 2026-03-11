@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "routescan": {
+      "command": "node",
+      "args": ["mcp/routescan/index.ts"]
+    }
+  }
+}

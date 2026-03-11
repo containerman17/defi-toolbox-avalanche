@@ -1,0 +1,57 @@
+import { createPublicClient, http } from "viem";
+import { avalanche } from "viem/chains";
+import { quoteRoute, ROUTER_ADDRESS, getBalanceOverride, getAllowanceOverride } from "hayabusa-router";
+
+const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
+const client = createPublicClient({ chain: avalanche, transport: http(RPC_URL) });
+
+const BLOCK = 80109190n;
+const LINK = "0x5947bb275c521040051d82396192181b413227a3";
+const USDC = "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e";
+const USDC_E = "0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664";
+const USDt = "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7";
+
+const POOL_ALG = "0x177a7376860a04eea6bf7fb3f39bf10c49d3b42c";
+const POOL_V3_USDC_USDCE = "0x01c7c6066ec10b1cd4821e13b9fb063680ffa083";
+const POOL_PLAT = "0x5ee9008e49b922cafef9dde21446934547e42ad6";
+const POOL_V4 = "0x06380C0e0912312B5150364B9DC4542BA0DbBc85";
+
+const AMOUNT_IN = "3810485938212452485";
+
+async function quoteStep(label: string, pools: string[], poolTypes: number[], tokens: string[], extraDatas: string[]) {
+  try {
+    const overrides = {
+      ...getBalanceOverride(LINK, ROUTER_ADDRESS, BigInt(AMOUNT_IN)),
+      ...getAllowanceOverride(LINK, ROUTER_ADDRESS, BigInt(AMOUNT_IN)),
+    };
+    const result = await quoteRoute(client as any, {
+      block: BLOCK,
+      inputToken: LINK,
+      outputToken: USDt,
+      amountIn: AMOUNT_IN,
+      steps: [{ amountIn: AMOUNT_IN, pools, poolTypes, tokens, extraDatas }],
+      overrides,
+    });
+    console.log(`${label}: ${result.amountOut}`);
+  } catch(e: any) {
+    console.log(`${label}: ERROR - ${e.message?.slice(0, 150)}`);
+  }
+}
+
+async function main() {
+  await quoteStep("algebra→v3→platypus (current)", 
+    [POOL_ALG, POOL_V3_USDC_USDCE, POOL_PLAT], [1, 0, 13],
+    [LINK, USDC, USDC_E, USDt], ["", "", ""]);
+
+  await quoteStep("algebra→v4(fee=18) direct USDC→USDt",
+    [POOL_ALG, POOL_V4], [1, 9],
+    [LINK, USDC, USDt],
+    ["", "id=0xfe74ff9963652d64086e4467e64ceae7847ebf0139cb4046bcbe02c86e48f256,fee=18,ts=1,hooks=0x0000000000000000000000000000000000000000"]);
+
+  await quoteStep("algebra→v4(fee=32) direct USDC→USDt",
+    [POOL_ALG, POOL_V4], [1, 9],
+    [LINK, USDC, USDt],
+    ["", "id=0x8dc096ecc5cb7565daa9615d6b6b4e6d1ffb3b16cca4e0971dfaf0ed9cb55c63,fee=32,ts=1,hooks=0x0000000000000000000000000000000000000000"]);
+}
+
+main().catch(console.error);

@@ -1,0 +1,11 @@
+node_modules
+.env*
+.claude/
+
+**/target/
+**/state_cache/
+**/proxy_cache/
+cache/
+archive/quoting-go/quoting-go
+tools/state-proxy/state-proxy
+examples/03_route_analyzer/payloads/

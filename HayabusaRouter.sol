@@ -441,7 +441,7 @@ contract HayabusaRouter {
     }
 
     /// @notice Recover AVAX accidentally sent to this contract
-    function withdrawETH() external {
+    function withdrawAVAX() external {
         require(msg.sender == owner, "not owner");
         uint256 bal = address(this).balance;
         if (bal > 0) {

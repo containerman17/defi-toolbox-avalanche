@@ -1,7 +1,7 @@
 import { createPublicClient, webSocket } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "../router/quote.ts";
-import type { StoredPool } from "../pools/types.ts";
+import { quoteRoute } from "../../router/quote.ts";
+import type { StoredPool } from "../../pool-collector/types.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: webSocket("ws://localhost:9650/ext/bc/C/ws") });
 

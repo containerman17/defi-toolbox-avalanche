@@ -2,7 +2,7 @@
 import { createPublicClient, http, encodeFunctionData, decodeAbiParameters, type Hex } from "viem";
 import { avalanche } from "viem/chains";
 import { readFileSync } from "node:fs";
-import { getBalanceOverride, getAllowanceOverride, ROUTER_ADDRESS } from "hayabusa-router";
+import { getBalanceOverride, getAllowanceOverride, ROUTER_ADDRESS } from "../../router/index.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: http("http://localhost:9650/ext/bc/C/rpc") });
 

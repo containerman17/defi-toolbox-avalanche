@@ -3,8 +3,8 @@ import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
 import { readFileSync } from "node:fs";
 import { keccak256, encodeAbiParameters } from "viem";
-import { ROUTER_ADDRESS } from "hayabusa-router";
-import { encodeSwap } from "../router/encode.ts";
+import { ROUTER_ADDRESS } from "../../router/index.ts";
+import { encodeSwap } from "../../router/encode.ts";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(rpcUrl) });

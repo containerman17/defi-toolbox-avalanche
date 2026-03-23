@@ -1,6 +1,6 @@
 import { createPublicClient, http } from 'viem';
 import { avalanche } from 'viem/chains';
-import { quoteRoute } from 'hayabusa-router';
+import { quoteRoute } from "../../router/index.ts";
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 

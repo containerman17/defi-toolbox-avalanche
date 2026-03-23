@@ -1,7 +1,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "hayabusa-router";
-import { type StoredPool, type PoolType } from "hayabusa-pools";
+import { quoteRoute } from "../../router/index.ts";
+import { type StoredPool, type PoolType } from "../../pool-collector/index.ts";
 import * as fs from "node:fs";
 
 const rpcUrl = "http://localhost:9650/ext/bc/C/rpc";

@@ -1,7 +1,7 @@
 // Test WooPP V2 WAVAX→USDC direction
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "hayabusa-router";
+import { quoteRoute } from "../../router/index.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: http("http://localhost:9650/ext/bc/C/rpc") });
 

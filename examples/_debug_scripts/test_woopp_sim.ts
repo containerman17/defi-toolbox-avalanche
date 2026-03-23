@@ -1,5 +1,5 @@
 import { createPublicClient, http, parseAbi } from "viem";
-import { quoteRoute } from "../router/quote.ts";
+import { quoteRoute } from "../../router/quote.ts";
 
 const client = createPublicClient({ 
   transport: http("http://localhost:9650/ext/bc/C/rpc") 

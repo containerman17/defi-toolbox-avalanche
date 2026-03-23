@@ -1,6 +1,6 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute, ROUTER_ADDRESS, getBalanceOverride, getAllowanceOverride } from "hayabusa-router";
+import { quoteRoute, ROUTER_ADDRESS, getBalanceOverride, getAllowanceOverride } from "../../router/index.ts";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(RPC_URL) });

@@ -2,7 +2,7 @@ import {
     loadPools,
     defaultPoolsPath,
     type StoredPool,
-} from "../../pools/index.ts";
+} from "../../pool-collector/index.ts";
 import { quoteRoute, ROUTER_ADDRESS } from "../../router/index.ts";
 import { createPublicClient, http, formatUnits } from "viem";
 import { avalanche } from "viem/chains";

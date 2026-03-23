@@ -1,8 +1,8 @@
 // Debug WooPP V2 via debug_traceCall
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "hayabusa-router";
-import { type StoredPool } from "hayabusa-pools";
+import { quoteRoute } from "../../router/index.ts";
+import { type StoredPool } from "../../pool-collector/index.ts";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(rpcUrl) });

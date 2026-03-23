@@ -2,7 +2,7 @@ import { createPublicClient, http, webSocket, encodeAbiParameters, type Hex } fr
 import { avalanche } from "viem/chains";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { encodeSwap } from "../router/encode.ts";
+import { encodeSwap } from "../../router/encode.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: http("http://localhost:9650/ext/bc/C/rpc") });
 const ROUTER_ADDRESS = "0x2bef1becdafcfe8990a233d03a98bbb39021c96e";
@@ -39,7 +39,7 @@ console.log("calldata length:", calldata.length);
 const stateOverride: Record<string, any> = {};
 
 // Set WAVAX balance on router
-import { getBalanceOverride } from "../router/overrides.ts";
+import { getBalanceOverride } from "../../router/overrides.ts";
 const balOvr = getBalanceOverride(wavax, amountIn, ROUTER_ADDRESS);
 for (const [addr, val] of Object.entries(balOvr)) {
   stateOverride[addr] = { stateDiff: (val as any).stateDiff };

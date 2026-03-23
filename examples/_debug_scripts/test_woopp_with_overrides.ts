@@ -1,7 +1,7 @@
 // Test: manually inject WooPP pool + oracle storage to verify it fixes the simulation
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute, ROUTER_ADDRESS } from "hayabusa-router";
+import { quoteRoute, ROUTER_ADDRESS } from "../../router/index.ts";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(rpcUrl) });

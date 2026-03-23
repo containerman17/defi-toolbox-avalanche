@@ -1,0 +1,6 @@
+- date: "2026-03-23 12:14:21"
+  git: 4574008
+  evm/correctness: 0  # mismatches
+  evm/speed: 0.897  # ms/pool
+  evm/coverage: 95  # %
+  router/backrun_lfj: 96.8  # % pass

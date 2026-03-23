@@ -1,7 +1,7 @@
 // Test individual steps of 0x1f84c569 to find which one produces wrong output
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "hayabusa-router";
+import { quoteRoute } from "../../router/index.ts";
 
 const payload = {
   block: 80108339,

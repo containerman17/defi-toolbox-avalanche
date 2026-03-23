@@ -1,6 +1,6 @@
 import { createPublicClient, http } from 'viem';
 import { avalanche } from 'viem/chains';
-import { quoteRoute } from 'hayabusa-router';
+import { quoteRoute } from "../../router/index.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: http('http://localhost:9650/ext/bc/C/rpc') });
 const USDC = '0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e';

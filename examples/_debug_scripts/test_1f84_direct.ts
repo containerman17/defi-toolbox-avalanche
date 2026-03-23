@@ -2,7 +2,7 @@
 import { createPublicClient, http, decodeAbiParameters, encodeFunctionData, type Hex } from "viem";
 import { avalanche } from "viem/chains";
 import { readFileSync } from "node:fs";
-import { getBalanceOverride, getAllowanceOverride } from "../router/overrides.ts";
+import { getBalanceOverride, getAllowanceOverride } from "../../router/overrides.ts";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(rpcUrl) });

@@ -2,7 +2,7 @@
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
 import { keccak256, encodeAbiParameters } from "viem";
-import { ROUTER_ADDRESS } from "hayabusa-router";
+import { ROUTER_ADDRESS } from "../../router/index.ts";
 import { readFileSync } from "node:fs";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";

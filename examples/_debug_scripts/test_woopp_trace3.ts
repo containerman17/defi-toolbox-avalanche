@@ -1,9 +1,9 @@
 // Trace WooPP V2 with prestate overrides
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
-import { ROUTER_ADDRESS } from "hayabusa-router";
+import { ROUTER_ADDRESS } from "../../router/index.ts";
 import { readFileSync } from "node:fs";
-import { encodeSwap } from "../router/encode.ts";
+import { encodeSwap } from "../../router/encode.ts";
 
 const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(rpcUrl) });

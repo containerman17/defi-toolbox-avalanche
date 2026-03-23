@@ -1,7 +1,7 @@
 // Test WooPP V2 fix - using main repo quoteRoute (which uses updated bytecode.hex)
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "hayabusa-router";
+import { quoteRoute } from "../../router/index.ts";
 
 const client = createPublicClient({ chain: avalanche, transport: http("http://localhost:9650/ext/bc/C/rpc") });
 

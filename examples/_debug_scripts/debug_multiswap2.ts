@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createPublicClient, http, type Log } from "viem";
 import { avalanche } from "viem/chains";
-import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "hayabusa-pools";
+import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "../../pool-collector/index.ts";
 
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000";

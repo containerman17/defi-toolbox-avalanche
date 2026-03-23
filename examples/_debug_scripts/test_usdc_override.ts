@@ -1,7 +1,7 @@
 // Verify USDC state override works correctly
 import { createPublicClient, http, type Hex } from "viem";
 import { avalanche } from "viem/chains";
-import { getBalanceOverride, getAllowanceOverride, ROUTER_ADDRESS } from "hayabusa-router";
+import { getBalanceOverride, getAllowanceOverride, ROUTER_ADDRESS } from "../../router/index.ts";
 import { readFileSync } from "node:fs";
 
 const client = createPublicClient({ chain: avalanche, transport: http("http://localhost:9650/ext/bc/C/rpc") });

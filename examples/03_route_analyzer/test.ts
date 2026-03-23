@@ -130,7 +130,8 @@ async function main() {
     transport: wsPool(wsUrl),
   });
 
-  const files = fs.readdirSync(payloadsDir).filter(f => f.endsWith(".json"));
+  let files = fs.readdirSync(payloadsDir).filter(f => f.endsWith(".json"));
+  if (process.env.LIMIT) files = files.slice(0, parseInt(process.env.LIMIT));
   let pass = 0, fail = 0;
 
   // Process payloads concurrently with a semaphore

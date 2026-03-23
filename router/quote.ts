@@ -41,7 +41,7 @@ export async function quoteRoute(
   // Build extra overrides for reflection tokens and hook contracts
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
   if (inputToken !== NATIVE_TOKEN && isReflectionToken(inputToken)) {
-    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, ROUTER_ADDRESS, blockNumber);
+    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, DUMMY_SENDER, blockNumber);
     for (const [addr, val] of Object.entries(reflOvr)) {
       if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
       if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -118,7 +118,7 @@ export async function quoteFlat(
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
   for (const [token, amount] of tokenBalances) {
     if (token !== NATIVE_TOKEN && isReflectionToken(token)) {
-      const reflOvr = await getBalanceOverrideAsync(client, token, amount, ROUTER_ADDRESS, blockNumber);
+      const reflOvr = await getBalanceOverrideAsync(client, token, amount, DUMMY_SENDER, blockNumber);
       for (const [addr, val] of Object.entries(reflOvr)) {
         if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
         if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -167,10 +167,13 @@ function buildFlatStateOverrides(tokenBalances: Map<string, bigint>, extraStateO
 
   for (const [token, amount] of tokenBalances) {
     if (token === NATIVE_TOKEN) continue;
-    const balOvr = getBalanceOverride(token, amount, ROUTER_ADDRESS);
-    for (const [addr, val] of Object.entries(balOvr)) {
-      if (!merged[addr]) merged[addr] = {};
-      Object.assign(merged[addr], val.stateDiff);
+    const balOvr = getBalanceOverride(token, amount, DUMMY_SENDER);
+    const allowOvr = getAllowanceOverride(token, DUMMY_SENDER, ROUTER_ADDRESS);
+    for (const ovr of [balOvr, allowOvr]) {
+      for (const [addr, val] of Object.entries(ovr)) {
+        if (!merged[addr]) merged[addr] = {};
+        Object.assign(merged[addr], val.stateDiff);
+      }
     }
   }
 
@@ -214,14 +217,13 @@ function buildFlatStateOverrides(tokenBalances: Map<string, bigint>, extraStateO
  * Build geth-style state overrides for raw JSON-RPC calls.
  */
 function buildStateOverrides(inputToken: string, amountIn: bigint, extraStateOverrides?: Record<string, any>) {
-  // Set balance on the ROUTER (not the sender) since quoteRoute skips transferFrom.
-  // This avoids double fee-on-transfer penalties.
+  // Set balance on the SENDER and approve the ROUTER — swap() does transferFrom.
   const balanceOverride = inputToken === NATIVE_TOKEN
     ? {}
-    : getBalanceOverride(inputToken, amountIn, ROUTER_ADDRESS);
+    : getBalanceOverride(inputToken, amountIn, DUMMY_SENDER);
   const allowanceOverride = inputToken === NATIVE_TOKEN
     ? {}
-    : {}; // No allowance needed — quoteRoute doesn't transferFrom
+    : getAllowanceOverride(inputToken, DUMMY_SENDER, ROUTER_ADDRESS);
 
   const merged: Record<string, Record<string, Hex>> = {};
   for (const ovr of [balanceOverride, allowanceOverride]) {

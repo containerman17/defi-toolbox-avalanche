@@ -330,10 +330,8 @@ contract HayabusaRouter {
 
     // === PUBLIC SWAP ===
 
-    /// @notice Flat-list swap: execute N independent steps in sequence.
-    ///         tokens has 2*N entries: [tokenIn0, tokenOut0, tokenIn1, tokenOut1, ...]
-    ///         amountsIn[i] > 0 uses that amount; amountsIn[i] == 0 uses balanceOf(tokenIn).
-    /// @return The contract's balance of the last step's tokenOut
+    /// @notice Pull tokenIn from msg.sender, execute the swap, send tokenOut back.
+    /// @return amountOut The amount of tokenOut sent to msg.sender
     function swap(
         address[] calldata pools,
         uint8[] calldata poolTypes,
@@ -341,6 +339,30 @@ contract HayabusaRouter {
         uint256[] calldata amountsIn,
         bytes[] calldata extraDatas
     ) external payable returns (uint256) {
+        // Pull input token from caller
+        address tokenIn = tokens[0];
+        uint256 totalIn = amountsIn[0];
+        if (totalIn == 0) revert("swap: amountsIn[0] must be nonzero");
+        IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
+
+        // Execute
+        uint256 amountOut = _executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
+
+        // Send output to caller
+        address tokenOut = tokens[pools.length * 2 - 1];
+        IERC20(tokenOut).transfer(msg.sender, amountOut);
+        return amountOut;
+    }
+
+    function _executeSwap(
+        address[] calldata pools,
+        uint8[] calldata poolTypes,
+        address[] calldata tokens,
+        uint256[] calldata amountsIn,
+        bytes[] calldata extraDatas
+    ) internal returns (uint256) {
+        address tokenOut = tokens[pools.length * 2 - 1];
+        uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
         for (uint256 i = 0; i < pools.length;) {
             uint256 j = i * 2;
             uint256 amt = amountsIn[i];
@@ -348,7 +370,7 @@ contract HayabusaRouter {
             _swapLeg(pools[i], poolTypes[i], tokens[j], tokens[j + 1], amt, extraDatas[i]);
             unchecked { ++i; }
         }
-        return IERC20(tokens[pools.length * 2 - 1]).balanceOf(address(this));
+        return IERC20(tokenOut).balanceOf(address(this)) - balBefore;
     }
 
     /// @notice Quote a single pool+direction at multiple amounts.

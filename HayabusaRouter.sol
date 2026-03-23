@@ -346,7 +346,7 @@ contract HayabusaRouter {
         IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
 
         // Execute
-        uint256 amountOut = _executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
+        uint256 amountOut = executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
 
         // Send output to caller
         address tokenOut = tokens[pools.length * 2 - 1];
@@ -354,13 +354,13 @@ contract HayabusaRouter {
         return amountOut;
     }
 
-    function _executeSwap(
+    function executeSwap(
         address[] calldata pools,
         uint8[] calldata poolTypes,
         address[] calldata tokens,
         uint256[] calldata amountsIn,
         bytes[] calldata extraDatas
-    ) internal returns (uint256) {
+    ) public returns (uint256) {
         address tokenOut = tokens[pools.length * 2 - 1];
         uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
         for (uint256 i = 0; i < pools.length;) {

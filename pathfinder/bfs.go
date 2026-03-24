@@ -156,11 +156,8 @@ func FindBestRoute(
 				}
 			}
 
-			// EVM fallback (skip pools known to be invalid)
+			// EVM fallback
 			if amountOut == nil {
-				if registry.IsInvalid(hop.step.Pool) {
-					continue
-				}
 				et0 := time.Now()
 				stats.EVMQuotes++
 				execState := baseWithOverrides.NewOverlay()

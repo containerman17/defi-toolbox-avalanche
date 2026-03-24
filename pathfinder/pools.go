@@ -83,16 +83,11 @@ func ParsePools(content string, limit int) []Pool {
 }
 
 // BuildGraph creates a token adjacency graph from pools.
-// If registry is provided, pools marked as invalid (-1) are excluded.
-func BuildGraph(pools []Pool, registry ...interface{ IsInvalid(common.Address) bool }) *Graph {
+func BuildGraph(pools []Pool) *Graph {
 	g := &Graph{Edges: make(map[common.Address][]Edge)}
 
 	for i := range pools {
 		pool := &pools[i]
-		// Skip invalid pools (FoT, broken) — they produce fake routes
-		if len(registry) > 0 && registry[0] != nil && registry[0].IsInvalid(pool.Address) {
-			continue
-		}
 		for ti := 0; ti < len(pool.Tokens); ti++ {
 			for tj := 0; tj < len(pool.Tokens); tj++ {
 				if ti != tj {

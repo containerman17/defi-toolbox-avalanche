@@ -57,7 +57,8 @@ class WsWorker {
         this.ready = false;
       };
       this.ws.onmessage = (event: MessageEvent) => {
-        const data = JSON.parse(String(event.data)) as JsonRpcResponse;
+        const data = JSON.parse(String(event.data));
+        if (!data.jsonrpc) return; // Skip non-RPC messages (initial_dump, block_diff)
         if (this.pendingResolve) {
           const r = this.pendingResolve;
           this.pendingResolve = null;

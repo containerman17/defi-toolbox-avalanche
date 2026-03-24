@@ -153,6 +153,16 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 - BFS graph includes ALL pools from parsePools — many untested pools have broken formulas
 - Fix needed: discovery must test all pools in the graph, not just the benchmark subset
 
+### EVM performance investigation
+- NewOverlay allocation: 30ns — NOT the bottleneck
+- Reusable overlay (Reset instead of NewOverlay): 2% improvement — negligible
+- EVM per-call setup (NewEVM + blockCtx + big.Int): 5902ns, 54 allocs
+- Cached block context: saved ~100us per call, 14 fewer allocs
+- Real EVM execution: ~700us per call — this is the libevm engine, not our code
+- Target from experiments (192-core): ~192us per call per core
+- Our single-core: ~700us — 3.6x gap likely from cache effects and state access patterns
+- With formulas: 5.7x overall speedup (1206ms vs 6865ms for 1000 pools)
+
 ### Open questions
 - Discovery coverage gap: test ALL pools, not just starter-token pairs
 - BFS pruning: can we skip slow pool types when faster alternatives exist?

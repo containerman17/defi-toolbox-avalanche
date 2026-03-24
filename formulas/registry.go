@@ -75,6 +75,27 @@ func parseRegistryContent(content string) *Registry {
 // executeSwap selector: keccak256("executeSwap(address[],uint8[],address[],uint256[],bytes[])")[:4]
 var executeSwapSelector = []byte{0x32, 0x39, 0x33, 0x4d}
 
+// TryQuoteDirect attempts to quote using formulas with raw pool fields (no ABI encode/decode).
+// Returns (amountOut, true) if a formula was used, or (nil, false) to fall through to EVM.
+func (r *Registry) TryQuoteDirect(readStorage StorageReader, pool common.Address, tokenIn, tokenOut common.Address, amountIn *uint256.Int) (*uint256.Int, bool) {
+	formulaID, known := r.pools[pool]
+	if !known || formulaID < 0 {
+		return nil, false
+	}
+
+	ret, ok := r.dispatchFormula(readStorage, formulaID, pool, tokenIn, tokenOut, amountIn)
+	if !ok {
+		return nil, false
+	}
+
+	var out uint256.Int
+	out.SetBytes(ret)
+	if out.IsZero() {
+		return nil, false
+	}
+	return &out, true
+}
+
 // TryQuote attempts to quote a call using formulas instead of EVM execution.
 // Returns (returnData, true) if a formula was used, or (nil, false) to fall through to EVM.
 func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, bool) {
@@ -88,7 +109,6 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 	}
 
 	// ABI-decode executeSwap(address[], uint8[], address[], uint256[], bytes[])
-	// For single-pool calls: each array has exactly 1 element (or 2 for tokens).
 	pool, tokenIn, tokenOut, amountIn, ok := decodeExecuteSwapSingle(data[4:])
 	if !ok {
 		return nil, false
@@ -100,30 +120,25 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return nil, false
 	}
 
-	// Byte-based reader (zero-alloc hot path)
-	bytesReader := func(addr [20]byte, slot [32]byte) ([32]byte, error) {
-		val := readStorage(common.Address(addr), common.Hash(slot))
-		return val, nil
-	}
+	return r.dispatchFormula(readStorage, formulaID, pool, tokenIn, tokenOut, amountIn)
+}
 
-	// String-based reader (used only for cold-path layout detection in V3)
-	lazyStateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
-		addr := common.HexToAddress(contractAddr)
-		slotHash := common.BigToHash(slot)
-		val := readStorage(addr, slotHash)
-		return val, nil
-	}
-
+func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, pool, tokenIn, tokenOut common.Address, amountIn *uint256.Int) ([]byte, bool) {
 	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 
-	// Dispatch by formula ID
 	switch formulaID {
 	case FormulaV2_30bps:
 		return QuoteV2(readStorage, pool, tokenIn, tokenOut, amountIn)
 
 	case FormulaPharaohV1:
+		// String-based reader for Pharaoh V1 (uses big.Int slots)
+		stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+			addr := common.HexToAddress(contractAddr)
+			slotHash := common.BigToHash(slot)
+			return readStorage(addr, slotHash), nil
+		}
 		poolHex := strings.ToLower(pool.Hex())
-		state, err := FetchPharaohV1StateStorage(lazyStateReader, poolHex)
+		state, err := FetchPharaohV1StateStorage(stateReader, poolHex)
 		if err != nil || state == nil {
 			return nil, false
 		}
@@ -141,8 +156,16 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return ret[:], true
 
 	case FormulaV3:
+		bytesReader := func(addr [20]byte, slot [32]byte) ([32]byte, error) {
+			return readStorage(common.Address(addr), common.Hash(slot)), nil
+		}
+		stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+			addr := common.HexToAddress(contractAddr)
+			slotHash := common.BigToHash(slot)
+			return readStorage(addr, slotHash), nil
+		}
 		poolHex := strings.ToLower(pool.Hex())
-		result, err := QuoteV3U256(lazyStateReader, bytesReader, [20]byte(pool), poolHex, amountIn, zeroForOne)
+		result, err := QuoteV3U256(stateReader, bytesReader, [20]byte(pool), poolHex, amountIn, zeroForOne)
 		if err != nil {
 			return nil, false
 		}

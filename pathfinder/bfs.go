@@ -154,7 +154,6 @@ func FindBestRoute(
 			// EVM fallback
 			if amountOut == nil {
 				stats.EVMQuotes++
-				// Thin scratch layer — empty map, reads fall through to baseWithOverrides
 				execState := baseWithOverrides.NewOverlay()
 				ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
 				if evmErr == nil && len(ret) >= 32 {

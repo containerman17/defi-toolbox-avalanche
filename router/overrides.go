@@ -80,9 +80,9 @@ func BuildOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfi
 		}
 	}
 
-	// For each token with a known balance slot, set a moderate balance on the router.
-	// Not too large — prevents the BFS from finding fake arbitrage through obscure tokens.
-	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1_000_000), uint256.NewInt(1_000_000_000_000_000_000)) // 1M * 1e18
+	// For each token with a known balance slot, set a realistic balance on the router.
+	// 1000 units (at 18 decimals) — enough for quoting but not so large it creates fake arb.
+	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1000), uint256.NewInt(1_000_000_000_000_000_000)) // 1000 * 1e18
 
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]

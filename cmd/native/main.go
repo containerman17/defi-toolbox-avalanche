@@ -494,7 +494,7 @@ func main() {
 
 	// Pre-compute pools, graph, and overrides for find_route
 	embeddedPools := poolcollector.EmbeddedPools(1000)
-	embeddedGraph := pf.BuildGraph(embeddedPools)
+	embeddedGraph := pf.BuildGraph(embeddedPools, registry)
 	embeddedOverrides := router.BuildOverrides(
 		common.HexToAddress("0x000000000000000000000000cafebabe00facade"),
 		embeddedPools,

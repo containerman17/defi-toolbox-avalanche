@@ -15,6 +15,8 @@ import (
 
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
+	poolcollector "defi-toolbox/pool-collector"
+	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
@@ -477,22 +479,27 @@ func main() {
 
 	// Check for flags in args
 	stateServerURL := ""
-	registryPath := ""
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) {
 			stateServerURL = os.Args[i+1]
 		}
-		if arg == "--registry" && i+1 < len(os.Args) {
-			registryPath = os.Args[i+1]
-		}
 	}
 
 	// Load formula registry
-	registry := formulas.LoadRegistry(registryPath)
+	registry := formulas.LoadEmbeddedRegistry()
 	validated, invalid := registry.RegistryStats()
 	if validated+invalid > 0 {
 		fmt.Fprintf(os.Stderr, "[native] formula registry: %d validated, %d invalid\n", validated, invalid)
 	}
+
+	// Pre-compute pools, graph, and overrides for find_route
+	embeddedPools := poolcollector.EmbeddedPools(1000)
+	embeddedGraph := pf.BuildGraph(embeddedPools)
+	embeddedOverrides := router.BuildOverrides(
+		common.HexToAddress("0x000000000000000000000000cafebabe00facade"),
+		embeddedPools,
+	)
+	fmt.Fprintf(os.Stderr, "[native] pre-computed: %d pools, %d overrides\n", len(embeddedPools), len(embeddedOverrides))
 
 	var fetcher *wsFetcher
 	var state *statedb.StateDB
@@ -643,13 +650,10 @@ func main() {
 
 		case "find_route":
 			var params struct {
-				TokenIn      string                       `json:"tokenIn"`
-				TokenOut     string                       `json:"tokenOut"`
-				AmountIn     string                       `json:"amountIn"`
-				Pools        string                       `json:"pools"`        // pools.txt content
-				MaxHops      int                          `json:"maxHops"`
-				PoolLimit    int                          `json:"poolLimit"`
-				StateOverrides map[string]stateOverrideEntry `json:"stateOverrides,omitempty"`
+				TokenIn  string `json:"tokenIn"`
+				TokenOut string `json:"tokenOut"`
+				AmountIn string `json:"amountIn"`
+				MaxHops  int    `json:"maxHops"`
 			}
 			if err := json.Unmarshal(req.Params, &params); err != nil {
 				resp.Error = fmt.Sprintf("invalid params: %v", err)
@@ -665,38 +669,6 @@ func main() {
 			}
 			amountIn, _ := uint256.FromBig(amtBig)
 
-			limit := params.PoolLimit
-			if limit <= 0 {
-				limit = 1000
-			}
-			pools := pf.ParsePools(params.Pools, limit)
-			graph := pf.BuildGraph(pools)
-
-			// Parse overrides
-			var overrides []pf.ParsedOverride
-			for addrHex, entry := range params.StateOverrides {
-				po := pf.ParsedOverride{Addr: common.HexToAddress(addrHex)}
-				if entry.Code != "" && entry.Code != "0x" {
-					po.Code, _ = hex.DecodeString(strings.TrimPrefix(entry.Code, "0x"))
-					po.Balance = uint256.NewInt(0)
-					if entry.Balance != "" {
-						if bi, bOk := new(big.Int).SetString(strings.TrimPrefix(entry.Balance, "0x"), 16); bOk {
-							po.Balance, _ = uint256.FromBig(bi)
-						}
-					}
-					if entry.Nonce != nil {
-						po.Nonce = *entry.Nonce
-					}
-				}
-				for slotHex, valueHex := range entry.StateDiff {
-					po.Slots = append(po.Slots, struct {
-						Slot  common.Hash
-						Value common.Hash
-					}{common.HexToHash(slotHex), common.HexToHash(valueHex)})
-				}
-				overrides = append(overrides, po)
-			}
-
 			cfg := statedb.EVMConfig{
 				BlockNumber: currentBlock,
 				Timestamp:   currentTimestamp,
@@ -710,7 +682,7 @@ func main() {
 				maxHops = 4
 			}
 
-			route := pf.FindBestRoute(state, cfg, registry, overrides, graph, tokenIn, tokenOut, amountIn, maxHops)
+			route := pf.FindBestRoute(state, cfg, registry, embeddedOverrides, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
 			} else {

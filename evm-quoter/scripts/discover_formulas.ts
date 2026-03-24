@@ -25,6 +25,7 @@ const FORMULA_MAP: Record<number, number> = {
   0: 2,   // Uniswap V3 / Pharaoh V3
   3: 3,   // LFJ V2 Liquidity Book
   1: 4,   // Algebra V1 Integral
+  4: 5,   // DODO PMM
 };
 
 const FORMULA_NAMES: Record<number, string> = {
@@ -33,6 +34,7 @@ const FORMULA_NAMES: Record<number, string> = {
   2: "V3 tick-walking",
   3: "LFJ V2 Liquidity Book",
   4: "Algebra V1 Integral",
+  5: "DODO PMM",
   [-1]: "invalid (FoT/broken)",
 };
 

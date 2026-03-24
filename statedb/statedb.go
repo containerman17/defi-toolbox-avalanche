@@ -453,17 +453,40 @@ var AvalancheCChainConfig = &params.ChainConfig{
 
 // ExecuteCall runs an eth_call using the EVM.
 func ExecuteCall(state *StateDB, cfg EVMConfig, from, to common.Address, data []byte) ([]byte, uint64, error) {
-	random := common.Hash{}
-	// Avalanche C-Chain coinbase is the native minter precompile
-	coinbase := common.HexToAddress("0x0100000000000000000000000000000000000000")
+	ctx := GetCachedContext(cfg)
+	return ctx.Execute(state, from, to, data)
+}
+
+// CachedContext holds pre-allocated EVM context for a given block config.
+// Reuse across calls to avoid per-call allocations.
+type CachedContext struct {
+	blockCtx vm.BlockContext
+	rules    params.Rules
+	chainCfg *params.ChainConfig
+	gasPrice *big.Int
+}
+
+var cachedCtx *CachedContext
+
+// GetCachedContext returns a cached EVM context, creating one if needed.
+func GetCachedContext(cfg EVMConfig) *CachedContext {
+	if cachedCtx != nil && cachedCtx.blockCtx.Time == cfg.Timestamp {
+		return cachedCtx
+	}
+
 	baseFee := cfg.BaseFee
 	if baseFee == 0 {
-		baseFee = 25_000_000_000 // fallback
+		baseFee = 25_000_000_000
 	}
 	blockGasLimit := cfg.GasLimit
 	if blockGasLimit == 0 {
-		blockGasLimit = 40_000_000 // C-Chain default
+		blockGasLimit = 40_000_000
 	}
+
+	random := common.Hash{}
+	coinbase := common.HexToAddress("0x0100000000000000000000000000000000000000")
+	blockNumber := new(big.Int).SetUint64(cfg.BlockNumber)
+
 	blockCtx := vm.BlockContext{
 		CanTransfer: func(db vm.StateDB, addr common.Address, amount *uint256.Int) bool {
 			return db.GetBalance(addr).Cmp(amount) >= 0
@@ -472,25 +495,39 @@ func ExecuteCall(state *StateDB, cfg EVMConfig, from, to common.Address, data []
 			db.SubBalance(sender, amount)
 			db.AddBalance(recipient, amount)
 		},
-		GetHash:     state.GetBlockHash,
+		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
 		Coinbase:    coinbase,
-		BlockNumber: new(big.Int).SetUint64(cfg.BlockNumber),
+		BlockNumber: blockNumber,
 		Time:        cfg.Timestamp,
 		Difficulty:  big.NewInt(1),
 		Random:      &random,
 		GasLimit:    blockGasLimit,
 		BaseFee:     new(big.Int).SetUint64(baseFee),
 	}
-	txCtx := vm.TxContext{
-		Origin:   from,
-		GasPrice: new(big.Int).SetUint64(baseFee),
-	}
 
 	chainCfg := AvalancheCChainConfig
-	rules := chainCfg.Rules(blockCtx.BlockNumber, blockCtx.Random != nil, blockCtx.Time)
-	state.Prepare(rules, from, blockCtx.Coinbase, &to, vm.ActivePrecompiles(rules), nil)
+	rules := chainCfg.Rules(blockNumber, true, cfg.Timestamp)
 
-	evm := vm.NewEVM(blockCtx, txCtx, state, chainCfg, vm.Config{})
+	cachedCtx = &CachedContext{
+		blockCtx: blockCtx,
+		rules:    rules,
+		chainCfg: chainCfg,
+		gasPrice: new(big.Int).SetUint64(baseFee),
+	}
+	return cachedCtx
+}
+
+// Execute runs an EVM call using the pre-allocated context.
+func (ctx *CachedContext) Execute(state *StateDB, from, to common.Address, data []byte) ([]byte, uint64, error) {
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: ctx.gasPrice,
+	}
+
+	precompiles := vm.ActivePrecompiles(ctx.rules)
+	state.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
+
+	evm := vm.NewEVM(ctx.blockCtx, txCtx, state, ctx.chainCfg, vm.Config{})
 
 	gasLimit := uint64(5_000_000)
 	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, gasLimit, uint256.NewInt(0))

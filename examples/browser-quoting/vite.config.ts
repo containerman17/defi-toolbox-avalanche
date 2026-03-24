@@ -13,5 +13,6 @@ export default defineConfig({
       // Allow serving files from the repo root (pools.txt, bytecode.hex, wasm)
       allow: [repoRoot],
     },
+    allowedHosts: true,
   },
 });

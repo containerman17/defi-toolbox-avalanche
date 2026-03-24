@@ -134,8 +134,22 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 - This is the natural floor for V3 formula performance
 - Potential optimization: BFS pruning to avoid exploring pharaoh_v3 when better routes exist
 
+### Pre-computed startup
+- find_route now uses embedded pools + pre-computed overrides — zero JSON parsing per call
+- Pools, graph, and overrides computed once at Go binary startup
+- DODO formula panics on certain pool states — added panic recovery in dispatchFormula
+
+### Formula-vs-reality mismatch (known issue)
+- Formula quoting succeeds for pools where actual swaps would fail
+- BFS with all-token overrides finds routes with billions of % return
+- Root cause: formula only does math on reserves, doesn't simulate token transfers
+- This means the pathfinder finds routes through broken/paused/max-transfer-limited tokens
+- Need: either (a) formula checks for known bad tokens, or (b) EVM verification of top routes
+- The old JS BFS avoided this by only setting overrides for 4 starter tokens
+
 ### Open questions
 - BFS pruning: can we skip slow pool types when faster alternatives exist?
+- Formula-reality gap: need EVM verification for the final route
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides
 - Pathfinder needs beam width / pruning for wider search
 - LFJ V2 formula not implemented yet (335 pools, 441ms — next formula target)

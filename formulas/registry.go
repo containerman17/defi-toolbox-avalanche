@@ -3,6 +3,7 @@ package formulas
 import (
 	"bufio"
 	"bytes"
+	_ "embed"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -12,6 +13,14 @@ import (
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
 )
+
+//go:embed registry.txt
+var registryData string
+
+// LoadEmbeddedRegistry loads the formula registry from embedded data.
+func LoadEmbeddedRegistry() *Registry {
+	return parseRegistryContent(registryData)
+}
 
 // Formula IDs
 const (
@@ -31,18 +40,20 @@ func NewRegistry() *Registry {
 	return &Registry{pools: make(map[common.Address]int)}
 }
 
-// LoadRegistry loads a registry file. Format: address:formula_id (one per line).
-// Lines starting with # are comments. Missing file returns an empty registry.
+// LoadRegistry loads a registry file from disk (fallback for testing).
 func LoadRegistry(path string) *Registry {
-	r := &Registry{pools: make(map[common.Address]int)}
-
 	f, err := os.Open(path)
 	if err != nil {
-		return r // Empty registry — all pools use EVM
+		return NewRegistry()
 	}
 	defer f.Close()
+	content, _ := os.ReadFile(path)
+	return parseRegistryContent(string(content))
+}
 
-	scanner := bufio.NewScanner(f)
+func parseRegistryContent(content string) *Registry {
+	r := &Registry{pools: make(map[common.Address]int)}
+	scanner := bufio.NewScanner(strings.NewReader(content))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") {

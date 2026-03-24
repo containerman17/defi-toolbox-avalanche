@@ -100,6 +100,18 @@
 - Applied same single-overlay fix to IPC eth_call_batch path
 - IPC speed: 0.399 → 0.355 ms/pool (before adding more formulas)
 
+### Per-type speed analysis (current state)
+- pharaoh_v3: 565ms (44% of total) — 131 formula at 3024µs/pool, 16 EVM
+- lfj_v1: 171ms — 1432 formula, 90 EVM (FoT)
+- lfj_v2: 170ms — 112 formula, 88 EVM (mismatches)
+- uniswap_v3: 101ms — 222 formula at 366µs/pool, 6 EVM
+- pangolin_v2: 65ms — 428 formula, 34 EVM (FoT)
+- pharaoh_v1: 50ms — 251 formula, 32 EVM (FoT)
+- arena_v2: 44ms — 501 formula, 0 EVM
+- Remaining (dodo, balancer, etc.): ~30ms total — not worth adding formulas
+
+Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3 (standard layout) despite using the same tick-walking algorithm. ERC-7201 slot computation overhead.
+
 ### Open questions
 - Go benchmark EVM is 4.5x slower than IPC EVM — investigating
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides

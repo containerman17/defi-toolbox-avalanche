@@ -61,6 +61,7 @@ export async function run(count?: number): Promise<Record<string, number>> {
 
     const quoter = await createQuoter("native", {
         stateServerUrl: STATE_SERVER_URL,
+        formulas: true,
     });
 
     const ratesBySize: Record<SizeKey, number[]> = {

@@ -11,7 +11,7 @@
 //      - Any time we reach tokenOut, record as terminal candidate.
 //      - Return the best terminal.
 
-import { type StoredPool } from "../pool-collector/index.ts";
+import { type StoredPool } from "../pool-collector/types.ts";
 import { decodeSwapResult, type RouteStep } from "../router/encode.ts";
 
 export type { RouteStep };

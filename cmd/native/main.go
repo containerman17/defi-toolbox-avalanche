@@ -13,8 +13,9 @@ import (
 
 	"encoding/json"
 
-	"defi-toolbox/statedb"
 	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/gorilla/websocket"
@@ -635,6 +636,82 @@ func main() {
 			resp.Result = map[string]interface{}{
 				"results":     results,
 				"cacheMisses": missesAfter - missesBefore,
+			}
+
+		case "find_route":
+			var params struct {
+				TokenIn      string                       `json:"tokenIn"`
+				TokenOut     string                       `json:"tokenOut"`
+				AmountIn     string                       `json:"amountIn"`
+				Pools        string                       `json:"pools"`        // pools.txt content
+				MaxHops      int                          `json:"maxHops"`
+				PoolLimit    int                          `json:"poolLimit"`
+				StateOverrides map[string]stateOverrideEntry `json:"stateOverrides,omitempty"`
+			}
+			if err := json.Unmarshal(req.Params, &params); err != nil {
+				resp.Error = fmt.Sprintf("invalid params: %v", err)
+				break
+			}
+
+			tokenIn := common.HexToAddress(params.TokenIn)
+			tokenOut := common.HexToAddress(params.TokenOut)
+			amtBig, ok := new(big.Int).SetString(strings.TrimPrefix(params.AmountIn, "0x"), 16)
+			if !ok {
+				resp.Error = "invalid amountIn"
+				break
+			}
+			amountIn, _ := uint256.FromBig(amtBig)
+
+			limit := params.PoolLimit
+			if limit <= 0 {
+				limit = 1000
+			}
+			pools := pf.ParsePools(params.Pools, limit)
+			graph := pf.BuildGraph(pools)
+
+			// Parse overrides
+			var overrides []pf.ParsedOverride
+			for addrHex, entry := range params.StateOverrides {
+				po := pf.ParsedOverride{Addr: common.HexToAddress(addrHex)}
+				if entry.Code != "" && entry.Code != "0x" {
+					po.Code, _ = hex.DecodeString(strings.TrimPrefix(entry.Code, "0x"))
+					po.Balance = uint256.NewInt(0)
+					if entry.Balance != "" {
+						if bi, bOk := new(big.Int).SetString(strings.TrimPrefix(entry.Balance, "0x"), 16); bOk {
+							po.Balance, _ = uint256.FromBig(bi)
+						}
+					}
+					if entry.Nonce != nil {
+						po.Nonce = *entry.Nonce
+					}
+				}
+				for slotHex, valueHex := range entry.StateDiff {
+					po.Slots = append(po.Slots, struct {
+						Slot  common.Hash
+						Value common.Hash
+					}{common.HexToHash(slotHex), common.HexToHash(valueHex)})
+				}
+				overrides = append(overrides, po)
+			}
+
+			cfg := statedb.EVMConfig{
+				BlockNumber: currentBlock,
+				Timestamp:   currentTimestamp,
+				ChainID:     43114,
+				BaseFee:     currentBaseFee,
+				GasLimit:    currentGasLimit,
+			}
+
+			maxHops := params.MaxHops
+			if maxHops <= 0 {
+				maxHops = 4
+			}
+
+			route := pf.FindBestRoute(state, cfg, registry, overrides, graph, tokenIn, tokenOut, amountIn, maxHops)
+			if route == nil {
+				resp.Result = map[string]interface{}{"route": nil}
+			} else {
+				resp.Result = route
 			}
 
 		default:

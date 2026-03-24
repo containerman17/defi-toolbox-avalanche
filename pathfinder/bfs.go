@@ -1,0 +1,248 @@
+package pathfinder
+
+import (
+	"encoding/hex"
+	"fmt"
+
+	"defi-toolbox/formulas"
+	"defi-toolbox/statedb"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+// RouteStep represents one hop in a route.
+type RouteStep struct {
+	Pool     common.Address `json:"pool"`
+	PoolType int            `json:"poolType"`
+	TokenIn  common.Address `json:"tokenIn"`
+	TokenOut common.Address `json:"tokenOut"`
+}
+
+// Route is the result of a pathfinding search.
+type Route struct {
+	Steps     []RouteStep `json:"steps"`
+	AmountOut *uint256.Int `json:"amountOut"`
+	Stats     RouteStats  `json:"stats"`
+}
+
+// RouteStats tracks quoting statistics.
+type RouteStats struct {
+	FormulaQuotes int `json:"formulaQuotes"`
+	EVMQuotes     int `json:"evmQuotes"`
+	TotalQuotes   int `json:"totalQuotes"`
+}
+
+// layerNode is a surviving candidate at an intermediate token.
+type layerNode struct {
+	steps   []RouteStep
+	token   common.Address
+	amount  *uint256.Int
+	visited map[common.Address]bool
+}
+
+// hopQuote is a pending quote in the BFS.
+type hopQuote struct {
+	nodeIdx    int
+	step       RouteStep
+	targetPool *Pool
+	amountIn   *uint256.Int
+}
+
+// ROUTER is the synthetic router address used for quoting.
+var ROUTER = common.HexToAddress("0x000000000000000000000000cafebabe00facade")
+
+// DUMMY_SENDER is the from address for EVM calls.
+var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+
+// FindBestRoute finds the best swap route using BFS with layer-by-layer quoting.
+// Quotes are computed in-process: formula first, EVM fallback.
+func FindBestRoute(
+	state *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	registry *formulas.Registry,
+	overrides []ParsedOverride,
+	graph *Graph,
+	tokenIn, tokenOut common.Address,
+	amountIn *uint256.Int,
+	maxHops int,
+) *Route {
+	if tokenIn == tokenOut {
+		return nil
+	}
+	if maxHops <= 0 {
+		maxHops = 4
+	}
+
+	var stats RouteStats
+
+	nodes := []layerNode{{
+		steps:   nil,
+		token:   tokenIn,
+		amount:  amountIn,
+		visited: map[common.Address]bool{tokenIn: true},
+	}}
+
+	var bestRoute []RouteStep
+	var bestAmountOut *uint256.Int
+
+	for layer := 0; layer < maxHops; layer++ {
+		var hops []hopQuote
+
+		for ni := range nodes {
+			node := &nodes[ni]
+			edges := graph.Edges[node.token]
+
+			seen := make(map[[24]byte]bool) // pool:tokenOut dedup
+			for _, edge := range edges {
+				if node.visited[edge.TokenOut] && edge.TokenOut != tokenOut {
+					continue
+				}
+				var key [24]byte
+				copy(key[:20], edge.Pool.Address[:])
+				copy(key[20:], edge.TokenOut[:4])
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+
+				hops = append(hops, hopQuote{
+					nodeIdx: ni,
+					step: RouteStep{
+						Pool:     edge.Pool.Address,
+						PoolType: edge.Pool.PoolType,
+						TokenIn:  node.token,
+						TokenOut: edge.TokenOut,
+					},
+					targetPool: edge.Pool,
+					amountIn:   node.amount,
+				})
+			}
+		}
+
+		if len(hops) == 0 {
+			break
+		}
+
+		// Quote all hops: formula first, EVM fallback
+		bestPerToken := make(map[common.Address]*layerNode)
+
+		for i := range hops {
+			hop := &hops[i]
+			stats.TotalQuotes++
+
+			var amountOut *uint256.Int
+
+			// Try formula
+			reader := func(addr common.Address, key common.Hash) common.Hash {
+				return state.GetState(addr, key)
+			}
+			calldata := EncodeSwapSingle(hop.step.Pool, hop.step.PoolType, hop.step.TokenIn, hop.step.TokenOut, hop.amountIn)
+			if ret, ok := registry.TryQuote(reader, calldata); ok {
+				stats.FormulaQuotes++
+				var out uint256.Int
+				out.SetBytes(ret)
+				if !out.IsZero() {
+					amountOut = &out
+				}
+			}
+
+			// EVM fallback
+			if amountOut == nil {
+				stats.EVMQuotes++
+				execState := ApplyOverrides(state, overrides)
+				ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
+				if evmErr == nil && len(ret) >= 32 {
+					var out uint256.Int
+					out.SetBytes(ret[:32])
+					if !out.IsZero() {
+						amountOut = &out
+					}
+				}
+			}
+
+			if amountOut == nil {
+				continue
+			}
+
+			parentNode := &nodes[hop.nodeIdx]
+			fullRoute := make([]RouteStep, len(parentNode.steps)+1)
+			copy(fullRoute, parentNode.steps)
+			fullRoute[len(parentNode.steps)] = hop.step
+
+			if hop.step.TokenOut == tokenOut {
+				if bestAmountOut == nil || amountOut.Gt(bestAmountOut) {
+					bestRoute = fullRoute
+					bestAmountOut = new(uint256.Int).Set(amountOut)
+				}
+				continue
+			}
+
+			existing, ok := bestPerToken[hop.step.TokenOut]
+			if !ok || amountOut.Gt(existing.amount) {
+				newVisited := make(map[common.Address]bool, len(parentNode.visited)+1)
+				for k, v := range parentNode.visited {
+					newVisited[k] = v
+				}
+				newVisited[hop.step.TokenOut] = true
+				bestPerToken[hop.step.TokenOut] = &layerNode{
+					steps:   fullRoute,
+					token:   hop.step.TokenOut,
+					amount:  new(uint256.Int).Set(amountOut),
+					visited: newVisited,
+				}
+			}
+		}
+
+		nodes = nodes[:0]
+		for _, n := range bestPerToken {
+			nodes = append(nodes, *n)
+		}
+		if len(nodes) == 0 {
+			break
+		}
+	}
+
+	if bestAmountOut == nil {
+		return nil
+	}
+
+	return &Route{
+		Steps:     bestRoute,
+		AmountOut: bestAmountOut,
+		Stats:     stats,
+	}
+}
+
+// ParsedOverride holds pre-parsed override data.
+type ParsedOverride struct {
+	Addr    common.Address
+	Balance *uint256.Int
+	Nonce   uint64
+	Code    []byte
+	Slots   []struct {
+		Slot  common.Hash
+		Value common.Hash
+	}
+}
+
+// ApplyOverrides creates a fresh overlay with overrides applied.
+func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.StateDB {
+	if len(overrides) == 0 {
+		return base
+	}
+	overlay := base.NewOverlay()
+	for _, po := range overrides {
+		if po.Code != nil {
+			overlay.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
+		}
+		for _, s := range po.Slots {
+			overlay.SetStorageSlot(po.Addr, s.Slot, s.Value)
+		}
+	}
+	return overlay
+}
+
+// helper for debug
+var _ = fmt.Sprintf
+var _ = hex.EncodeToString

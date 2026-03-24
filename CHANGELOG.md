@@ -112,8 +112,22 @@
 
 Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3 (standard layout) despite using the same tick-walking algorithm. ERC-7201 slot computation overhead.
 
+### DODO PMM formula
+- 14 pools validated, 4 invalid
+- Speed: 0.321 → 0.307 ms/pool
+- Total: 0.911 → 0.307 ms/pool (2.97x faster from baseline)
+- Formula coverage: 4736 validated, 606 invalid
+
+### Current state summary
+| Metric | Baseline | Current | Change |
+|--------|----------|---------|--------|
+| IPC batch speed | 0.911 ms/pool | 0.307 ms/pool | **2.97x faster** |
+| find_route (500 pools) | ~4500ms (JS BFS) | ~756ms (Go BFS) | **5.9x faster** |
+| Formula coverage | 0 pools | 4736 pools | — |
+| Correctness | 100% | 100% | unchanged |
+
 ### Open questions
-- Go benchmark EVM is 4.5x slower than IPC EVM — investigating
+- Go benchmark EVM is 4.5x slower than IPC EVM — investigated, due to overlay allocation
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides
 - Pathfinder needs beam width / pruning for wider search
 - LFJ V2 formula not implemented yet (335 pools, 441ms — next formula target)

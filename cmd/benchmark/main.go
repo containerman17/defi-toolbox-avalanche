@@ -248,12 +248,35 @@ func main() {
 	fmt.Fprintf(os.Stderr, "[benchmark] warm pass...\n")
 	quoteAll(baseWithOverrides, cfg, registry, pools)
 
+	// Per-type stats
+	type typeStats struct {
+		FormulaCount int     `json:"formulaCount"`
+		EVMCount     int     `json:"evmCount"`
+		OkCount      int     `json:"okCount"`
+		FailCount    int     `json:"failCount"`
+		FormulaMs    float64 `json:"formulaMs"`
+		EVMMs        float64 `json:"evmMs"`
+	}
+	byType := make(map[int]*typeStats)
+	getStats := func(poolType int) *typeStats {
+		if s, ok := byType[poolType]; ok {
+			return s
+		}
+		s := &typeStats{}
+		byType[poolType] = s
+		return s
+	}
+
+	// Pool type names for display
+	typeNames := map[int]string{
+		0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
+		4: "dodo", 5: "woofi", 6: "balancer_v3", 7: "pharaoh_v1",
+		8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
+	}
+
 	// Hot pass with timing
 	fmt.Fprintf(os.Stderr, "[benchmark] hot pass...\n")
 	t0 := time.Now()
-
-	var formulaMs, evmMs float64
-	var formulaCount, evmCount, okCount, failCount int
 
 	for i := range pools {
 		pool := &pools[i]
@@ -263,7 +286,8 @@ func main() {
 			}
 			tokenIn := pool.Tokens[tokenIdx[0]]
 			tokenOut := pool.Tokens[tokenIdx[1]]
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000) // 1e18
+			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+			ts := getStats(pool.PoolType)
 
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
@@ -274,14 +298,15 @@ func main() {
 				}
 				ft0 := time.Now()
 				if ret, ok := registry.TryQuote(reader, calldata); ok {
-					formulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
-					formulaCount++
+					elapsed := float64(time.Since(ft0).Microseconds()) / 1000.0
+					ts.FormulaCount++
+					ts.FormulaMs += elapsed
 					var out uint256.Int
 					out.SetBytes(ret)
 					if !out.IsZero() {
-						okCount++
+						ts.OkCount++
 					} else {
-						failCount++
+						ts.FailCount++
 					}
 					continue
 				}
@@ -291,35 +316,82 @@ func main() {
 			et0 := time.Now()
 			execState := baseWithOverrides.NewOverlay()
 			ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
-			evmMs += float64(time.Since(et0).Microseconds()) / 1000.0
-			evmCount++
+			elapsed := float64(time.Since(et0).Microseconds()) / 1000.0
+			ts.EVMCount++
+			ts.EVMMs += elapsed
 			if evmErr == nil && len(ret) >= 32 {
 				var out uint256.Int
 				out.SetBytes(ret[:32])
 				if !out.IsZero() {
-					okCount++
+					ts.OkCount++
 				} else {
-					failCount++
+					ts.FailCount++
 				}
 			} else {
-				failCount++
+				ts.FailCount++
 			}
 		}
 	}
 
 	totalMs := float64(time.Since(t0).Milliseconds())
-	totalQuotes := formulaCount + evmCount
 
+	// Print per-type breakdown
+	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %8s %6s %8s %8s\n", "TYPE", "POOLS", "FORMULA", "F_MS", "EVM", "E_MS", "TOTAL_MS")
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 70))
+
+	var totalFormula, totalEVM, totalOk, totalFail int
+	var totalFormulaMs, totalEVMMs float64
+
+	// Sort by total time descending
+	type sortEntry struct {
+		poolType int
+		totalMs  float64
+	}
+	var sorted []sortEntry
+	for pt, s := range byType {
+		sorted = append(sorted, sortEntry{pt, s.FormulaMs + s.EVMMs})
+	}
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].totalMs > sorted[i].totalMs {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	for _, e := range sorted {
+		s := byType[e.poolType]
+		name := typeNames[e.poolType]
+		if name == "" {
+			name = fmt.Sprintf("type_%d", e.poolType)
+		}
+		poolCount := (s.FormulaCount + s.EVMCount) / 2 // each pool quoted in both directions
+		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %8.1f %6d %8.1f %8.1f\n",
+			name, poolCount, s.FormulaCount, s.FormulaMs, s.EVMCount, s.EVMMs, s.FormulaMs+s.EVMMs)
+		totalFormula += s.FormulaCount
+		totalEVM += s.EVMCount
+		totalFormulaMs += s.FormulaMs
+		totalEVMMs += s.EVMMs
+		totalOk += s.OkCount
+		totalFail += s.FailCount
+	}
+
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 70))
+	totalQuotes := totalFormula + totalEVM
+	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %8.1f %6d %8.1f %8.1f\n",
+		"TOTAL", len(pools), totalFormula, totalFormulaMs, totalEVM, totalEVMMs, totalMs)
+
+	// JSON output
 	result := map[string]interface{}{
 		"pools":        len(pools),
 		"totalQuotes":  totalQuotes,
-		"okCount":      okCount,
-		"failCount":    failCount,
+		"okCount":      totalOk,
+		"failCount":    totalFail,
 		"totalMs":      totalMs,
-		"formulaCount": formulaCount,
-		"evmCount":     evmCount,
-		"formulaMs":    fmt.Sprintf("%.1f", formulaMs),
-		"evmMs":        fmt.Sprintf("%.1f", evmMs),
+		"formulaCount": totalFormula,
+		"evmCount":     totalEVM,
+		"formulaMs":    fmt.Sprintf("%.1f", totalFormulaMs),
+		"evmMs":        fmt.Sprintf("%.1f", totalEVMMs),
 		"msPerQuote":   fmt.Sprintf("%.3f", totalMs/float64(totalQuotes)),
 	}
 

@@ -82,6 +82,8 @@ func FindBestRoute(
 
 	// Create the overridden state once — all EVM calls read through this.
 	baseWithOverrides := ApplyOverrides(state, overrides)
+	// Reusable scratch overlay — Reset() between calls instead of NewOverlay()
+	scratch := baseWithOverrides.NewReusableOverlay()
 
 	nodes := []layerNode{{
 		steps:   nil,
@@ -160,7 +162,8 @@ func FindBestRoute(
 			if amountOut == nil {
 				et0 := time.Now()
 				stats.EVMQuotes++
-				execState := baseWithOverrides.NewOverlay()
+				scratch.Reset()
+				execState := scratch
 				ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
 				stats.EVMMs += float64(time.Since(et0).Microseconds()) / 1000.0
 				if evmErr == nil && len(ret) >= 32 {

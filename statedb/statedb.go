@@ -391,6 +391,35 @@ func (s *StateDB) NewOverlay() *StateDB {
 	return NewStateDB(s)
 }
 
+// NewReusableOverlay creates an overlay that can be Reset() between calls.
+// Pre-allocates maps to avoid per-call allocation.
+func (s *StateDB) NewReusableOverlay() *StateDB {
+	return &StateDB{
+		accounts:         make(map[common.Address]*account, 32),
+		accessList:       make(map[common.Address]map[common.Hash]bool, 16),
+		fetcher:          s,
+		transientStorage: make(map[common.Address]map[common.Hash]common.Hash),
+	}
+}
+
+// Reset clears all state in this overlay without allocating new maps.
+// The fetcher (base) is preserved. Use between EVM calls to reuse the overlay.
+func (s *StateDB) Reset() {
+	for k := range s.accounts {
+		delete(s.accounts, k)
+	}
+	for k := range s.accessList {
+		delete(s.accessList, k)
+	}
+	for k := range s.transientStorage {
+		delete(s.transientStorage, k)
+	}
+	s.refund = 0
+	s.logs = s.logs[:0]
+	s.snapshots = s.snapshots[:0]
+	s.snapID = 0
+}
+
 // ─── EVM execution ─────────────────────────────────────────────────
 
 // EVMConfig holds configuration for EVM execution.

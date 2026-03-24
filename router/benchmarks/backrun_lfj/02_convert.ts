@@ -770,6 +770,7 @@ function extractSplitSteps(
   v4PoolIdMap: Map<string, StoredPool>,
 ): TraceStep[] {
   const steps: TraceStep[] = [];
+  const MULTI_SWAP_POOLS = new Set([WOOPP_ADDRESS, WOOPP_V2_ADDRESS, BALANCER_V2_VAULT, CAVALRE_POOL]);
 
   const addrs = new Set<string>();
   for (const t of transfers) { addrs.add(t.from); addrs.add(t.to); }
@@ -804,10 +805,31 @@ function extractSplitSteps(
       outCountByToken.set(t.token, (outCountByToken.get(t.token) ?? 0) + 1);
     }
 
+    // For multi-swap pools (WooPP, etc.), when one input token produces multiple
+    // distinct output tokens, pair input/output transfers by log-index order to
+    // recover the per-swap amounts. Example: WooPP receives 186 WAVAX then 1.88
+    // WAVAX, sends 1741M USDC then 17.6M USDt — pair as 186→USDC, 1.88→USDt.
+    if (MULTI_SWAP_POOLS.has(addr)) {
+      const allIn = incoming.sort((a, b) => a.logIndex - b.logIndex);
+      const allOut = outgoing.sort((a, b) => a.logIndex - b.logIndex);
+      // Check if we can pair by log-index order (each in has a corresponding out)
+      const distinctOutTokens = new Set(allOut.map(t => t.token));
+      const distinctInTokens = new Set(allIn.map(t => t.token));
+      if (allIn.length === allOut.length && allIn.length > 1 &&
+          (distinctOutTokens.size > 1 || distinctInTokens.size > 1)) {
+        // Pair by log-index: each input transfer maps to the next output transfer
+        for (let i = 0; i < allIn.length; i++) {
+          const tokenIn = allIn[i].token;
+          const tokenOut = allOut[i].token;
+          if (tokenIn === tokenOut) continue;
+          steps.push({ pool: addr, tokenIn, tokenOut, amountIn: allIn[i].amount, logIndex: allIn[i].logIndex, perTransferSplit: true });
+        }
+        continue;
+      }
+    }
+
     for (const [tokenIn, inTransfers] of inByToken) {
       // Count how many distinct output tokens this input produces (excluding self-token).
-      // Virtual pools (WooPP) can route one input to multiple outputs; in that case
-      // divide the input proportionally based on output amounts.
       const outputTokensForInput = [...outByToken.keys()].filter(t => t !== tokenIn);
 
       for (const tokenOut of outputTokensForInput) {
@@ -831,9 +853,6 @@ function extractSplitSteps(
         } else {
           let total = inTransfers.reduce((s, t) => s + t.amount, 0n);
           const minIdx = Math.min(...inTransfers.map(t => t.logIndex));
-          // Note: when a virtual pool (e.g. WooPP) routes one input to multiple outputs,
-          // each step gets the full input amount. The test harness handles this via
-          // dependency-aware flat ordering and tolerances.
           steps.push({ pool: addr, tokenIn, tokenOut, amountIn: total, logIndex: minIdx });
         }
       }
@@ -1288,7 +1307,7 @@ function buildPayload(
       const s = splitSteps[si];
       for (const [upIdx] of chainMap) {
         const up = splitSteps[upIdx];
-        if (up.pool === s.pool && up.amountIn === s.amountIn && up.tokenIn === s.tokenIn) {
+        if (up.pool === s.pool && up.amountIn === s.amountIn && up.tokenIn === s.tokenIn && up.tokenOut === s.tokenOut) {
           chainedDownstream.add(si);
           break;
         }

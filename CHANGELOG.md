@@ -126,8 +126,16 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 | Formula coverage | 0 pools | 4736 pools | — |
 | Correctness | 100% | 100% | unchanged |
 
+### Pharaoh V3 deep dive
+- 3024µs/pool — 8.3x slower than uniswap_v3 (366µs/pool)
+- Hot path uses BytesStateReader (no string conversions) — verified
+- The slowness is genuine tick-walking: pharaoh_v3 pools have wider tick ranges
+- ERC-7201 slot computation causes more keccak cache misses per read
+- This is the natural floor for V3 formula performance
+- Potential optimization: BFS pruning to avoid exploring pharaoh_v3 when better routes exist
+
 ### Open questions
-- Go benchmark EVM is 4.5x slower than IPC EVM — investigated, due to overlay allocation
+- BFS pruning: can we skip slow pool types when faster alternatives exist?
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides
 - Pathfinder needs beam width / pruning for wider search
 - LFJ V2 formula not implemented yet (335 pools, 441ms — next formula target)

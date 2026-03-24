@@ -1,4 +1,4 @@
-// 01_correctness.mjs — Verify Native and WASM produce identical results to direct RPC
+// 01_correctness.ts — Verify Native and WASM produce identical results to direct RPC
 //
 // Returns: number of mismatches (0 = all pass)
 
@@ -6,7 +6,7 @@ import pLimit from "p-limit";
 import {
   createQuoter, loadPools, buildStateOverrides, encodeSwapSingle,
   ROUTER, DUMMY_SENDER,
-} from "../sdk.mjs";
+} from "../sdk.ts";
 
 const STATE_SERVER = "ws://127.0.0.1:7449";
 const RPC_URL = "http://127.0.0.1:9650/ext/bc/C/rpc";

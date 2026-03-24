@@ -18,9 +18,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RESULTS_DIR = join(__dirname, "benchmark_results");
 
 const benchmarks = {
-  "evm/correctness":    { module: "./evm-quoter/benchmarks/01_correctness.mjs", defaultCount: 4000 },
-  "evm/speed":          { module: "./evm-quoter/benchmarks/02_speed.mjs",       defaultCount: 4000 },
-  "evm/coverage":       { module: "./evm-quoter/benchmarks/03_coverage.mjs",     defaultCount: 5000 },
+  "evm/correctness":    { module: "./evm-quoter/benchmarks/01_correctness.ts", defaultCount: 4000 },
+  "evm/speed":          { module: "./evm-quoter/benchmarks/02_speed.ts",       defaultCount: 4000 },
+  "evm/coverage":       { module: "./evm-quoter/benchmarks/03_coverage.ts",     defaultCount: 5000 },
   "router/backrun_lfj": { module: "./router/benchmarks/backrun_lfj/03_test.ts",  defaultCount: 2000 },
   "pathfinder/roundtrip": { module: "./pathfinder/benchmarks/bench.ts",           defaultCount: 3 },
 };

@@ -15,7 +15,7 @@
 
 import { loadPools } from "../../pool-collector/pools.ts";
 import { buildGraph, findBestRoute } from "../index.ts";
-import { createQuoter, buildStateOverrides } from "../../evm-quoter/sdk.mjs";
+import { createQuoter, buildStateOverrides } from "../../evm-quoter/sdk.ts";
 
 const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449";
 const POOLS_PATH = process.env.POOLS_PATH || "pool-collector/data/pools.txt";

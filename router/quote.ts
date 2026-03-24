@@ -1,22 +1,10 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { type PublicClient, type Hex, type Transport, type Chain, decodeAbiParameters } from "viem";
+import { type PublicClient, type Hex, decodeAbiParameters } from "viem";
 import { encodeSwap, encodeSwapFlat, type RouteStep, type FlatStep } from "./encode.ts";
-import { getBalanceOverride, getAllowanceOverride, getBalanceOverrideAsync, getHookOverrides, isReflectionToken } from "./overrides.ts";
+import { buildStateOverrides, getBalanceOverrideAsync, getHookOverrides, isReflectionToken } from "./overrides.ts";
 export const ROUTER_ADDRESS = "0x2bef1becdafcfe8990a233d03a98bbb39021c96e" as const;
 
 const DUMMY_SENDER = "0x000000000000000000000000000000000000dEaD";
 const NATIVE_TOKEN = "0x0000000000000000000000000000000000000000";
-
-// Load compiled bytecode (includes V4 support not yet deployed on-chain)
-let routerCodeCache: Hex | undefined;
-function getRouterBytecode(): Hex {
-  if (!routerCodeCache) {
-    const hex = readFileSync(join(import.meta.dirname!, "contracts", "bytecode.hex"), "utf-8").trim();
-    routerCodeCache = `0x${hex}` as Hex;
-  }
-  return routerCodeCache;
-}
 
 export async function quoteRoute(
   client: PublicClient,
@@ -41,7 +29,7 @@ export async function quoteRoute(
   // Build extra overrides for reflection tokens and hook contracts
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
   if (inputToken !== NATIVE_TOKEN && isReflectionToken(inputToken)) {
-    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, DUMMY_SENDER, blockNumber);
+    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, ROUTER_ADDRESS, blockNumber);
     for (const [addr, val] of Object.entries(reflOvr)) {
       if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
       if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -56,7 +44,12 @@ export async function quoteRoute(
   }
 
   const hasExtra = Object.keys(mergedExtra).length > 0;
-  const stateOverride = buildStateOverrides(inputToken, amountIn, hasExtra ? mergedExtra : undefined);
+  const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
+  const stateOverride = buildStateOverrides({
+    routerAddress: ROUTER_ADDRESS,
+    tokenAmounts,
+    extraStateOverrides: hasExtra ? mergedExtra : undefined,
+  });
 
   const result = await client.request({
     method: "eth_call" as any,
@@ -94,17 +87,17 @@ export async function quoteFlat(
   const blockHex = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
 
   // Aggregate required balances per input token from all steps with explicit amountIn > 0
-  const tokenBalances = new Map<string, bigint>();
+  const tokenAmounts = new Map<string, bigint>();
   for (const step of steps) {
     if (step.amountIn > 0n) {
       const token = step.tokenIn.toLowerCase();
-      tokenBalances.set(token, (tokenBalances.get(token) ?? 0n) + step.amountIn);
+      tokenAmounts.set(token, (tokenAmounts.get(token) ?? 0n) + step.amountIn);
     }
   }
   // Ensure the primary input token is included
   const normalizedInput = inputToken.toLowerCase();
-  if (!tokenBalances.has(normalizedInput) && totalAmountIn > 0n) {
-    tokenBalances.set(normalizedInput, totalAmountIn);
+  if (!tokenAmounts.has(normalizedInput) && totalAmountIn > 0n) {
+    tokenAmounts.set(normalizedInput, totalAmountIn);
   }
 
   // Collect all tokens for hook overrides
@@ -116,9 +109,9 @@ export async function quoteFlat(
 
   // Build extra overrides for reflection tokens and hook contracts
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
-  for (const [token, amount] of tokenBalances) {
+  for (const [token, amount] of tokenAmounts) {
     if (token !== NATIVE_TOKEN && isReflectionToken(token)) {
-      const reflOvr = await getBalanceOverrideAsync(client, token, amount, DUMMY_SENDER, blockNumber);
+      const reflOvr = await getBalanceOverrideAsync(client, token, amount, ROUTER_ADDRESS, blockNumber);
       for (const [addr, val] of Object.entries(reflOvr)) {
         if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
         if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -134,8 +127,11 @@ export async function quoteFlat(
   }
 
   const hasExtra = Object.keys(mergedExtra).length > 0;
-  // Build state overrides for all input tokens
-  const stateOverride = buildFlatStateOverrides(tokenBalances, hasExtra ? mergedExtra : undefined);
+  const stateOverride = buildStateOverrides({
+    routerAddress: ROUTER_ADDRESS,
+    tokenAmounts,
+    extraStateOverrides: hasExtra ? mergedExtra : undefined,
+  });
 
   const result = await client.request({
     method: "eth_call" as any,
@@ -160,117 +156,7 @@ export async function quoteFlat(
 }
 
 /**
- * Build state overrides for flat quoting with multiple input tokens.
- */
-function buildFlatStateOverrides(tokenBalances: Map<string, bigint>, extraStateOverrides?: Record<string, any>) {
-  const merged: Record<string, Record<string, Hex>> = {};
-
-  for (const [token, amount] of tokenBalances) {
-    if (token === NATIVE_TOKEN) continue;
-    const balOvr = getBalanceOverride(token, amount, DUMMY_SENDER);
-    const allowOvr = getAllowanceOverride(token, DUMMY_SENDER, ROUTER_ADDRESS);
-    for (const ovr of [balOvr, allowOvr]) {
-      for (const [addr, val] of Object.entries(ovr)) {
-        if (!merged[addr]) merged[addr] = {};
-        Object.assign(merged[addr], val.stateDiff);
-      }
-    }
-  }
-
-  const stateOverride: Record<string, any> = {};
-  for (const [address, slots] of Object.entries(merged)) {
-    stateOverride[address] = { stateDiff: slots };
-  }
-
-  if (tokenBalances.has(NATIVE_TOKEN)) {
-    const nativeAmount = tokenBalances.get(NATIVE_TOKEN)!;
-    stateOverride[DUMMY_SENDER] = {
-      ...(stateOverride[DUMMY_SENDER] ?? {}),
-      balance: `0x${nativeAmount.toString(16)}`,
-    };
-  }
-
-  stateOverride[ROUTER_ADDRESS] = {
-    ...(stateOverride[ROUTER_ADDRESS] ?? {}),
-    code: getRouterBytecode(),
-  };
-
-  // Merge extra state overrides (e.g. for TRANSFER_FROM RFQ vaults)
-  if (extraStateOverrides) {
-    for (const [addr, ovr] of Object.entries(extraStateOverrides)) {
-      if (stateOverride[addr]) {
-        if (ovr.stateDiff && stateOverride[addr].stateDiff) {
-          Object.assign(stateOverride[addr].stateDiff, ovr.stateDiff);
-        } else if (ovr.stateDiff) {
-          stateOverride[addr].stateDiff = ovr.stateDiff;
-        }
-      } else {
-        stateOverride[addr] = ovr;
-      }
-    }
-  }
-
-  return stateOverride;
-}
-
-/**
- * Build geth-style state overrides for raw JSON-RPC calls.
- */
-function buildStateOverrides(inputToken: string, amountIn: bigint, extraStateOverrides?: Record<string, any>) {
-  // Set balance on the SENDER and approve the ROUTER — swap() does transferFrom.
-  const balanceOverride = inputToken === NATIVE_TOKEN
-    ? {}
-    : getBalanceOverride(inputToken, amountIn, DUMMY_SENDER);
-  const allowanceOverride = inputToken === NATIVE_TOKEN
-    ? {}
-    : getAllowanceOverride(inputToken, DUMMY_SENDER, ROUTER_ADDRESS);
-
-  const merged: Record<string, Record<string, Hex>> = {};
-  for (const ovr of [balanceOverride, allowanceOverride]) {
-    for (const [addr, val] of Object.entries(ovr)) {
-      if (!merged[addr]) merged[addr] = {};
-      Object.assign(merged[addr], val.stateDiff);
-    }
-  }
-
-  const stateOverride: Record<string, any> = {};
-  for (const [address, slots] of Object.entries(merged)) {
-    stateOverride[address] = { stateDiff: slots };
-  }
-
-  if (inputToken === NATIVE_TOKEN) {
-    stateOverride[DUMMY_SENDER] = {
-      ...(stateOverride[DUMMY_SENDER] ?? {}),
-      balance: `0x${amountIn.toString(16)}`,
-    };
-  }
-
-  stateOverride[ROUTER_ADDRESS] = {
-    ...(stateOverride[ROUTER_ADDRESS] ?? {}),
-    code: getRouterBytecode(),
-  };
-
-  // Merge extra state overrides (e.g. for TRANSFER_FROM RFQ vaults)
-  if (extraStateOverrides) {
-    for (const [addr, ovr] of Object.entries(extraStateOverrides)) {
-      if (stateOverride[addr]) {
-        if (ovr.stateDiff && stateOverride[addr].stateDiff) {
-          Object.assign(stateOverride[addr].stateDiff, ovr.stateDiff);
-        } else if (ovr.stateDiff) {
-          stateOverride[addr].stateDiff = ovr.stateDiff;
-        }
-      } else {
-        stateOverride[addr] = ovr;
-      }
-    }
-  }
-
-  return stateOverride;
-}
-
-/**
  * Estimate gas for a swap via eth_estimateGas with state overrides.
- * Uses raw JSON-RPC since viem's estimateGas may not pass stateOverride on all versions.
  */
 export async function estimateRouteGas(
   client: PublicClient,
@@ -282,7 +168,8 @@ export async function estimateRouteGas(
 
   const calldata = encodeSwap(route, amountIn);
   const inputToken = route[0].tokenIn.toLowerCase();
-  const stateOverride = buildStateOverrides(inputToken, amountIn);
+  const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
+  const stateOverride = buildStateOverrides({ routerAddress: ROUTER_ADDRESS, tokenAmounts });
   const blockHex = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
 
   const resp = await client.request({
@@ -304,9 +191,6 @@ export async function estimateRouteGas(
 
 /**
  * Get exact gas used for a swap via debug_traceCall with state overrides.
- * Unlike eth_estimateGas (which pads for 63/64 rule), debug_traceCall returns
- * the real gas consumed — matching revm's gas_used exactly.
- * Requires a node that supports debug_traceCall (e.g. local avalanchego).
  */
 export async function traceRouteGas(
   client: PublicClient,
@@ -318,7 +202,8 @@ export async function traceRouteGas(
 
   const calldata = encodeSwap(route, amountIn);
   const inputToken = route[0].tokenIn.toLowerCase();
-  const stateOverrides = buildStateOverrides(inputToken, amountIn);
+  const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
+  const stateOverrides = buildStateOverrides({ routerAddress: ROUTER_ADDRESS, tokenAmounts });
   const blockHex = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
 
   const resp = await client.request({

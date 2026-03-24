@@ -1,8 +1,8 @@
-// 02_speed.mjs — Benchmark quoting speed
+// 02_speed.ts — Benchmark quoting speed
 //
 // Returns: ms/pool for native backend
 
-import { createQuoter, loadPools, buildStateOverrides } from "../sdk.mjs";
+import { createQuoter, loadPools, buildStateOverrides } from "../sdk.ts";
 
 const STATE_SERVER = "ws://127.0.0.1:7449";
 

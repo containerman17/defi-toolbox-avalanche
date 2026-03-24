@@ -1,4 +1,4 @@
-import { encodeFunctionData, encodeAbiParameters, type Hex } from "viem";
+import { encodeFunctionData, encodeAbiParameters, decodeAbiParameters, type Hex } from "viem";
 import { type StoredPool, POOL_TYPE_UNIV4, POOL_TYPE_BALANCER_V3_BUFFERED, POOL_TYPE_TRANSFER_FROM, POOL_TYPE_V2, POOL_TYPE_BALANCER_V2, POOL_TYPE_CAVALRE, POOL_TYPE_KYBER_DMM, POOL_TYPE_SYNAPSE, POOL_TYPE_TRIDENT } from "../pool-collector/index.ts";
 
 const V4_POOL_MANAGER = "0x06380C0e0912312B5150364B9DC4542BA0DbBc85";
@@ -18,7 +18,7 @@ export interface FlatStep {
 
 const swapAbi = [
   {
-    name: "swap",
+    name: "executeSwap",
     type: "function",
     inputs: [
       { name: "pools", type: "address[]" },
@@ -124,7 +124,7 @@ function encodeStepPoolAndExtra(step: { pool: StoredPool }): { pool: Hex; extraD
 }
 
 /**
- * Encode a flat list of steps into calldata for the Hayabusa router's swap() function.
+ * Encode a flat list of steps into calldata for the Hayabusa router's executeSwap() function.
  */
 export function encodeSwapFlat(steps: FlatStep[]): Hex {
   const pools: Hex[] = [];
@@ -145,7 +145,7 @@ export function encodeSwapFlat(steps: FlatStep[]): Hex {
 
   return encodeFunctionData({
     abi: swapAbi,
-    functionName: "swap",
+    functionName: "executeSwap",
     args: [pools, poolTypes, tokens, amountsIn, extraDatas],
   });
 }
@@ -160,4 +160,11 @@ export function encodeSwap(route: RouteStep[], amountIn: bigint): Hex {
     amountIn: i === 0 ? amountIn : 0n,
   }));
   return encodeSwapFlat(steps);
+}
+
+/**
+ * Decode a uint256 amountOut from executeSwap return data.
+ */
+export function decodeSwapResult(returnData: Hex): bigint {
+  return decodeAbiParameters([{ type: "uint256" }], returnData)[0];
 }

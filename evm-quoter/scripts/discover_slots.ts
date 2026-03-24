@@ -1,17 +1,17 @@
-// discover_slots.mjs — Brute-force ERC20 balance slot discovery
+// discover_slots.ts — Brute-force ERC20 balance slot discovery
 // For each token, tries slots 0..MAX_SLOT, sets keccak256(router, slot) to a
 // known value via state override, calls balanceOf(router). Match = found slot.
 //
 // Verification: each discovered slot is verified with a second probe value.
 // Only verified slots are appended to token_overrides.json.
 //
-// Usage: node discover_slots.mjs [limit] [--write]
+// Usage: node discover_slots.ts [limit] [--write]
 //   limit: number of tokens to probe (default 50)
 //   --write: actually write to token_overrides.json (dry run without)
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { keccak256, pad, toHex } from "viem";
-import { createQuoter, ROUTER } from "../sdk.mjs";
+import { createQuoter, ROUTER } from "../sdk.ts";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 

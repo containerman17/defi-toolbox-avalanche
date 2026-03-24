@@ -12,7 +12,9 @@
 //      - Return the best terminal.
 
 import { type StoredPool } from "../pool-collector/index.ts";
-import { decodeSwapResult } from "../evm-quoter/sdk.mjs";
+import { decodeSwapResult, type RouteStep } from "../router/encode.ts";
+
+export type { RouteStep };
 
 export interface Edge {
   pool: StoredPool;
@@ -21,12 +23,6 @@ export interface Edge {
 
 export interface TokenGraph {
   edges: Map<string, Edge[]>;
-}
-
-export interface RouteStep {
-  pool: StoredPool;
-  tokenIn: string;
-  tokenOut: string;
 }
 
 /** Quoter interface — subset of what createQuoter() returns. */

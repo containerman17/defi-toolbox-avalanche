@@ -1,6 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { keccak256, pad, toHex, maxUint256, type Hex, type PublicClient } from "viem";
-import * as fs from "fs";
-import path from "path";
 
 interface TokenOverrideEntry {
   address: string;
@@ -24,10 +24,21 @@ interface TokenOverrideEntry {
 
 let _overrides: Map<string, TokenOverrideEntry> | null = null;
 
+// ── Router bytecode (cached) ─────────────────────────────────────────
+
+let _routerBytecodeCache: Hex | undefined;
+function getRouterBytecode(): Hex {
+  if (!_routerBytecodeCache) {
+    const hex = readFileSync(join(import.meta.dirname!, "contracts", "bytecode.hex"), "utf-8").trim();
+    _routerBytecodeCache = `0x${hex}` as Hex;
+  }
+  return _routerBytecodeCache;
+}
+
 function loadOverrides(): Map<string, TokenOverrideEntry> {
   if (_overrides) return _overrides;
-  const jsonPath = path.join(import.meta.dirname, "data/token_overrides.json");
-  const entries: TokenOverrideEntry[] = JSON.parse(fs.readFileSync(jsonPath, "utf-8"));
+  const jsonPath = join(import.meta.dirname!, "data/token_overrides.json");
+  const entries: TokenOverrideEntry[] = JSON.parse(readFileSync(jsonPath, "utf-8"));
   _overrides = new Map();
   for (const e of entries) {
     _overrides.set(e.address.toLowerCase(), e);
@@ -197,4 +208,70 @@ export function getHookOverrides(token: string): Record<string, { code: Hex }> {
   // Returns 32 bytes with value 1 (true) for any call
   const dummyCode = "0x600160005260206000f3" as Hex;
   return { [entry.hookContract.toLowerCase()]: { code: dummyCode } };
+}
+
+/**
+ * Build geth-style state overrides for quoting via the Hayabusa router.
+ * Works for both eth_call (on-chain router) and local EVM (cafebabe router).
+ *
+ * Sets router bytecode and token balance slots for the specified amounts.
+ */
+export function buildStateOverrides(opts: {
+  routerAddress: string;
+  tokenAmounts: Map<string, bigint>;
+  extraStateOverrides?: Record<string, any>;
+}): Record<string, any> {
+  const { routerAddress, tokenAmounts, extraStateOverrides } = opts;
+
+  // Merge balance overrides across all tokens
+  const merged: Record<string, Record<string, Hex>> = {};
+  for (const [token, amount] of tokenAmounts) {
+    if (token === "0x0000000000000000000000000000000000000000") continue;
+    const balOvr = getBalanceOverride(token, amount, routerAddress);
+    for (const [addr, val] of Object.entries(balOvr)) {
+      if (!merged[addr]) merged[addr] = {};
+      Object.assign(merged[addr], val.stateDiff);
+    }
+  }
+
+  const stateOverride: Record<string, any> = {};
+  for (const [address, slots] of Object.entries(merged)) {
+    stateOverride[address] = { stateDiff: slots };
+  }
+
+  // Native AVAX balance
+  const nativeAmount = tokenAmounts.get("0x0000000000000000000000000000000000000000");
+  if (nativeAmount) {
+    stateOverride[routerAddress] = {
+      ...(stateOverride[routerAddress] ?? {}),
+      balance: `0x${nativeAmount.toString(16)}`,
+    };
+  }
+
+  // Router bytecode
+  stateOverride[routerAddress] = {
+    ...(stateOverride[routerAddress] ?? {}),
+    code: getRouterBytecode(),
+  };
+
+  // Merge extra state overrides
+  if (extraStateOverrides) {
+    for (const [addr, ovr] of Object.entries(extraStateOverrides)) {
+      if (stateOverride[addr]) {
+        if (ovr.stateDiff && stateOverride[addr].stateDiff) {
+          Object.assign(stateOverride[addr].stateDiff, ovr.stateDiff);
+        } else if (ovr.stateDiff) {
+          stateOverride[addr].stateDiff = ovr.stateDiff;
+        }
+        // Merge non-stateDiff keys (e.g. code, balance)
+        for (const [key, val] of Object.entries(ovr)) {
+          if (key !== "stateDiff") stateOverride[addr][key] = val;
+        }
+      } else {
+        stateOverride[addr] = ovr;
+      }
+    }
+  }
+
+  return stateOverride;
 }

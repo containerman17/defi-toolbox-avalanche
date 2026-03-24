@@ -1,4 +1,4 @@
-// sdk.mjs — EVM quoter SDK
+// sdk.ts — EVM quoter SDK
 // Creates a quoter that runs EVM locally (native Go binary or WASM),
 // connected to a state server for blockchain state.
 //
@@ -15,7 +15,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WebSocket } from "ws";
-import { keccak256, pad, toHex, encodeFunctionData, decodeAbiParameters } from "viem";
+import { encodeFunctionData } from "viem";
+import { buildStateOverrides as _buildStateOverrides } from "../router/overrides.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN = join(__dirname, "bin");
@@ -25,9 +26,6 @@ const REPO = join(__dirname, "..");
 
 export const ROUTER = "0x000000000000000000000000cafebabe00facade";
 export const DUMMY_SENDER = "0x000000000000000000000000000000000000dEaD";
-
-const BYTECODE_PATH = join(REPO, "router/contracts/bytecode.hex");
-const OVERRIDES_PATH = join(REPO, "router/data/token_overrides.json");
 const POOLS_PATH = join(REPO, "pool-collector/data/pools.txt");
 
 export const STARTER_TOKENS = {
@@ -68,37 +66,6 @@ export function encodeSwapSingle(pool, poolType, tokenIn, tokenOut, amountIn) {
   });
 }
 
-export function decodeSwapResult(returnData) {
-  return decodeAbiParameters([{ type: "uint256" }], returnData)[0];
-}
-
-// ── Token overrides ──────────────────────────────────────────────────
-
-let _overrideMap;
-function getOverrideMap() {
-  if (!_overrideMap) {
-    const data = JSON.parse(readFileSync(OVERRIDES_PATH, "utf-8"));
-    _overrideMap = new Map();
-    for (const o of data) _overrideMap.set(o.address.toLowerCase(), o);
-  }
-  return _overrideMap;
-}
-
-function computeBalanceSlot(holder, entry) {
-  if (entry.erc7201_base)
-    return keccak256(pad(holder, { size: 32 }) + pad(entry.erc7201_base, { size: 32 }).slice(2));
-  return keccak256(pad(holder, { size: 32 }) + pad(toHex(entry.slot), { size: 32 }).slice(2));
-}
-
-function encodeAmount(amount, shift) {
-  const value = shift ? amount << BigInt(shift) : amount;
-  return pad(toHex(value), { size: 32 });
-}
-
-export function getTokenOverride(token) {
-  return getOverrideMap().get(token.toLowerCase());
-}
-
 // ── Pool loading ─────────────────────────────────────────────────────
 
 export function loadPools(path, limit) {
@@ -132,15 +99,7 @@ export function loadPools(path, limit) {
 
 // ── State overrides ──────────────────────────────────────────────────
 
-export function buildStateOverrides(pools, opts = {}) {
-  const bytecodeHex = readFileSync(BYTECODE_PATH, "utf-8").trim();
-  const map = getOverrideMap();
-  const overrides = {};
-
-  // Router bytecode
-  overrides[ROUTER] = { code: "0x" + bytecodeHex };
-
-  // Token balance overrides
+export function buildStateOverrides(pools, opts: { tokenAmounts?: Map<string, bigint> } = {}) {
   const tokenAmounts = opts.tokenAmounts || new Map();
 
   // Default: set balance for each unique input token from starter amounts
@@ -152,21 +111,12 @@ export function buildStateOverrides(pools, opts = {}) {
     }
   }
 
-  for (const [token, amount] of tokenAmounts) {
-    const entry = map.get(token);
-    if (!entry) continue;
-    const slot = computeBalanceSlot(ROUTER, entry);
-    const value = encodeAmount(amount, entry.shift);
-    if (!overrides[token]) overrides[token] = { stateDiff: {} };
-    overrides[token].stateDiff[slot] = value;
-    if (entry.disableSlots) {
-      for (const ds of entry.disableSlots) {
-        overrides[token].stateDiff[pad(toHex(ds), { size: 32 })] = pad("0x0", { size: 32 });
-      }
-    }
-  }
+  const overrides = _buildStateOverrides({
+    routerAddress: ROUTER,
+    tokenAmounts,
+  });
 
-  return { overrides, bytecodeLen: bytecodeHex.length / 2, overrideCount: tokenAmounts.size };
+  return { overrides, overrideCount: tokenAmounts.size };
 }
 
 // ── State server WebSocket helpers ───────────────────────────────────

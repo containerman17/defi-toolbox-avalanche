@@ -1,8 +1,9 @@
-// 03_coverage.mjs — How many pools can we actually quote?
+// 03_coverage.ts — How many pools can we actually quote?
 //
 // Returns: coverage percentage (0-100)
 
-import { createQuoter, loadPools, buildStateOverrides, decodeSwapResult } from "../sdk.mjs";
+import { createQuoter, loadPools, buildStateOverrides } from "../sdk.ts";
+import { decodeSwapResult } from "../../router/encode.ts";
 
 const STATE_SERVER = "ws://127.0.0.1:7449";
 

@@ -13,6 +13,7 @@ import (
 	"defi-toolbox/formulas"
 	"defi-toolbox/pathfinder"
 	poolcollector "defi-toolbox/pool-collector"
+	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
@@ -216,10 +217,12 @@ var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dE
 func main() {
 	stateServerURL := "ws://localhost:7449"
 	poolLimit := 4000
+	skipFormulas := false
 
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) { stateServerURL = os.Args[i+1] }
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
+		if arg == "--skip-formulas" { skipFormulas = true }
 	}
 
 	_, state, cfg, err := connectStateServer(stateServerURL)
@@ -236,8 +239,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "[benchmark] pools: %d\n", len(pools))
 
 	// Build overrides for all tokens
-	bytecodeHex := readRouterBytecode()
-	overrides := buildOverrides(pools, bytecodeHex)
+	overrides := router.BuildOverrides(ROUTER, pools)
 
 	// Apply overrides once
 	baseWithOverrides := pathfinder.ApplyOverrides(state, overrides)
@@ -266,22 +268,23 @@ func main() {
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
 			// Try formula
-			reader := func(addr common.Address, key common.Hash) common.Hash {
-				return state.GetState(addr, key)
-			}
-
-			ft0 := time.Now()
-			if ret, ok := registry.TryQuote(reader, calldata); ok {
-				formulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
-				formulaCount++
-				var out uint256.Int
-				out.SetBytes(ret)
-				if !out.IsZero() {
-					okCount++
-				} else {
-					failCount++
+			if !skipFormulas {
+				reader := func(addr common.Address, key common.Hash) common.Hash {
+					return state.GetState(addr, key)
 				}
-				continue
+				ft0 := time.Now()
+				if ret, ok := registry.TryQuote(reader, calldata); ok {
+					formulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
+					formulaCount++
+					var out uint256.Int
+					out.SetBytes(ret)
+					if !out.IsZero() {
+						okCount++
+					} else {
+						failCount++
+					}
+					continue
+				}
 			}
 
 			// EVM fallback
@@ -336,27 +339,3 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 	}
 }
 
-func readRouterBytecode() []byte {
-	// Read from the repo — this is a benchmark tool, not embedded
-	data, err := os.ReadFile("router/contracts/bytecode.hex")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not read router bytecode: %v\n", err)
-		return nil
-	}
-	code, _ := hex.DecodeString(strings.TrimSpace(string(data)))
-	return code
-}
-
-func buildOverrides(pools []pathfinder.Pool, bytecode []byte) []pathfinder.ParsedOverride {
-	// Router bytecode override
-	var overrides []pathfinder.ParsedOverride
-	if bytecode != nil {
-		overrides = append(overrides, pathfinder.ParsedOverride{
-			Addr:    ROUTER,
-			Balance: uint256.NewInt(0),
-			Code:    bytecode,
-		})
-	}
-	// Token balance overrides would go here — skipping for pure formula benchmark
-	return overrides
-}

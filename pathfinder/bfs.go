@@ -76,6 +76,10 @@ func FindBestRoute(
 
 	var stats RouteStats
 
+	// Create the overridden state once — all EVM calls read through this.
+	// Each EVM call gets a thin scratch overlay (empty map, falls through to base for reads).
+	baseWithOverrides := ApplyOverrides(state, overrides)
+
 	nodes := []layerNode{{
 		steps:   nil,
 		token:   tokenIn,
@@ -150,7 +154,8 @@ func FindBestRoute(
 			// EVM fallback
 			if amountOut == nil {
 				stats.EVMQuotes++
-				execState := ApplyOverrides(state, overrides)
+				// Thin scratch layer — empty map, reads fall through to baseWithOverrides
+				execState := baseWithOverrides.NewOverlay()
 				ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
 				if evmErr == nil && len(ret) >= 32 {
 					var out uint256.Int

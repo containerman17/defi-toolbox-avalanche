@@ -143,6 +143,9 @@ function stateServerRequest(ws, method, params) {
 
 function createNativeBackend(stateServerUrl) {
   const args = stateServerUrl ? ["--state-server", stateServerUrl] : [];
+  // Pass formula registry path
+  const registryPath = join(__dirname, "go/formulas/registry.txt");
+  args.push("--registry", registryPath);
 
   const child = spawn(join(BIN, "harness-native"), args, {
     stdio: ["pipe", "pipe", "inherit"],

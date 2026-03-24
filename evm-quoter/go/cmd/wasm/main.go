@@ -12,6 +12,7 @@ import (
 	"syscall/js"
 
 	harness "go-harness"
+	"go-harness/formulas"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -121,10 +122,11 @@ func (f *jsFetcher) FetchBlockHash(num uint64) common.Hash {
 // ─── Global state ──────────────────────────────────────────────────
 
 var (
-	state   *harness.StateDB
-	fetcher = &jsFetcher{}
-	counter = &harness.Counter{}
-	evmCfg  harness.EVMConfig
+	state    *harness.StateDB
+	fetcher  = &jsFetcher{}
+	counter  = &harness.Counter{}
+	evmCfg   harness.EVMConfig
+	registry = formulas.NewRegistry() // empty by default
 )
 
 func main() {
@@ -317,13 +319,22 @@ func main() {
 
 			results := make([]string, len(calls))
 			for i, call := range calls {
-				from := common.HexToAddress(call.From)
-				to := common.HexToAddress(call.To)
 				data, err := hex.DecodeString(strings.TrimPrefix(call.Data, "0x"))
 				if err != nil {
 					results[i] = fmt.Sprintf(`{"error":"invalid data: %v"}`, err)
 					continue
 				}
+
+				// Try formula shortcut
+				reader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
+				if ret, ok := registry.TryQuote(reader, data); ok {
+					retHex := "0x" + hex.EncodeToString(ret)
+					results[i] = fmt.Sprintf(`{"returnData":"%s","gasUsed":0}`, retHex)
+					continue
+				}
+
+				from := common.HexToAddress(call.From)
+				to := common.HexToAddress(call.To)
 				execState := applyParsed(parsed)
 				ret, gasUsed, evmErr := harness.ExecuteCall(execState, evmCfg, from, to, data)
 				retHex := "0x" + hex.EncodeToString(ret)

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 
 	harness "go-harness"
+	"go-harness/formulas"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/gorilla/websocket"
@@ -373,6 +374,7 @@ type ethCallParams struct {
 type batchCallParams struct {
 	StateOverrides map[string]stateOverrideEntry `json:"stateOverrides,omitempty"`
 	Calls          []batchCallEntry              `json:"calls"`
+	SkipFormulas   bool                          `json:"skipFormulas,omitempty"`
 }
 
 type batchCallEntry struct {
@@ -472,12 +474,23 @@ var (
 func main() {
 	counter := &harness.Counter{}
 
-	// Check for state server URL in args
+	// Check for flags in args
 	stateServerURL := ""
+	registryPath := ""
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) {
 			stateServerURL = os.Args[i+1]
 		}
+		if arg == "--registry" && i+1 < len(os.Args) {
+			registryPath = os.Args[i+1]
+		}
+	}
+
+	// Load formula registry
+	registry := formulas.LoadRegistry(registryPath)
+	validated, invalid := registry.RegistryStats()
+	if validated+invalid > 0 {
+		fmt.Fprintf(os.Stderr, "[native] formula registry: %d validated, %d invalid\n", validated, invalid)
 	}
 
 	var fetcher *wsFetcher
@@ -582,13 +595,26 @@ func main() {
 
 			results := make([]batchCallResult, len(params.Calls))
 			for i, call := range params.Calls {
-				from := common.HexToAddress(call.From)
-				to := common.HexToAddress(call.To)
 				data, err := hex.DecodeString(strings.TrimPrefix(call.Data, "0x"))
 				if err != nil {
 					results[i] = batchCallResult{Error: fmt.Sprintf("invalid data: %v", err)}
 					continue
 				}
+
+				// Try formula shortcut (unless skipFormulas is set)
+				if !params.SkipFormulas {
+					reader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
+				if ret, ok := registry.TryQuote(reader, data); ok {
+						results[i] = batchCallResult{
+							ReturnData: "0x" + hex.EncodeToString(ret),
+							GasUsed:    0,
+						}
+						continue
+					}
+				}
+
+				from := common.HexToAddress(call.From)
+				to := common.HexToAddress(call.To)
 				execState := applyParsedOverrides(state, parsed)
 				ret, gasUsed, evmErr := harness.ExecuteCall(execState, cfg, from, to, data)
 				results[i] = batchCallResult{

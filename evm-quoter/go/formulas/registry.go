@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 	"os"
 	"strings"
 
@@ -14,8 +15,10 @@ import (
 
 // Formula IDs
 const (
-	FormulaV2_30bps = 0  // V2 constant product, 0.3% fee
-	FormulaInvalid  = -1 // Do not use formula (FoT, broken, custom fee)
+	FormulaV2_30bps  = 0  // V2 constant product, 0.3% fee
+	FormulaPharaohV1 = 1  // Pharaoh V1 (stable/volatile with registry)
+	FormulaV3        = 2  // Uniswap V3 / Pharaoh V3 tick-walking
+	FormulaInvalid   = -1 // Do not use formula (FoT, broken, custom fee)
 )
 
 // Registry maps pool addresses to formula IDs.
@@ -86,10 +89,56 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return nil, false
 	}
 
+	// Build adapter readers for experiments-style formula APIs
+	stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+		addr := common.HexToAddress(contractAddr)
+		slotHash := common.BigToHash(slot)
+		val := readStorage(addr, slotHash)
+		return val, nil
+	}
+	bytesReader := func(addr [20]byte, slot [32]byte) ([32]byte, error) {
+		val := readStorage(common.Address(addr), common.Hash(slot))
+		return val, nil
+	}
+
 	// Dispatch by formula ID
 	switch formulaID {
 	case FormulaV2_30bps:
 		return QuoteV2(readStorage, pool, tokenIn, tokenOut, amountIn)
+
+	case FormulaPharaohV1:
+		state, err := FetchPharaohV1StateStorage(stateReader, strings.ToLower(pool.Hex()))
+		if err != nil || state == nil {
+			return nil, false
+		}
+		zeroForOne := tokenIn.Cmp(tokenOut) < 0
+		amtIn := amountIn.ToBig()
+		out := QuotePharaohV1(state, amtIn, zeroForOne)
+		if out == nil || out.Sign() <= 0 {
+			return nil, false
+		}
+		outU256, overflow := uint256.FromBig(out)
+		if overflow {
+			return nil, false
+		}
+		var ret [32]byte
+		outU256.WriteToSlice(ret[:])
+		return ret[:], true
+
+	case FormulaV3:
+		poolAddrStr := strings.ToLower(pool.Hex())
+		zeroForOne := tokenIn.Cmp(tokenOut) < 0
+		result, err := QuoteV3U256(stateReader, bytesReader, [20]byte(pool), poolAddrStr, amountIn, zeroForOne)
+		if err != nil {
+			return nil, false
+		}
+		if result.IsZero() {
+			return nil, false
+		}
+		var ret [32]byte
+		result.WriteToSlice(ret[:])
+		return ret[:], true
+
 	default:
 		return nil, false
 	}

@@ -10,7 +10,7 @@ build-wasm:
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" bin/wasm_exec.js
 
 start-state-server:
-	cd state-server && go run . $(ARGS)
+	cd ../state-server && go run . $(ARGS)
 
 clean:
 	rm -rf bin/

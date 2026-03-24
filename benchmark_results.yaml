@@ -4,3 +4,11 @@
   evm/speed: 0.897  # ms/pool
   evm/coverage: 95  # %
   router/backrun_lfj: 96.8  # % pass
+- date: "2026-03-24 00:53:34"
+  git: 964404c
+  evm/correctness: 0  # mismatches
+  evm/speed: 0.819  # ms/pool
+  evm/coverage: 95  # %
+  router/backrun_lfj: 96.8  # % pass
+  router/pathfinding.coverage: 88.9  # %
+  router/pathfinding.efficiency: 99.4  # %

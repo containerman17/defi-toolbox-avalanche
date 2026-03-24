@@ -10,3 +10,5 @@ archive/quoting-go/quoting-go
 tools/state-proxy/state-proxy
 router/benchmarks/backrun_lfj/payloads/
 evm-quoter/bin/
+benchmark_results.yaml
+temp-scripts/

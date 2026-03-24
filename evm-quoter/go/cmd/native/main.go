@@ -23,14 +23,15 @@ import (
 // ─── WebSocket state fetcher ───────────────────────────────────────
 
 type wsFetcher struct {
-	conn       *websocket.Conn
-	mu         sync.Mutex
-	nextID     int
-	pending    map[int]chan json.RawMessage
-	block      uint64
-	timestamp  uint64
-	baseFee    uint64
-	gasLimit   uint64
+	conn         *websocket.Conn
+	mu           sync.Mutex
+	nextID       int
+	pending      map[int]chan json.RawMessage
+	block        uint64
+	timestamp    uint64
+	baseFee      uint64
+	gasLimit     uint64
+	cacheMisses  int64 // counts state server fetches (cache misses)
 }
 
 type jsonRPCRequest struct {
@@ -256,6 +257,10 @@ type valueResult struct {
 }
 
 func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
+	f.cacheMisses++
+	if f.cacheMisses <= 3 {
+		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: storage %s slot %s\n", f.cacheMisses, addr.Hex(), slot.Hex())
+	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"slot":        slot.Hex(),
@@ -275,6 +280,10 @@ func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.H
 }
 
 func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
+	f.cacheMisses++
+	if f.cacheMisses <= 3 {
+		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: balance %s\n", f.cacheMisses, addr.Hex())
+	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": f.block,
@@ -297,6 +306,7 @@ func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
 }
 
 func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
+	f.cacheMisses++
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": f.block,
@@ -317,6 +327,10 @@ func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
 }
 
 func (f *wsFetcher) FetchCode(addr common.Address) []byte {
+	f.cacheMisses++
+	if f.cacheMisses <= 3 {
+		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: code %s\n", f.cacheMisses, addr.Hex())
+	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": f.block,
@@ -561,6 +575,11 @@ func main() {
 				GasLimit:    currentGasLimit,
 			}
 
+			missesBefore := int64(0)
+			if fetcher != nil {
+				missesBefore = fetcher.cacheMisses
+			}
+
 			results := make([]batchCallResult, len(params.Calls))
 			for i, call := range params.Calls {
 				from := common.HexToAddress(call.From)
@@ -580,7 +599,15 @@ func main() {
 					results[i].Error = evmErr.Error()
 				}
 			}
-			resp.Result = results
+
+			missesAfter := int64(0)
+			if fetcher != nil {
+				missesAfter = fetcher.cacheMisses
+			}
+			resp.Result = map[string]interface{}{
+				"results":     results,
+				"cacheMisses": missesAfter - missesBefore,
+			}
 
 		default:
 			resp.Error = "unknown method: " + req.Method

@@ -254,7 +254,7 @@ function createNativeBackend(stateServerUrl) {
           params: { stateOverrides, calls },
         }) + "\n");
       });
-      return { results: Array.isArray(raw) ? raw : raw.results };
+      return { results: Array.isArray(raw) ? raw : raw.results, cacheMisses: raw.cacheMisses || 0 };
     },
     close() {
       process.removeListener("exit", cleanup);
@@ -465,10 +465,12 @@ export async function createQuoter(mode, opts = {}) {
         from: DUMMY_SENDER,
       }));
       const batch = await backend.ethCallBatch(calls, { stateOverrides });
-      return batch.results.map(r => {
+      const results = batch.results.map(r => {
         if (r.error) return { ok: false, error: r.error, returnData: r.returnData, gasUsed: r.gasUsed };
         return { ok: true, returnData: r.returnData, gasUsed: r.gasUsed };
       });
+      results.cacheMisses = batch.cacheMisses || 0;
+      return results;
     },
 
     /** Raw ethCall (for advanced use) */

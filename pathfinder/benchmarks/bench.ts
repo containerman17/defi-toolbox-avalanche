@@ -9,19 +9,14 @@
 //
 // Returns per-size coverage & efficiency + average time.
 
-import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { buildStateOverrides } from "../../router/overrides.ts";
-import { parsePools } from "../../pool-collector/pools.ts";
 
 const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449";
-const POOLS_PATH = process.env.POOLS_PATH || "pool-collector/data/pools.txt";
 const REGISTRY_PATH = "evm-quoter/go/formulas/registry.txt";
 const HARNESS_PATH = "evm-quoter/bin/harness-native";
 
 const WAVAX = "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7";
-const ROUTER = "0x000000000000000000000000cafebabe00facade";
 
 const TOKENS: { address: string; label: string }[] = [
     { address: "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", label: "USDC" },
@@ -79,7 +74,7 @@ class Harness {
         await new Promise(r => setTimeout(r, 2500));
     }
 
-    findRoute(tokenIn: string, tokenOut: string, amountIn: bigint, poolsContent: string, poolLimit: number, overrides: any): Promise<any> {
+    findRoute(tokenIn: string, tokenOut: string, amountIn: bigint): Promise<any> {
         const id = ++this.nextId;
         return new Promise((resolve) => {
             this.pending.set(id, resolve);
@@ -90,9 +85,6 @@ class Harness {
                     tokenIn,
                     tokenOut,
                     amountIn: "0x" + amountIn.toString(16),
-                    pools: poolsContent,
-                    poolLimit,
-                    stateOverrides: overrides,
                 },
             }) + "\n";
             this.child.stdin!.write(req);
@@ -106,29 +98,12 @@ class Harness {
 
 export async function run(count?: number): Promise<Record<string, number>> {
     const tokens = TOKENS.slice(0, count || TOKENS.length);
-    const poolsContent = readFileSync(POOLS_PATH, "utf-8");
-    const { pools } = parsePools(poolsContent);
-    const poolList = [...pools.values()].slice(0, 1000);
-
-    // Build overrides for all tokens in the graph
-    const allTokens = new Set<string>();
-    for (const pool of poolList) {
-        for (const t of pool.tokens) allTokens.add(t);
-    }
-    const tokenAmounts = new Map<string, bigint>();
-    for (const t of allTokens) {
-        tokenAmounts.set(t, 10n ** 36n);
-    }
-    const overrides = buildStateOverrides({
-        routerAddress: ROUTER,
-        tokenAmounts,
-    });
 
     const harness = new Harness();
     await harness.waitReady();
 
     // Warm up
-    await harness.findRoute(WAVAX, TOKENS[0].address, 10n ** 18n, poolsContent, 1000, overrides);
+    await harness.findRoute(WAVAX, TOKENS[0].address, 10n ** 18n);
 
     const ratesBySize: Record<SizeKey, number[]> = { small: [], med: [], big: [] };
     const totalBySize: Record<SizeKey, number> = { small: 0, med: 0, big: 0 };
@@ -143,7 +118,7 @@ export async function run(count?: number): Promise<Record<string, number>> {
             const t0 = Date.now();
 
             try {
-                const fwd = await harness.findRoute(WAVAX, token.address, vol.wavax, poolsContent, 1000, overrides);
+                const fwd = await harness.findRoute(WAVAX, token.address, vol.wavax);
                 const fwdResult = fwd.result;
                 if (!fwdResult?.steps || fwdResult.steps.length === 0) {
                     console.log(`  ${tag}: no forward route`);
@@ -153,7 +128,7 @@ export async function run(count?: number): Promise<Record<string, number>> {
                 }
 
                 const fwdOut = BigInt(fwdResult.amountOut);
-                const rev = await harness.findRoute(token.address, WAVAX, fwdOut, poolsContent, 1000, overrides);
+                const rev = await harness.findRoute(token.address, WAVAX, fwdOut);
                 const revResult = rev.result;
                 if (!revResult?.steps || revResult.steps.length === 0) {
                     console.log(`  ${tag}: no reverse route`);

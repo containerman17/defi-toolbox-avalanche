@@ -126,7 +126,14 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 	return r.dispatchFormula(readStorage, formulaID, pool, tokenIn, tokenOut, amountIn)
 }
 
-func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, pool, tokenIn, tokenOut common.Address, amountIn *uint256.Int) ([]byte, bool) {
+func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, pool, tokenIn, tokenOut common.Address, amountIn *uint256.Int) (ret []byte, ok bool) {
+	// Recover from panics in formula code (e.g. DODO nil pointer on bad state)
+	defer func() {
+		if r := recover(); r != nil {
+			ret = nil
+			ok = false
+		}
+	}()
 	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 
 	switch formulaID {

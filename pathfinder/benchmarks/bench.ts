@@ -48,16 +48,20 @@ export async function run(count?: number): Promise<Record<string, number>> {
     const tokens = TOKENS.slice(0, count || TOKENS.length);
 
     const { pools } = loadPools(POOLS_PATH);
-    const poolList = [...pools.values()].slice(0, 1000);
+    const poolList = [...pools.values()].slice(0, 500);
     const graph = buildGraph(poolList);
 
-    // Build state overrides for all tokens we might route through
-    const { overrides } = buildStateOverrides(poolList, {
-        tokenAmounts: new Map([
-            [WAVAX, 1000n * 10n ** 18n], // enough for 100 AVAX tier
-            ...tokens.map((t) => [t.address, 10n ** 18n] as [string, bigint]),
-        ]),
-    });
+    // Build state overrides for ALL tokens in the graph.
+    // The router needs a balance of every token for intermediate hops to work.
+    const allTokens = new Set<string>();
+    for (const pool of poolList) {
+        for (const t of pool.tokens) allTokens.add(t);
+    }
+    const tokenAmounts = new Map<string, bigint>();
+    for (const t of allTokens) {
+        tokenAmounts.set(t, 10n ** 36n);
+    }
+    const { overrides } = buildStateOverrides(poolList, { tokenAmounts });
 
     const quoter = await createQuoter("native", {
         stateServerUrl: STATE_SERVER_URL,

@@ -41,7 +41,7 @@ function formatRoute(route: { pool: { address: string; providerName: string } }[
 async function main() {
   // 1. Load pools + synthetic edges
   const { pools } = loadPools(POOLS_PATH);
-  const poolList = [...pools.values()].slice(0, 1000);
+  const poolList = [...pools.values()].slice(0, 500);
   const buffered = generateBufferedEdges(poolList);
   const allPools = [...poolList, ...ERC4626_VAULTS, ...buffered];
 
@@ -50,13 +50,12 @@ async function main() {
   // 2. Build pathfinder graph
   const graph = buildGraph(allPools);
 
-  // 3. State overrides for local EVM quoting
-  const { overrides } = buildStateOverrides(allPools, {
-    tokenAmounts: new Map([
-      [WAVAX, 1000n * ONE_AVAX],
-      [USDC, 1_000_000n * 10n ** 6n],
-    ]),
-  });
+  // 3. State overrides — give the router balance for ALL tokens in the graph.
+  const allTokens = new Set<string>();
+  for (const p of allPools) for (const t of p.tokens) allTokens.add(t);
+  const tokenAmounts = new Map<string, bigint>();
+  for (const t of allTokens) tokenAmounts.set(t, 10n ** 36n);
+  const { overrides } = buildStateOverrides(allPools, { tokenAmounts });
 
   // 4. Create local EVM quoter (fast, for pathfinding)
   const quoter = await createQuoter("native", { stateServerUrl: STATE_SERVER_URL });

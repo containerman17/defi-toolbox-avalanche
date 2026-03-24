@@ -28,6 +28,7 @@ const (
 	FormulaPharaohV1 = 1  // Pharaoh V1 (stable/volatile with registry)
 	FormulaV3        = 2  // Uniswap V3 / Pharaoh V3 tick-walking
 	FormulaLFJV2     = 3  // LFJ V2 Liquidity Book (discrete bins)
+	FormulaAlgebra   = 4  // Algebra V1 Integral (dynamic fee CL)
 	FormulaInvalid   = -1 // Do not use formula (FoT, broken, custom fee)
 )
 
@@ -175,6 +176,25 @@ func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, poo
 		}
 		var ret [32]byte
 		result.WriteToSlice(ret[:])
+		return ret[:], true
+
+	case FormulaAlgebra:
+		stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+			addr := common.HexToAddress(contractAddr)
+			slotHash := common.BigToHash(slot)
+			return readStorage(addr, slotHash), nil
+		}
+		poolHex := strings.ToLower(pool.Hex())
+		out, err := QuoteAlgebraStorage(stateReader, poolHex, amountIn.ToBig(), zeroForOne)
+		if err != nil || out == nil || out.Sign() <= 0 {
+			return nil, false
+		}
+		outU256, overflow := uint256.FromBig(out)
+		if overflow {
+			return nil, false
+		}
+		var ret [32]byte
+		outU256.WriteToSlice(ret[:])
 		return ret[:], true
 
 	case FormulaLFJV2:

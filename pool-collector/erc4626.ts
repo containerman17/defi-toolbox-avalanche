@@ -60,7 +60,7 @@ export const ERC4626_VAULTS: StoredPool[] = [
     providerName: "erc4626",
     poolType: POOL_TYPE_ERC4626,
     tokens: [
-      "0x152b9d0fFdD62421C7C990829b2B257108600162", // BTC.b (underlying)
+      "0x152b9d0fdc40c096757f570a51e494bd4b943e50", // BTC.b (underlying)
       "0x2d324fd1ca86d90f61b0965d2db2f86d22ea4b74", // waAvaBTC.b (shares)
     ],
     latestSwapBlock: 999999999,

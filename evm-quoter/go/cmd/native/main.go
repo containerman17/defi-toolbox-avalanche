@@ -601,10 +601,15 @@ func main() {
 					continue
 				}
 
-				// Try formula shortcut (unless skipFormulas is set)
+				from := common.HexToAddress(call.From)
+				to := common.HexToAddress(call.To)
+				execState := applyParsedOverrides(state, parsed)
+
+				// Try formula shortcut (unless skipFormulas is set).
+				// Uses execState (with overrides) so pool reserves reflect any overrides.
 				if !params.SkipFormulas {
-					reader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
-				if ret, ok := registry.TryQuote(reader, data); ok {
+					reader := func(addr common.Address, key common.Hash) common.Hash { return execState.GetState(addr, key) }
+					if ret, ok := registry.TryQuote(reader, data); ok {
 						results[i] = batchCallResult{
 							ReturnData: "0x" + hex.EncodeToString(ret),
 							GasUsed:    0,
@@ -613,9 +618,6 @@ func main() {
 					}
 				}
 
-				from := common.HexToAddress(call.From)
-				to := common.HexToAddress(call.To)
-				execState := applyParsedOverrides(state, parsed)
 				ret, gasUsed, evmErr := harness.ExecuteCall(execState, cfg, from, to, data)
 				results[i] = batchCallResult{
 					ReturnData: "0x" + hex.EncodeToString(ret),

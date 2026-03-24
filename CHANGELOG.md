@@ -147,7 +147,14 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 - Need: either (a) formula checks for known bad tokens, or (b) EVM verification of top routes
 - The old JS BFS avoided this by only setting overrides for 4 starter tokens
 
+### LFJ V2 formula bug
+- Pool 0xa96bfdfa returns 1.2e27 output for small input — clearly wrong at non-validation amounts
+- Root cause: formula discovery only tests pools from loadPools (starter-token pairs)
+- BFS graph includes ALL pools from parsePools — many untested pools have broken formulas
+- Fix needed: discovery must test all pools in the graph, not just the benchmark subset
+
 ### Open questions
+- Discovery coverage gap: test ALL pools, not just starter-token pairs
 - BFS pruning: can we skip slow pool types when faster alternatives exist?
 - Formula-reality gap: need EVM verification for the final route
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides

@@ -601,14 +601,10 @@ func main() {
 					continue
 				}
 
-				from := common.HexToAddress(call.From)
-				to := common.HexToAddress(call.To)
-				execState := applyParsedOverrides(state, parsed)
-
 				// Try formula shortcut (unless skipFormulas is set).
-				// Uses execState (with overrides) so pool reserves reflect any overrides.
+				// Reads from base state — pool reserves are not affected by overrides.
 				if !params.SkipFormulas {
-					reader := func(addr common.Address, key common.Hash) common.Hash { return execState.GetState(addr, key) }
+					reader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
 					if ret, ok := registry.TryQuote(reader, data); ok {
 						results[i] = batchCallResult{
 							ReturnData: "0x" + hex.EncodeToString(ret),
@@ -618,6 +614,10 @@ func main() {
 					}
 				}
 
+				// EVM path — create overlay with overrides
+				from := common.HexToAddress(call.From)
+				to := common.HexToAddress(call.To)
+				execState := applyParsedOverrides(state, parsed)
 				ret, gasUsed, evmErr := harness.ExecuteCall(execState, cfg, from, to, data)
 				results[i] = batchCallResult{
 					ReturnData: "0x" + hex.EncodeToString(ret),

@@ -89,17 +89,21 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return nil, false
 	}
 
-	// Build adapter readers for experiments-style formula APIs
-	stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+	// Byte-based reader (zero-alloc hot path)
+	bytesReader := func(addr [20]byte, slot [32]byte) ([32]byte, error) {
+		val := readStorage(common.Address(addr), common.Hash(slot))
+		return val, nil
+	}
+
+	// String-based reader (used only for cold-path layout detection in V3)
+	lazyStateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
 		addr := common.HexToAddress(contractAddr)
 		slotHash := common.BigToHash(slot)
 		val := readStorage(addr, slotHash)
 		return val, nil
 	}
-	bytesReader := func(addr [20]byte, slot [32]byte) ([32]byte, error) {
-		val := readStorage(common.Address(addr), common.Hash(slot))
-		return val, nil
-	}
+
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 
 	// Dispatch by formula ID
 	switch formulaID {
@@ -107,11 +111,11 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return QuoteV2(readStorage, pool, tokenIn, tokenOut, amountIn)
 
 	case FormulaPharaohV1:
-		state, err := FetchPharaohV1StateStorage(stateReader, strings.ToLower(pool.Hex()))
+		poolHex := strings.ToLower(pool.Hex())
+		state, err := FetchPharaohV1StateStorage(lazyStateReader, poolHex)
 		if err != nil || state == nil {
 			return nil, false
 		}
-		zeroForOne := tokenIn.Cmp(tokenOut) < 0
 		amtIn := amountIn.ToBig()
 		out := QuotePharaohV1(state, amtIn, zeroForOne)
 		if out == nil || out.Sign() <= 0 {
@@ -126,9 +130,8 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return ret[:], true
 
 	case FormulaV3:
-		poolAddrStr := strings.ToLower(pool.Hex())
-		zeroForOne := tokenIn.Cmp(tokenOut) < 0
-		result, err := QuoteV3U256(stateReader, bytesReader, [20]byte(pool), poolAddrStr, amountIn, zeroForOne)
+		poolHex := strings.ToLower(pool.Hex())
+		result, err := QuoteV3U256(lazyStateReader, bytesReader, [20]byte(pool), poolHex, amountIn, zeroForOne)
 		if err != nil {
 			return nil, false
 		}

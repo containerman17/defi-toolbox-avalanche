@@ -85,6 +85,21 @@
   - Overhead: ~80ms (graph, pruning, JSON)
   - EVM is 87% of total time
 
+### Additional formula types added
+- LFJ V2 Liquidity Book: 247 pools validated, 248 invalid. Speed: 0.355 → 0.348 ms/pool
+- Algebra V1 Integral: 45 pools validated. Speed: 0.348 → 0.321 ms/pool
+- Total formula coverage: 4722 validated, 593 invalid
+- Progress from baseline: 0.911 → 0.321 ms/pool (2.8x faster)
+
+### Skip invalid pools in BFS
+- BFS now skips pools marked -1 in registry, avoiding wasted EVM calls
+- 916 → 890 EVM calls per route
+- find_route median: 756ms (500 pools)
+
+### IPC batch overlay optimization
+- Applied same single-overlay fix to IPC eth_call_batch path
+- IPC speed: 0.399 → 0.355 ms/pool (before adding more formulas)
+
 ### Open questions
 - Go benchmark EVM is 4.5x slower than IPC EVM — investigating
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides

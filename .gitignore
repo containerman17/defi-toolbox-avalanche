@@ -13,3 +13,4 @@ evm-quoter/bin/
 benchmark_results.yaml
 temp-scripts/
 native
+benchmark

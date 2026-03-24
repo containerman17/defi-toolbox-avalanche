@@ -73,20 +73,22 @@ export async function run(poolCount = 100) {
   const rpcOk = rpcResults.filter(r => r.ok).length;
   console.log(`    ${rpcOk}/${pools.length} ok, ${rpcMs.toFixed(0)}ms`);
 
-  // Count mismatches
-  let mismatches = 0;
+  // Count matches (pools where all three backends agree)
+  let compared = 0;
+  let matched = 0;
   for (let i = 0; i < pools.length; i++) {
     const n = nativeResults[i], w = wasmResults[i], r = rpcResults[i];
-    if (n.ok && r.ok && n.returnData !== r.returnData) {
-      mismatches++;
-      console.log(`  MISMATCH native/rpc: ${pools[i].pool} ${pools[i].typeName}`);
-    }
-    if (w.ok && r.ok && w.returnData !== r.returnData) {
-      mismatches++;
-      console.log(`  MISMATCH wasm/rpc: ${pools[i].pool} ${pools[i].typeName}`);
+    if (!n.ok || !w.ok || !r.ok) continue;
+    compared++;
+    if (n.returnData === r.returnData && w.returnData === r.returnData) {
+      matched++;
+    } else {
+      if (n.returnData !== r.returnData) console.log(`  MISMATCH native/rpc: ${pools[i].pool} ${pools[i].typeName}`);
+      if (w.returnData !== r.returnData) console.log(`  MISMATCH wasm/rpc: ${pools[i].pool} ${pools[i].typeName}`);
     }
   }
 
-  console.log(`  Result: ${mismatches} mismatches`);
-  return mismatches;
+  const pct = Math.round(matched / compared * 1000) / 10;
+  console.log(`  Result: ${pct}% correct (${matched}/${compared})`);
+  return pct;
 }

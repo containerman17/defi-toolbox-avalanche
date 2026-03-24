@@ -27,6 +27,7 @@ const (
 	FormulaV2_30bps  = 0  // V2 constant product, 0.3% fee
 	FormulaPharaohV1 = 1  // Pharaoh V1 (stable/volatile with registry)
 	FormulaV3        = 2  // Uniswap V3 / Pharaoh V3 tick-walking
+	FormulaLFJV2     = 3  // LFJ V2 Liquidity Book (discrete bins)
 	FormulaInvalid   = -1 // Do not use formula (FoT, broken, custom fee)
 )
 
@@ -174,6 +175,36 @@ func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, poo
 		}
 		var ret [32]byte
 		result.WriteToSlice(ret[:])
+		return ret[:], true
+
+	case FormulaLFJV2:
+		stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
+			addr := common.HexToAddress(contractAddr)
+			slotHash := common.BigToHash(slot)
+			return readStorage(addr, slotHash), nil
+		}
+		poolHex := strings.ToLower(pool.Hex())
+		token0Hex := strings.ToLower(tokenIn.Hex())
+		token1Hex := strings.ToLower(tokenOut.Hex())
+		// token0 < token1 for LFJ V2
+		if token0Hex > token1Hex {
+			token0Hex, token1Hex = token1Hex, token0Hex
+		}
+		lfjState, layout, err := FetchLFJV2StateFast(stateReader, poolHex, token0Hex, token1Hex)
+		if err != nil || lfjState == nil {
+			return nil, false
+		}
+		amtIn := amountIn.ToBig()
+		out := QuoteLFJV2Fast(stateReader, lfjState, layout, amtIn, zeroForOne, 0)
+		if out == nil || out.Sign() <= 0 {
+			return nil, false
+		}
+		outU256, overflow := uint256.FromBig(out)
+		if overflow {
+			return nil, false
+		}
+		var ret [32]byte
+		outU256.WriteToSlice(ret[:])
 		return ret[:], true
 
 	default:

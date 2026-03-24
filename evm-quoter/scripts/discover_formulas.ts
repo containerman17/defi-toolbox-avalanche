@@ -23,12 +23,14 @@ const FORMULA_MAP: Record<number, number> = {
   8: 0,   // V2 family → V2 constant product
   7: 1,   // Pharaoh V1
   0: 2,   // Uniswap V3 / Pharaoh V3
+  3: 3,   // LFJ V2 Liquidity Book
 };
 
 const FORMULA_NAMES: Record<number, string> = {
   0: "V2 constant product 30bps",
   1: "Pharaoh V1",
   2: "V3 tick-walking",
+  3: "LFJ V2 Liquidity Book",
   [-1]: "invalid (FoT/broken)",
 };
 

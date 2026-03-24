@@ -3,7 +3,6 @@ package pathfinder
 import (
 	"encoding/hex"
 	"fmt"
-	"os"
 	"time"
 
 	"defi-toolbox/formulas"
@@ -84,10 +83,6 @@ func FindBestRoute(
 	// Create the overridden state once — all EVM calls read through this.
 	baseWithOverrides := ApplyOverrides(state, overrides)
 
-	// Build flat cache for fast formula reads (4.3x faster than two-level map)
-	fastCache := statedb.BuildFastCache(state)
-	fmt.Fprintf(os.Stderr, "[bfs] fast cache: %d entries\n", fastCache.Len())
-
 	nodes := []layerNode{{
 		steps:   nil,
 		token:   tokenIn,
@@ -161,8 +156,11 @@ func FindBestRoute(
 				}
 			}
 
-			// EVM fallback
+			// EVM fallback (skip pools known to be invalid)
 			if amountOut == nil {
+				if registry.IsInvalid(hop.step.Pool) {
+					continue
+				}
 				et0 := time.Now()
 				stats.EVMQuotes++
 				execState := baseWithOverrides.NewOverlay()

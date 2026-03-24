@@ -77,3 +77,7 @@ func main() {
 
 	_ = calldata
 }
+
+func init() {
+	// Add map lookup benchmarks to main
+}

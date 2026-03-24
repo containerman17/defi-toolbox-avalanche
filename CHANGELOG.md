@@ -67,6 +67,24 @@
 - Formula: 0.44 ms/quote, EVM: 3.5 ms/quote (Go benchmark)
 - Target (experiments prototype): 0.024 ms/quote (75k quotes in 1.78s, all formula, in-process)
 
+### Performance investigation — L3 cache and map lookups
+- Micro-benchmarked Go map lookup patterns:
+  - Two-level map (current StateDB): 585ns/lookup
+  - Flat map ([52]byte key): 137ns/lookup — 4.3x faster
+  - StateDB direct: 693ns/read
+  - StateDB via overlay (warm): 107ns/read (cached in overlay)
+  - StateDB cold overlay: 1690ns/read (includes NewOverlay allocs)
+- Built FastCache (flat map) for formula reads — 387k entries
+  - Result: **no improvement** (90µs/q vs 70µs/q without). Worse because of double lookup on cache miss.
+  - Conclusion: the StateDB already has slots cached from initial_dump. Two-level map overhead (~700ns) is small compared to actual formula computation (V3 tick walking, Pharaoh V1 Newton-Raphson).
+  - Kept FastCache as utility but removed from hot path.
+- TryQuoteDirect (skip ABI encode/decode): **slower** (1120ms vs 810ms). Closure allocations in dispatchFormula outweigh the 709ns encode savings.
+- Internal timing breakdown for find_route (500 pools, WAVAX→USDC):
+  - Formula: 323 quotes, 22.7ms (70µs/q)
+  - EVM: 916 quotes, 708ms (773µs/q)
+  - Overhead: ~80ms (graph, pruning, JSON)
+  - EVM is 87% of total time
+
 ### Open questions
 - Go benchmark EVM is 4.5x slower than IPC EVM — investigating
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides

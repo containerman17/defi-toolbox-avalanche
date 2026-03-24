@@ -251,6 +251,13 @@ func readUint256Word(data []byte, offset int) uint64 {
 	return v
 }
 
+// IsInvalid returns true if a pool is known to not work with formulas (FoT, broken).
+// The BFS can skip EVM calls for these pools entirely.
+func (r *Registry) IsInvalid(pool common.Address) bool {
+	id, known := r.pools[pool]
+	return known && id < 0
+}
+
 // RegistryStats returns the count of validated and invalid pools.
 func (r *Registry) RegistryStats() (validated, invalid int) {
 	for _, id := range r.pools {

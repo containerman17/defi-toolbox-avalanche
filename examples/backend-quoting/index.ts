@@ -59,7 +59,7 @@ async function main() {
   });
 
   // 4. Create local EVM quoter (fast, for pathfinding)
-  const quoter = await createQuoter("native", { stateServerUrl: STATE_SERVER_URL, formulas: true });
+  const quoter = await createQuoter("native", { stateServerUrl: STATE_SERVER_URL });
 
   // 5. Create viem client (for full on-chain verification via eth_call)
   const transport = wsPool(STATE_SERVER_URL);

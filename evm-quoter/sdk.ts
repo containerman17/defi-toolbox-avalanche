@@ -377,73 +377,10 @@ async function createWasmBackend(stateServerUrl) {
   };
 }
 
-// ── Formula quoting (V2 / LFJ V1 constant product) ─────────────────
-
-// Pool types eligible for formula quoting
-const FORMULA_V2 = 8;    // V2 (pangolin, arena, sushi, etc.)
-const FORMULA_LFJ_V1 = 2; // LFJ V1 (Trader Joe V1)
-
-/**
- * Compute V2 constant product swap output.
- * amountOut = (amountIn * 9970 * reserveOut) / (reserveIn * 10000 + amountIn * 9970)
- */
-function quoteV2Formula(reserve0: bigint, reserve1: bigint, amountIn: bigint, zeroForOne: boolean): bigint {
-  const reserveIn = zeroForOne ? reserve0 : reserve1;
-  const reserveOut = zeroForOne ? reserve1 : reserve0;
-  if (reserveIn === 0n || reserveOut === 0n) return 0n;
-  const numerator = amountIn * 9970n * reserveOut;
-  const denominator = reserveIn * 10000n + amountIn * 9970n;
-  return numerator / denominator;
-}
-
-/**
- * Parse packed reserves from slot 8 storage value (32 bytes hex).
- * Layout: bytes 4-18 = reserve1 (112 bits), bytes 18-32 = reserve0 (112 bits)
- */
-function parseReserves(slotHex: string): { reserve0: bigint; reserve1: bigint } | null {
-  const hex = slotHex.startsWith("0x") ? slotHex.slice(2) : slotHex;
-  if (hex.length < 64) return null;
-  const reserve1 = BigInt("0x" + hex.slice(8, 36));
-  const reserve0 = BigInt("0x" + hex.slice(36, 64));
-  if (reserve0 === 0n && reserve1 === 0n) return null;
-  return { reserve0, reserve1 };
-}
-
-/**
- * Encode a uint256 as ABI returnData (same format as executeSwap return).
- */
-function encodeUint256ReturnData(value: bigint): string {
-  return "0x" + value.toString(16).padStart(64, "0");
-}
-
-/**
- * Create a WebSocket connection to the state server for formula reads.
- */
-async function createFormulaWs(url: string) {
-  const ws = await new Promise<InstanceType<typeof WebSocket>>((resolve, reject) => {
-    const ws = new WebSocket(url, { maxPayload: 512 * 1024 * 1024 });
-    ws.on("error", reject);
-    ws.on("open", () => resolve(ws));
-  });
-  // Skip initial_dump
-  await new Promise<void>((resolve) => {
-    const handler = (data) => {
-      const msg = JSON.parse(data.toString());
-      if (msg.type === "initial_dump") {
-        ws.off("message", handler);
-        resolve();
-      }
-    };
-    ws.on("message", handler);
-  });
-  return ws;
-}
-
 // ── Public API ───────────────────────────────────────────────────────
 
-export async function createQuoter(mode, opts: { stateServerUrl?: string; formulas?: boolean } = {}) {
+export async function createQuoter(mode, opts = {}) {
   const stateServerUrl = opts.stateServerUrl || null;
-  const useFormulas = opts.formulas ?? false;
 
   let backend;
   if (mode === "native") {
@@ -454,23 +391,6 @@ export async function createQuoter(mode, opts: { stateServerUrl?: string; formul
   } else {
     throw new Error(`Unknown mode: ${mode}. Use "native" or "wasm".`);
   }
-
-  // Open a dedicated WebSocket for formula-based storage reads
-  let formulaWs: InstanceType<typeof WebSocket> | null = null;
-  if (useFormulas && stateServerUrl) {
-    try {
-      formulaWs = await createFormulaWs(stateServerUrl);
-    } catch {
-      // Formula quoting unavailable — fall back to EVM for all pools
-    }
-  }
-
-  // Set of pool addresses known to work with formulas (EVM-validated)
-  const validatedPools = new Set<string>();
-  // Set of pool addresses known to fail or mismatch (skip formulas)
-  const invalidPools = new Set<string>();
-  // Cached reserves: poolAddress -> { reserve0, reserve1 }
-  const reservesCache = new Map<string, { reserve0: bigint; reserve1: bigint }>();
 
   return {
     /** Quote a single pool */
@@ -489,109 +409,17 @@ export async function createQuoter(mode, opts: { stateServerUrl?: string; formul
 
     /** Quote a batch of pools. Each pool object: { pool, poolType, tokenIn, tokenOut, amountIn } */
     async quotePoolBatch(pools, stateOverrides) {
-      if (!formulaWs) {
-        // No formulas — pure EVM path (original behavior)
-        const calls = pools.map(p => ({
-          to: ROUTER,
-          data: encodeSwapSingle(p.pool, p.poolType, p.tokenIn, p.tokenOut, p.amountIn),
-          from: DUMMY_SENDER,
-        }));
-        const batch = await backend.ethCallBatch(calls, { stateOverrides });
-        const results: any = batch.results.map(r => {
-          if (r.error) return { ok: false, error: r.error, returnData: r.returnData, gasUsed: r.gasUsed };
-          return { ok: true, returnData: r.returnData, gasUsed: r.gasUsed };
-        });
-        results.cacheMisses = batch.cacheMisses || 0;
-        return results;
-      }
-
-      // Formula-enabled path: use formulas for validated V2/LFJ V1 pools
-      const results = new Array(pools.length);
-      const evmIndices: number[] = [];
-      let formulaCount = 0;
-
-      for (let i = 0; i < pools.length; i++) {
-        const p = pools[i];
-        const addr = p.pool.toLowerCase();
-        const isFormulaType = p.poolType === FORMULA_V2 || p.poolType === FORMULA_LFJ_V1;
-
-        // Use formula if: (a) correct pool type, (b) previously validated via EVM, (c) reserves cached
-        if (isFormulaType && validatedPools.has(addr) && reservesCache.has(addr)) {
-          const reserves = reservesCache.get(addr)!;
-          const zeroForOne = p.tokenIn.toLowerCase() < p.tokenOut.toLowerCase();
-          const amountOut = quoteV2Formula(reserves.reserve0, reserves.reserve1, p.amountIn, zeroForOne);
-          if (amountOut > 0n) {
-            results[i] = { ok: true, returnData: encodeUint256ReturnData(amountOut), gasUsed: 0 };
-            formulaCount++;
-            continue;
-          }
-        }
-
-        evmIndices.push(i);
-      }
-
-      // Send remaining pools to EVM
-      if (evmIndices.length > 0) {
-        const evmPools = evmIndices.map(i => pools[i]);
-        const calls = evmPools.map(p => ({
-          to: ROUTER,
-          data: encodeSwapSingle(p.pool, p.poolType, p.tokenIn, p.tokenOut, p.amountIn),
-          from: DUMMY_SENDER,
-        }));
-        const batch = await backend.ethCallBatch(calls, { stateOverrides });
-
-        for (let j = 0; j < evmIndices.length; j++) {
-          const idx = evmIndices[j];
-          const r = batch.results[j];
-          const p = pools[idx];
-          const addr = p.pool.toLowerCase();
-
-          if (r.error) {
-            results[idx] = { ok: false, error: r.error, returnData: r.returnData, gasUsed: r.gasUsed };
-            // Mark as invalid so we never try formulas for this pool
-            if (p.poolType === FORMULA_V2 || p.poolType === FORMULA_LFJ_V1) {
-              invalidPools.add(addr);
-            }
-          } else {
-            results[idx] = { ok: true, returnData: r.returnData, gasUsed: r.gasUsed };
-
-            // For successful V2/LFJ V1: read reserves and validate formula
-            if ((p.poolType === FORMULA_V2 || p.poolType === FORMULA_LFJ_V1) && !invalidPools.has(addr) && !validatedPools.has(addr)) {
-              // Read reserves from state-server
-              try {
-                const slotHex = await stateServerRequest(formulaWs, "state_getStorageAt", {
-                  address: addr,
-                  slot: "0x0000000000000000000000000000000000000000000000000000000000000008",
-                  blockNumber: 80_000_000,
-                });
-                const reserves = parseReserves(slotHex as string);
-                if (reserves) {
-                  // Validate: formula must match EVM within 0.1%
-                  const zeroForOne = p.tokenIn.toLowerCase() < p.tokenOut.toLowerCase();
-                  const formulaOut = quoteV2Formula(reserves.reserve0, reserves.reserve1, p.amountIn, zeroForOne);
-                  const evmOut = BigInt(r.returnData);
-
-                  if (evmOut > 0n && formulaOut > 0n) {
-                    const diffBps = Number((formulaOut - evmOut) * 10000n / evmOut);
-                    if (Math.abs(diffBps) <= 10) { // Within 0.1%
-                      validatedPools.add(addr);
-                      reservesCache.set(addr, reserves);
-                    } else {
-                      invalidPools.add(addr);
-                    }
-                  }
-                }
-              } catch {
-                // Storage read failed — skip formula for this pool
-              }
-            }
-          }
-        }
-        results.cacheMisses = batch.cacheMisses || 0;
-      } else {
-        results.cacheMisses = 0;
-      }
-
+      const calls = pools.map(p => ({
+        to: ROUTER,
+        data: encodeSwapSingle(p.pool, p.poolType, p.tokenIn, p.tokenOut, p.amountIn),
+        from: DUMMY_SENDER,
+      }));
+      const batch = await backend.ethCallBatch(calls, { stateOverrides });
+      const results = batch.results.map(r => {
+        if (r.error) return { ok: false, error: r.error, returnData: r.returnData, gasUsed: r.gasUsed };
+        return { ok: true, returnData: r.returnData, gasUsed: r.gasUsed };
+      });
+      results.cacheMisses = batch.cacheMisses || 0;
       return results;
     },
 
@@ -602,7 +430,6 @@ export async function createQuoter(mode, opts: { stateServerUrl?: string; formul
     ethCallBatch: backend.ethCallBatch.bind(backend),
 
     close() {
-      if (formulaWs) formulaWs.close();
       backend.close();
     },
   };

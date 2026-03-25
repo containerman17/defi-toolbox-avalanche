@@ -229,17 +229,9 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 			return int32(next), true
 		}
 
-		// Skip empty words — jump to next word with set bits
-		for wp := wordPos - 1; wp >= -200; wp-- {
-			w := p.bitmapWords[wp]
-			if w.IsZero() {
-				continue
-			}
-			msb := w.BitLen() - 1
-			comp := int(wp)*256 + msb
-			return int32(comp) * p.tickSpacing, true
-		}
-		return algebraMinTick, false
+		// Exact: return word boundary (same as Solidity single-word scan)
+		next := (compressed - int(bitPos)) * int(p.tickSpacing)
+		return int32(next), false
 	}
 
 	compressed++
@@ -254,32 +246,21 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 	masked.And(&word, &mask)
 
 	if !masked.IsZero() {
-		lsb := v3FindLSB(&masked)
-		next := (compressed + (lsb - int(bitPos))) * int(p.tickSpacing)
-		return int32(next), true
-	}
-
-	for wp := wordPos + 1; wp <= 200; wp++ {
-		w := p.bitmapWords[wp]
-		if w.IsZero() {
-			continue
-		}
-		lsb := v3FindLSB(&w)
-		comp := int(wp)*256 + lsb
-		return int32(comp) * p.tickSpacing, true
-	}
-	return algebraMaxTick, false
-}
-
-func v3FindLSB(v *uint256.Int) int {
-	for w := 0; w < 4; w++ {
-		if v[w] != 0 {
-			for b := 0; b < 64; b++ {
-				if v[w]&(1<<uint(b)) != 0 {
-					return w*64 + b
+		lsb := 0
+		for w := 0; w < 4; w++ {
+			if masked[w] != 0 {
+				for b := 0; b < 64; b++ {
+					if masked[w]&(1<<uint(b)) != 0 {
+						lsb = w*64 + b
+						goto foundLsb
+					}
 				}
 			}
 		}
+	foundLsb:
+		next := (compressed + (lsb - int(bitPos))) * int(p.tickSpacing)
+		return int32(next), true
 	}
-	return 0
+	next := (compressed + (255 - int(bitPos))) * int(p.tickSpacing)
+	return int32(next), false
 }

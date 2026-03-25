@@ -309,10 +309,20 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// _getTValues: tFee = tAmount * 10 / 100 — unconditional, no DEX pair exemption.
 	// Pool is NOT in _isExcluded (confirmed on-chain); tradeLimit=0 (no cap).
 	// Reflection drift on dir=1: after _reflectFee(rFee) reduces _rTotal, the new rate
-	// makes rTransferAmount/newRate slightly > tTransferAmount (formula < evm).
-	// Drift ≈ tFee/tTotal * tTransfer; at pool 0x3f7e7ca0 reserves (~5.6M SHIBX/~2.3 WAVAX),
-	// 1 WAVAX in produces ~1.7M SHIBX out → drift ≈ 17 PPM. Inherent to SafeMoon
-	// reflection redistribution; cannot be corrected with a static fee.
+	// makes rTransferAmount/rate_after slightly > tTransferAmount (formula < evm).
+	// Observed at 0x82ab53e405 (pangolin_v2): formula=2134175282636413095288426,
+	// evm=2134225891660252472733703 → diff = 23.713 ppm (0.00237%).
+	//
+	// The drift IS correctable by reading _rTotal (slot 6) at quote time:
+	//   tFee = tAmount * 10 / 100
+	//   tTransfer = tAmount - tFee
+	//   rate = _rTotal / _tTotal   (_tTotal = 10_000_000_000e18, constant)
+	//   rFee = tFee * rate
+	//   buyer_t = tTransfer * rate * _tTotal / (_rTotal - rFee)
+	// This formula matches evm_out to 0 ppb (verified 2026-03-25).
+	// _rTotal lives at storage slot 6; _tTotal is a Solidity constant (not in storage).
+	// NOT yet implemented (requires stateful TokenModel with per-quote storage read).
+	//
 	// Pools: 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
 	//        0x3f7e7ca0046c0e8b4f83114d06df56861f3e3cd4 (partyswap, SHIBX/WAVAX), dir=1.
 	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),

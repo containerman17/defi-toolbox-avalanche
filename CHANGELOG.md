@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-25 — SHIBX reflection drift: proved correctable by reading _rTotal from state
+
+### Investigation
+Pool 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
+Mismatch: formula=2134175282636413095288426, evm=2134225891660252472733703 (diff=23.713 ppm).
+
+### Root cause
+SHIBX is a SafeMoon-style reflection token. The 10% fee reduces `_rTotal` via `_reflectFee`.
+The static `fotPct(10)` formula returns `tTransferAmount = tAmount * 90/100`, but the EVM
+delivers `buyer_t = rTransferAmount / rate_after`, which is slightly larger because the
+post-fee rate is smaller (each rToken is worth more tTokens after reflection redistribution).
+
+### Key finding: drift IS correctable
+Reading `_rTotal` from SHIBX storage slot 6 at quote time gives the exact answer:
+  - `tFee = tAmount * 10 / 100`
+  - `tTransfer = tAmount - tFee`
+  - `rate = _rTotal / _tTotal`  (`_tTotal = 10_000_000_000e18` is a Solidity constant)
+  - `rFee = tFee * rate`
+  - `buyer_t = tTransfer * rate * _tTotal / (_rTotal - rFee)`
+
+Verified: `buyer_t` matches `evm_out` to **0 ppb** with on-chain state
+(_rTotal=0x50a3bc18d3821445d8ed0d48f359f287197e591f7ea617fed1c4f29620971b97, slot 6).
+
+### Status
+Not yet implemented. Requires a stateful `TokenModel` that performs a storage read per quote.
+The `TokenModelRegistry` + `fotTokenModel` are currently stateless. This is the proof-of-concept
+that SHIBX (and other pure-RFI reflection tokens) CAN be fixed — the remaining ~24 ppm drift
+is not fundamental; it is simply a missing state read.
+
+Updated the comment in `formulas/fot.go` for the SHIBX entry with the full formula and findings.
+
 ## 2026-03-25 — Fix V2 FoT mismatches: GoodToken, RST, HEFE exemptions
 
 ### Problem

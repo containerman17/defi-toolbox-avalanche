@@ -528,6 +528,16 @@ var FotFormulaIssueTokens = map[string]bool{
 	// (18 wei diff only, not FoT — possible rounding in stable swap math)
 	"0x130966628846bfd36ff31a822705796e8cb8c18d": true,
 
+	// Good Bridging (GB, 0x90842eb834...): pure RFI reflection token, 1% tax.
+	// The formula correctly applies tFee = amountOut/100, giving tTransfer = amountOut - tFee.
+	// However the EVM measures rTransferAmount / newRate where newRate < oldRate (because
+	// _rTotal shrinks by rFee after _reflectFee). This makes the measured received amount
+	// slightly LARGER than tTransfer: residual ≈ tFee * tTransfer / tTotal.
+	// At benchmark amountIn=1e18 WAVAX → ~4.05 PPM excess; scales quadratically with amountOut.
+	// Cannot be corrected without reading _rTotal from the GB token contract.
+	// Pool: 0x0a1041feb651b1daa2f23eba7dab3898d6b9a4fe (pangolin_v2, GB/WAVAX), dir=1.
+	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": true,
+
 	// LFJ V2 pools with 0% at size 0 but negative diff at size 2:
 	// These are formula precision issues in LFJ V2, not transfer taxes.
 	"0x73a2b117b397346fa8e45577f478a7621b6045df": true, // 0x17094895 pool

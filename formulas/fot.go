@@ -194,6 +194,27 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// BABYTOKEN: fee = amount * totalFees / 100 (totalFees=6, mutable up to 25)
 	"0x50ad50fce988bcbf0d11f0c633e34c3510efbe54": fotPct(6),
 
+	// Avalanche Subnets Memes (DODO factory): fee = amount*660/10000 + amount*330/10000 (9.9%)
+	"0xf80fc26d5d20cca25c1c987abf7932942f9e57eb": func(amount *big.Int) *big.Int {
+		burn := new(big.Int).Mul(amount, big.NewInt(660))
+		burn.Div(burn, big.NewInt(10000))
+		team := new(big.Int).Mul(amount, big.NewInt(330))
+		team.Div(team, big.NewInt(10000))
+		return burn.Add(burn, team)
+	},
+
+	// Miller (20lab.app): fee = amount * 1074 / 10000 (10.74%)
+	"0x3c859470c9b6220036fa4461f516ad8049671176": fotBps(1074),
+
+	// Mistel Finance (reflection): fee = amount*3/100 + amount*8/100 (~11%)
+	"0xf3f8772f92028bfb6d641c28bbcf1dbded424767": func(amount *big.Int) *big.Int {
+		tax := new(big.Int).Mul(amount, big.NewInt(3))
+		tax.Div(tax, big.NewInt(100))
+		team := new(big.Int).Mul(amount, big.NewInt(8))
+		team.Div(team, big.NewInt(100))
+		return tax.Add(tax, team)
+	},
+
 	// =====================================================================
 	// Tokens not yet source-analyzed — using standard bps approximation.
 	// These are tokens that showed consistent bps rates across multiple pools.

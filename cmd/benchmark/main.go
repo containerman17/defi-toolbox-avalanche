@@ -278,6 +278,32 @@ func main() {
 	// Register Balancer V2 pools from state
 	registerBalancerV2Pools(pools, state, cfg, registry)
 
+	// Mark pool types with no formula implementation as FormulaNoImpl.
+	// This causes PoolManager.Get() to cache a deadPoolQuoter instead of
+	// returning nil, preventing any EVM fallback for these pools.
+	noImplTypes := map[int]bool{
+		5:  true, // woofi_v2
+		12: true, // wombat
+		13: true, // platypus
+		17: true, // cavalre
+		18: true, // kyber_dmm
+		19: true, // synapse
+		20: true, // trident
+	}
+	noImplCount := 0
+	for _, p := range pools {
+		if noImplTypes[p.PoolType] {
+			_, known := registry.GetFormulaID(p.Address)
+			if !known {
+				registry.SetFormulaID(p.Address, formulas.FormulaNoImpl)
+				noImplCount++
+			}
+		}
+	}
+	if noImplCount > 0 {
+		fmt.Fprintf(os.Stderr, "[benchmark] marked %d no-impl pools (wombat/platypus/woofi/etc) as dead quoters\n", noImplCount)
+	}
+
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
 
@@ -553,8 +579,6 @@ func main() {
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
 
-			// DEBUG: print pools that fall through to EVM
-			fmt.Fprintf(os.Stderr, "  EVM fallback: pool=%s type=%d dex=%s\n", pool.Address.Hex()[:12], pool.PoolType, pool.Dex)
 			// EVM fallback — skip if profiling formulas only
 			if profileMode == "formulas-only" {
 				ts.FailCount++

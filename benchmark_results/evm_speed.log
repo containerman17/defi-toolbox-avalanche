@@ -109,3 +109,5 @@ time=2026-03-25_14:48 git=78f2873 result=0.123 pools=4000 formulas=7570 evm=104 
 time=2026-03-25_14:48 git=78f2873 result=0.099 pools=4000 formulas=7566 evm=26 ok=7566
 time=2026-03-25_14:48 git=78f2873 result=0.107 pools=4000 formulas=7566 evm=26 ok=7566
 time=2026-03-25_14:48 git=78f2873 result=0.104 pools=4000 formulas=7566 evm=26 ok=7566
+time=2026-03-25_14:49 git=2723a16 result=0.092 pools=4000 formulas=7566 evm=12 ok=7566
+time=2026-03-25_14:50 git=2723a16 result=0.098 pools=4000 formulas=7566 evm=0 ok=7566

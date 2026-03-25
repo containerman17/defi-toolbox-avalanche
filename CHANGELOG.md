@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-03-25 — Eliminate EVM fallback for GyroECLP and no-impl pool types
+
+### Problem
+3 Balancer V3 GyroECLP pools (pool type 6) were falling through to EVM because
+`registerBalancerV3Pools` never set a formulaID for them — neither `getAmplificationParameter`
+nor `getNormalizedWeights` succeeds on GyroECLP contracts, so both EVM probes fail and
+the `continue` is never reached. With no formulaID, `PoolManager.Get()` returned nil and
+the hot path fell through to EVM.
+
+Similarly, pool types with no formula implementation at all (woofi=5, wombat=12, platypus=13,
+cavalre=17, kyber_dmm=18, synapse=19, trident=20) also had no formulaID set, causing EVM fallback.
+
+### Fix
+Two changes in `cmd/benchmark/main.go`:
+
+1. **GyroECLP / exotic Balancer V3**: After both Stable and Weighted detection fail,
+   set `registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)` without calling
+   `RegisterBalancerV3Pool`. This means `newBalancerV3Pool` returns nil (no entry in
+   `balV3PoolInfos`), which triggers the dead quoter path in `Get()`.
+
+2. **No-impl pool types**: Added `FormulaNoImpl = 9` constant. After all other registrations,
+   any pool with type in {5, 12, 13, 17, 18, 19, 20} that isn't already registered gets
+   `FormulaNoImpl` set. Since `Get()`'s switch has no case for 9, construction "fails" and
+   a `deadPoolQuoter` is cached — preventing all EVM fallback for these pool types.
+
+Same fix applied to `cmd/discover/main.go` for the GyroECLP case (function signature updated
+to accept `*formulas.Registry`).
+
+### Files changed
+- `formulas/registry.go` — added `FormulaNoImpl = 9`
+- `cmd/benchmark/main.go` — GyroECLP dead-quoter + no-impl pool type marking
+- `cmd/discover/main.go` — GyroECLP dead-quoter (registry passed to helper)
+
 ## 2026-03-25 — Full session results
 
 | Metric | Session start | Session end | Change |

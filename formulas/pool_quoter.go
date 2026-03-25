@@ -119,8 +119,17 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			// or transient state during discovery.
 			formulaID = FormulaPharaohV1
 		} else {
-			// known but formulaID < 0, and not in lfjV2Registry or v3PoolFees
-			return nil
+			// Last resort for known pools with formulaID < 0: assign by poolType
+			switch pm.poolTypes[pool] {
+			case 3: // lfj_v2
+				formulaID = FormulaLFJV2
+			case 7: // pharaoh_v1
+				formulaID = FormulaPharaohV1
+			default:
+				dead := &deadPoolQuoter{addr: pool}
+				pm.pools[pool] = dead
+				return dead
+			}
 		}
 	}
 

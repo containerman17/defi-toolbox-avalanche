@@ -33,6 +33,9 @@ const (
 	FormulaV4          = 6  // Uniswap V4 (singleton PoolManager)
 	FormulaBalancerV3  = 7  // Balancer V3 (Weighted + Stable pools via Vault singleton)
 	FormulaBalancerV2  = 8  // Balancer V2 (Weighted pools via Vault singleton)
+	FormulaNoImpl      = 9  // Pool type is known but has no formula implementation.
+	                        // Setting this prevents EVM fallback: PoolManager.Get() caches
+	                        // a deadPoolQuoter (returns nil,false) instead of returning nil.
 	FormulaInvalid     = -1 // Do not use formula (FoT, broken, custom fee)
 )
 

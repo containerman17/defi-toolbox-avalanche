@@ -199,6 +199,7 @@ func main() {
 	}
 
 	pools := poolcollector.EmbeddedPools(poolLimit)
+	registry := formulas.LoadEmbeddedRegistry()
 	fmt.Fprintf(os.Stderr, "[discover] %d pools loaded\n", len(pools))
 
 	// Register V4 pools from ExtraData
@@ -226,6 +227,35 @@ func main() {
 	}
 	if v4Count > 0 {
 		fmt.Fprintf(os.Stderr, "[discover] registered %d V4 pools\n", v4Count)
+	}
+
+	type poolResult struct {
+		addr      common.Address
+		formulaID int
+		ok        bool
+	}
+
+	// Direct registry for V2/LFJ_V1 pools: check slot 8 reserves directly from state.
+	// No EVM needed — if reserves are non-zero, the V2 formula works.
+	slot8 := common.HexToHash("0x8")
+	var directResults []poolResult
+	for _, p := range pools {
+		fid, ok := formulaMap[p.PoolType]
+		if !ok || fid != 0 || len(p.Tokens) < 2 { continue }
+		if _, known := registry.GetFormulaID(p.Address); known { continue }
+		val := state.GetState(p.Address, slot8)
+		if val == (common.Hash{}) { continue }
+		data := val.Bytes()
+		hasReserves := false
+		for _, b := range data[4:32] {
+			if b != 0 { hasReserves = true; break }
+		}
+		if !hasReserves { continue }
+		registry.SetFormulaID(p.Address, 0)
+		directResults = append(directResults, poolResult{p.Address, 0, true})
+	}
+	if len(directResults) > 0 {
+		fmt.Fprintf(os.Stderr, "[discover] directly registered %d V2 pools from slot 8 reserves\n", len(directResults))
 	}
 
 	// Filter to formula-eligible types
@@ -256,12 +286,6 @@ func main() {
 	// Discovery pass
 	fmt.Fprintf(os.Stderr, "[discover] quoting %d pools via EVM...\n", len(eligible))
 	t0 := time.Now()
-
-	type poolResult struct {
-		addr      common.Address
-		formulaID int
-		ok        bool
-	}
 
 	type stats struct {
 		ok   int
@@ -400,8 +424,11 @@ func main() {
 			}
 		}
 
+		// Combine EVM-validated results with directly registered V2 pools
+		allResults := append(results, directResults...)
+
 		added, updated := 0, 0
-		for _, r := range results {
+		for _, r := range allResults {
 			addr := strings.ToLower(r.addr.Hex())
 			oldID, exists := existing[addr]
 			if !exists {

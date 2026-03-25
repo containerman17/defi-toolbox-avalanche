@@ -347,6 +347,11 @@ func (r *Registry) GetFormulaID(pool common.Address) (int, bool) {
 	return id, ok
 }
 
+// SetFormulaID sets or updates the formula ID for a pool.
+func (r *Registry) SetFormulaID(pool common.Address, id int) {
+	r.pools[pool] = id
+}
+
 func (r *Registry) IsInvalid(pool common.Address) bool {
 	id, known := r.pools[pool]
 	return known && id < 0

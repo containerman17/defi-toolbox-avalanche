@@ -2,7 +2,6 @@ package formulas
 
 import (
 	"math/big"
-	"sort"
 	"strings"
 
 	"github.com/ava-labs/libevm/common"
@@ -12,12 +11,13 @@ import (
 // v3TickData holds a single initialized tick's position and liquidityNet.
 type v3TickData struct {
 	tick         int32
-	liquidityNet uint256.Int // signed, stored as two's complement uint256
+	liquidityNet uint256.Int
 }
 
 // V3Pool is a pre-loaded Uniswap V3 / Pharaoh V3 pool.
-// Construction reads slot0, liquidity, scans all bitmap words, and reads
-// liquidityNet for each initialized tick. Quote is pure math with binary search.
+// Construction reads slot0, liquidity, all bitmap words, and liquidityNet for
+// each initialized tick. Quote uses the SAME algorithm as QuoteV3U256 but reads
+// from pre-loaded struct fields instead of state — identical results, zero state access.
 type V3Pool struct {
 	addr         common.Address
 	fee          uint32
@@ -25,7 +25,12 @@ type V3Pool struct {
 	sqrtPriceX96 uint256.Int
 	tick         int32
 	liquidity    uint256.Int
-	ticks        []v3TickData // sorted by tick index
+
+	// Pre-loaded bitmap words: wordPos -> 256-bit bitmap
+	bitmapWords map[int16]uint256.Int
+
+	// Pre-loaded tick data: tickIdx -> liquidityNet
+	tickLiquidityNet map[int32]uint256.Int
 }
 
 func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
@@ -38,7 +43,6 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 	fee := uint32(feeInfo[0])
 	tickSpacing := feeInfo[1]
 
-	// Create readers for layout resolution and bytes-based reads
 	stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
 		a := common.HexToAddress(contractAddr)
 		slotHash := common.BigToHash(slot)
@@ -65,48 +69,42 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		return nil
 	}
 
-	// Scan all bitmap words to find initialized tick positions.
-	// Range: +-200 words covers the full practical tick range.
-	var ticks []v3TickData
+	// Pre-load ALL bitmap words (±200 range)
+	bitmapWords := make(map[int16]uint256.Int)
 	for wordPos := int16(-200); wordPos <= 200; wordPos++ {
 		word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
 		if err != nil {
 			continue
 		}
-		if word.IsZero() {
-			continue
+		if !word.IsZero() {
+			bitmapWords[wordPos] = word
 		}
-		// Extract each set bit
+	}
+
+	// Pre-load liquidityNet for all initialized ticks
+	tickLiquidityNet := make(map[int32]uint256.Int)
+	for wordPos, word := range bitmapWords {
 		for bit := 0; bit < 256; bit++ {
 			if word[bit/64]&(1<<uint(bit%64)) != 0 {
-				compressed := int(wordPos)*256 + bit
-				tickIdx := int32(compressed) * tickSpacing
-				// Read liquidityNet for this tick
+				tickIdx := (int32(wordPos)*256 + int32(bit)) * tickSpacing
 				liqNet, err := v3ReadTickLiquidityNetBytes(bytesReader, poolAddr, layout.ticks, tickIdx)
 				if err != nil {
 					continue
 				}
-				ticks = append(ticks, v3TickData{
-					tick:         tickIdx,
-					liquidityNet: liqNet,
-				})
+				tickLiquidityNet[tickIdx] = liqNet
 			}
 		}
 	}
 
-	// Sort ticks by tick index
-	sort.Slice(ticks, func(i, j int) bool {
-		return ticks[i].tick < ticks[j].tick
-	})
-
 	return &V3Pool{
-		addr:         addr,
-		fee:          fee,
-		tickSpacing:  tickSpacing,
-		sqrtPriceX96: sqrtPriceX96,
-		tick:         tick,
-		liquidity:    liquidity,
-		ticks:        ticks,
+		addr:             addr,
+		fee:              fee,
+		tickSpacing:      tickSpacing,
+		sqrtPriceX96:     sqrtPriceX96,
+		tick:             tick,
+		liquidity:        liquidity,
+		bitmapWords:      bitmapWords,
+		tickLiquidityNet: tickLiquidityNet,
 	}
 }
 
@@ -116,7 +114,7 @@ func (p *V3Pool) Address() common.Address {
 
 // TickCount returns the number of pre-loaded initialized ticks.
 func (p *V3Pool) TickCount() int {
-	return len(p.ticks)
+	return len(p.tickLiquidityNet)
 }
 
 func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
@@ -138,6 +136,8 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	}
 
 	for !amountRemaining.IsZero() && !sqrtPriceX96.Eq(&sqrtPriceLimitX96) {
+		// SAME algorithm as v3NextInitTickBytes — word-by-word bitmap scan
+		// but reads from pre-loaded bitmapWords map instead of state
 		nextTick, initialized := p.nextInitializedTick(tick, zeroForOne)
 
 		if nextTick < algebraMinTick {
@@ -175,7 +175,7 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 
 		if newSqrtPriceX96.Eq(&sqrtPriceNextTickX96) {
 			if initialized {
-				liquidityNet := p.getTickLiquidityNet(nextTick)
+				liquidityNet := p.tickLiquidityNet[nextTick]
 				if zeroForOne {
 					liquidity.Sub(&liquidity, &liquidityNet)
 				} else {
@@ -200,48 +200,57 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	return result, true
 }
 
-// nextInitializedTick finds the next initialized tick using binary search on the pre-loaded ticks array.
-// This replaces bitmap scanning with a simple array search.
+// nextInitializedTick replicates EXACTLY the v3NextInitTickBytes algorithm.
+// Scans ONE bitmap word per call, returns the same result.
+// Reads from pre-loaded bitmapWords map — eliminates keccak + state map lookup.
 func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) {
-	if len(p.ticks) == 0 {
-		if zeroForOne {
-			return algebraMinTick, false
-		}
-		return algebraMaxTick, false
-	}
+	compressed := v3FloorDiv(int(tick), int(p.tickSpacing))
 
 	if zeroForOne {
-		// Find largest initialized tick <= tick
-		target := tick
-		idx := sort.Search(len(p.ticks), func(i int) bool {
-			return p.ticks[i].tick > target
-		})
-		idx--
-		if idx >= 0 {
-			return p.ticks[idx].tick, true
+		wordPos, bitPos := v3Position(compressed)
+		word := p.bitmapWords[wordPos]
+
+		var mask, masked uint256.Int
+		mask.Lsh(uint256.NewInt(1), uint(bitPos)+1)
+		mask.SubUint64(&mask, 1)
+		masked.And(&word, &mask)
+
+		if !masked.IsZero() {
+			msb := masked.BitLen() - 1
+			next := (compressed - (int(bitPos) - msb)) * int(p.tickSpacing)
+			return int32(next), true
 		}
-		// No initialized tick below — jump straight to min
-		return algebraMinTick, false
+		next := (compressed - int(bitPos)) * int(p.tickSpacing)
+		return int32(next), false
 	}
 
-	// Find smallest initialized tick > tick
-	idx := sort.Search(len(p.ticks), func(i int) bool {
-		return p.ticks[i].tick > tick
-	})
-	if idx < len(p.ticks) {
-		return p.ticks[idx].tick, true
-	}
-	// No initialized tick above — jump straight to max
-	return algebraMaxTick, false
-}
+	compressed++
+	wordPos, bitPos := v3Position(compressed)
+	word := p.bitmapWords[wordPos]
 
-// getTickLiquidityNet returns the pre-loaded liquidityNet for a tick.
-func (p *V3Pool) getTickLiquidityNet(tickIdx int32) uint256.Int {
-	idx := sort.Search(len(p.ticks), func(i int) bool {
-		return p.ticks[i].tick >= tickIdx
-	})
-	if idx < len(p.ticks) && p.ticks[idx].tick == tickIdx {
-		return p.ticks[idx].liquidityNet
+	var maskSub, mask, masked uint256.Int
+	maskSub.Lsh(uint256.NewInt(1), uint(bitPos))
+	maskSub.SubUint64(&maskSub, 1)
+	mask.Not(&maskSub)
+	mask.And(&mask, u256MaxU)
+	masked.And(&word, &mask)
+
+	if !masked.IsZero() {
+		lsb := 0
+		for w := 0; w < 4; w++ {
+			if masked[w] != 0 {
+				for b := 0; b < 64; b++ {
+					if masked[w]&(1<<uint(b)) != 0 {
+						lsb = w*64 + b
+						goto foundLsb
+					}
+				}
+			}
+		}
+	foundLsb:
+		next := (compressed + (lsb - int(bitPos))) * int(p.tickSpacing)
+		return int32(next), true
 	}
-	return uint256.Int{}
+	next := (compressed + (255 - int(bitPos))) * int(p.tickSpacing)
+	return int32(next), false
 }

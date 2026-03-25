@@ -221,10 +221,12 @@ func main() {
 	poolLimit := 4000
 	skipFormulas := false
 
+	correctnessMode := false
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) { stateServerURL = os.Args[i+1] }
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
 		if arg == "--skip-formulas" { skipFormulas = true }
+		if arg == "--correctness" { correctnessMode = true }
 	}
 
 	_, state, cfg, err := connectStateServer(stateServerURL)
@@ -245,6 +247,91 @@ func main() {
 
 	// Apply overrides flat — no overlay indirection, CallState reads one layer
 	baseWithOverrides := pathfinder.ApplyOverridesFlat(state, overrides)
+
+	// ─── Correctness mode: compare formula vs EVM for every pool ───
+	if correctnessMode {
+		fmt.Fprintf(os.Stderr, "[correctness] comparing formula vs EVM for %d pools...\n", len(pools))
+		evmCtx := statedb.GetCachedContext(cfg)
+		cs := statedb.NewCallState(baseWithOverrides)
+		poolReader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
+		pm := formulas.NewPoolManager(registry, poolReader)
+
+		// Warm pass
+		for i := range pools {
+			p := &pools[i]
+			if len(p.Tokens) < 2 { continue }
+			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+			zeroForOne := p.Tokens[0].Cmp(p.Tokens[1]) < 0
+			if q := pm.Get(p.Address); q != nil { q.Quote(amountIn, zeroForOne) }
+			cd := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, p.Tokens[0], p.Tokens[1], amountIn)
+			cs.Reset()
+			evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, cd)
+		}
+
+		var total, match, mismatch, formulaOnly, evmOnly, bothFail int
+		for i := range pools {
+			p := &pools[i]
+			if len(p.Tokens) < 2 { continue }
+			for _, dir := range [][2]int{{0, 1}, {1, 0}} {
+				tokenIn, tokenOut := p.Tokens[dir[0]], p.Tokens[dir[1]]
+				amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+				zeroForOne := tokenIn.Cmp(tokenOut) < 0
+				total++
+
+				// Formula result
+				var formulaOut *uint256.Int
+				if q := pm.Get(p.Address); q != nil {
+					formulaOut, _ = q.Quote(amountIn, zeroForOne)
+				}
+
+				// EVM result
+				cd := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, tokenIn, tokenOut, amountIn)
+				cs.Reset()
+				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, cd)
+				var evmOut *uint256.Int
+				if evmErr == nil && len(ret) >= 32 {
+					var out uint256.Int
+					out.SetBytes(ret[:32])
+					if !out.IsZero() { evmOut = &out }
+				}
+
+				if formulaOut == nil && evmOut == nil {
+					bothFail++
+				} else if formulaOut == nil && evmOut != nil {
+					evmOnly++
+				} else if formulaOut != nil && evmOut == nil {
+					formulaOnly++
+				} else if formulaOut.Eq(evmOut) {
+					match++
+				} else {
+					mismatch++
+					if mismatch <= 10 {
+						fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
+							p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
+					}
+				}
+			}
+		}
+		pct := 0.0
+		if match+mismatch > 0 { pct = float64(match) / float64(match+mismatch) * 100 }
+		fmt.Fprintf(os.Stderr, "\n[correctness] %d total, %d match, %d mismatch, %d formula-only, %d evm-only, %d both-fail\n",
+			total, match, mismatch, formulaOnly, evmOnly, bothFail)
+		fmt.Fprintf(os.Stderr, "[correctness] %.1f%% correct (%d/%d)\n", pct, match, match+mismatch)
+
+		// Log result
+		gitHash := "unknown"
+		if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
+			gitHash = strings.TrimSpace(string(out))
+		}
+		ts := time.Now().Format("2006-01-02_15:04")
+		result := fmt.Sprintf("%.0f", pct)
+		line := fmt.Sprintf("time=%s git=%s result=%s match=%d mismatch=%d formula_only=%d evm_only=%d\n",
+			ts, gitHash, result, match, mismatch, formulaOnly, evmOnly)
+		f, err := os.OpenFile("benchmark_results/evm_correctness.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil { f.WriteString(line); f.Close() }
+		fmt.Printf(`{"correctness": %s, "match": %d, "mismatch": %d}`+"\n", result, match, mismatch)
+		return
+	}
 
 	// Pre-build PoolManager for struct-based quoting
 	warmReader := func(addr common.Address, key common.Hash) common.Hash {

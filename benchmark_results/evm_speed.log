@@ -95,3 +95,5 @@ time=2026-03-25_14:37 git=2b32fe8 result=0.128 pools=4000 formulas=7564 evm=117 
 time=2026-03-25_14:38 git=2b32fe8 result=0.152 pools=4000 formulas=7564 evm=117 ok=7579
 time=2026-03-25_14:38 git=2b32fe8 result=0.120 pools=4000 formulas=7564 evm=117 ok=7579
 time=2026-03-25_14:38 git=2b32fe8 result=0.123 pools=4000 formulas=7564 evm=117 ok=7579
+time=2026-03-25_14:39 git=8a7f9cc result=0.122 pools=4000 formulas=7564 evm=117 ok=7579
+time=2026-03-25_14:40 git=8a7f9cc result=0.143 pools=4000 formulas=7564 evm=117 ok=7579

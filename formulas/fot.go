@@ -417,6 +417,12 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// taxenabled=true, pool is not tax-exempt
 	"0x09ef821c35b4577f856ca416377bd2dddbd3d0c9": fotBps(100),
 
+	// Build Token (BUILD): fee = amount * transferFee / 10000 (transferFee=100, 1%)
+	// feeTo=0x000...dEaD (burn); MAX_TRANSFER_FEE=500 (mutable, currently 100).
+	// isExcluded[pool]=false → fee applies. No exemption for AMM pairs.
+	// Pool: 0x87305ece9f6dbf58522a5507afe09a4f8a9e7cb0 (radioshack, BUILD/RADIO)
+	"0x5f018e73c185ab23647c82bd039e762813877f0e": fotBps(100),
+
 	// NOTE: 0xe668f8030bf17f3931a3069f31f4fa56efe9dd54 (WSPP) — confirmed NOT FoT, removed.
 }
 

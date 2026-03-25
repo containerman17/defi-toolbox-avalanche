@@ -88,10 +88,11 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
 			wrapped := &fotPoolQuoter{
-				inner:       inner,
-				model0:      model0,
-				model1:      model1,
-				inputExempt: IsFotExemptInputPool(poolHex),
+				inner:         inner,
+				model0:        model0,
+				model1:        model1,
+				inputExempt:   IsFotExemptInputPool(poolHex),
+				outputExempt:  IsFotExemptOutputPool(poolHex),
 			}
 			pm.pools[pool] = wrapped
 			return wrapped
@@ -140,6 +141,7 @@ type fotPoolQuoter struct {
 	model0         TokenModel // token0's model
 	model1         TokenModel // token1's model
 	inputExempt    bool       // true if pool is in FotExemptInputPools (fee skipped when pool is recipient)
+	outputExempt   bool       // true if pool is in FotExemptOutputPools (fee skipped when pool is sender)
 }
 
 func (f *fotPoolQuoter) Address() common.Address {
@@ -173,10 +175,13 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.
 		return nil, false
 	}
 
-	// Adjust output: if tokenOut is FoT, user receives less
-	out = modelOut.AdjustOutput(out)
-	if out == nil {
-		return nil, false
+	// Adjust output: if tokenOut is FoT, user receives less.
+	// Skip if this pool is exempt on the output side (token skips fee when pool is sender).
+	if !f.outputExempt {
+		out = modelOut.AdjustOutput(out)
+		if out == nil {
+			return nil, false
+		}
 	}
 
 	return out, true

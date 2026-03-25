@@ -23,6 +23,7 @@ type PoolManager struct {
 	registry    *Registry
 	reader      StorageReader
 	poolTokens  map[common.Address][2]common.Address // pool → [token0, token1]
+	poolTypes   map[common.Address]int               // pool → poolType from pools.txt
 	tokenModels *TokenModelRegistry
 }
 
@@ -33,8 +34,16 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		registry:    registry,
 		reader:      reader,
 		poolTokens:  make(map[common.Address][2]common.Address),
+		poolTypes:   make(map[common.Address]int),
 		tokenModels: NewTokenModelRegistry(),
 	}
+}
+
+// SetPoolType registers the pool type for a pool (from pools.txt).
+// This allows Get() to try V2 formula for pools marked -1 in registry.txt
+// when the pool type indicates a V2-family DEX.
+func (pm *PoolManager) SetPoolType(pool common.Address, poolType int) {
+	pm.poolTypes[pool] = poolType
 }
 
 // SetPoolTokens registers the token pair for a pool, enabling FoT adjustment.
@@ -63,8 +72,21 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			} else {
 				return nil
 			}
+		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
+			// V3 pools marked -1 in registry.txt can still use the V3 formula —
+			// they were likely invalidated for reasons that don't apply to the
+			// struct-based V3 quoter (e.g. dynamic fees now read from storage).
+			formulaID = FormulaV3
+		} else if pm.isV2Retryable(pool) {
+			// V2-family pools marked -1: retry with V2 formula. The -1 was set by
+			// formula discovery which compared function-based output to EVM. Common
+			// causes: (a) FoT tokens not yet in fotCalculators (now handled by
+			// fotPoolQuoter wrapper), (b) transient state during discovery.
+			// Excludes non-standard V2 forks (hurricane, fraxswap) that have different
+			// storage layout or AMM math.
+			formulaID = FormulaV2_30bps
 		} else {
-			// known but formulaID < 0, and not in lfjV2Registry
+			// known but formulaID < 0, and not in lfjV2Registry or v3PoolFees
 			return nil
 		}
 	}
@@ -74,8 +96,16 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2
 	// are handled by the fotPoolQuoter wrapper via fotCalculators.
 	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
+	// FoT: check if pool tokens require rebasing/formula-issue fallback.
+	// Skip for V2 constant product — the formula is simple enough that it always
+	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2
+	// are handled by the fotPoolQuoter wrapper via fotCalculators.
+	// Skip for V3 — the swap formula uses sqrtPrice/liquidity/ticks from storage,
+	// not token balances. Rebasing and formula-issue tokens don't affect V3 math.
+	// FoT taxes are handled by the fotPoolQuoter wrapper.
+	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	tokens, hasTokens := pm.poolTokens[pool]
-	if hasTokens && formulaID != FormulaV2_30bps {
+	if hasTokens && formulaID != FormulaV2_30bps && formulaID != FormulaV3 {
 		t0Hex := strings.ToLower(tokens[0].Hex())
 		t1Hex := strings.ToLower(tokens[1].Hex())
 		if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] ||

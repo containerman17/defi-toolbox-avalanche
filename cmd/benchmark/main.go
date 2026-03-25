@@ -292,6 +292,7 @@ func main() {
 			if len(pools[i].Tokens) >= 2 {
 				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 			}
+			pm.SetPoolType(pools[i].Address, pools[i].PoolType)
 		}
 
 		// Warm pass
@@ -394,6 +395,7 @@ func main() {
 		if len(pools[i].Tokens) >= 2 {
 			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 		}
+		warmPM.SetPoolType(pools[i].Address, pools[i].PoolType)
 	}
 
 	// Warm passes before the hot (timed) pass.
@@ -482,6 +484,7 @@ func main() {
 		if len(pools[i].Tokens) >= 2 {
 			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 		}
+		pm.SetPoolType(pools[i].Address, pools[i].PoolType)
 	}
 
 	for i := range pools {
@@ -545,6 +548,11 @@ func main() {
 			}
 
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
+
+			// DEBUG: log pharaoh_v1 EVM fallback pools
+			if pool.PoolType == 7 && zeroForOne {
+				fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s\n", strings.ToLower(pool.Address.Hex()))
+			}
 
 			// EVM fallback — skip if profiling formulas only
 			if profileMode == "formulas-only" {

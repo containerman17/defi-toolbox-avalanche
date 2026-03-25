@@ -62,7 +62,18 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 
 	layout, err := v3GetLayoutBytes(stateReader, poolAddress)
 	if err != nil {
-		return nil
+		// Layout detection failed — likely uninitialized pool (zero sqrtPrice).
+		// Return an empty V3Pool that always returns (nil, false) from Quote(),
+		// preventing fallthrough to the expensive EVM path.
+		return &V3Pool{
+			addr:             addr,
+			fee:              fee,
+			tickSpacing:      tickSpacing,
+			bitmapWords:      make(map[int16]uint256.Int),
+			tickLiquidityNet: make(map[int32]uint256.Int),
+			preStepsDown:     make(map[int32]*v3PrecomputedStep),
+			preStepsUp:       make(map[int32]*v3PrecomputedStep),
+		}
 	}
 
 	poolAddr := [20]byte(addr)
@@ -277,7 +288,7 @@ func (p *V3Pool) TickCount() int {
 }
 
 func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
-	if amountIn.IsZero() {
+	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
 		return nil, false
 	}
 

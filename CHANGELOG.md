@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-03-25 — RFI+burn reflection math for KIOO (Reflectx): pool 0xf3f119ceb9
+
+### Investigation
+Pool `0xf3f119ceb9a59e15dfc9d4989df39ac076d2796b` (lfj_v1, KIOO/WAVAX), dir=1.
+Mismatch: formula=59790647612160510946916305, evm=59792305306725122556078077 (formula 0.003% LESS).
+
+### Root cause
+KIOO (`0x45cdaf3fd17bd31d9830fa977159162dd2431683`) is a Reflectx contract with FEES_PERCENT=3
+(reflection) + BURN_PERCENT=1 (burn) = 4% total. Unlike GREEN/AFM (reflection only), KIOO's
+`_reflectFeeBurn` reduces `_reflectSupply` by BOTH `reflectFees + reflectBurn`, AND reduces
+`_totalSupply` by `burn`. The static `fotCalculators` entry computed `amount - fees - burn` but
+missed the reflection redistribution effect (~27.7 PPM).
+
+### Fix
+- Extended `reflectionTokenModel` and `reflectionTokenConfig` with `burnRate`/`burnDenom` and
+  `tTotalSlot` fields to support tokens where burn reduces both `_reflectSupply` and `_totalSupply`.
+- Added KIOO to `reflectionTokenConfigs`: `_reflectSupply` at slot 1, `_totalSupply` at slot 2,
+  reflectRate=3/100, burnRate=1/100.
+- Removed KIOO from static `fotCalculators`.
+- `adjustReflection` now computes: `newRTotal = rTotal - rFee - rBurn`, `newTTotal = tTotal - tBurn`,
+  `received = rTransferAmount / (newRTotal / newTTotal)`.
+- Verified: 0.004 PPM residual (due to storage read at different block than benchmark).
+
+## 2026-03-25 — RFI reflection math for SHIBX: pools 0x3f7e7ca004, 0x82ab53e405
+
+### Investigation
+Pool `0x3f7e7ca0046c0e8b4f83114d06df56861f3e3cd4` (partyswap, SHIBX/WAVAX), dir=1.
+Mismatch: formula=1541089738182084344390833, evm=1541116127051514855578176 (formula 0.002% LESS).
+Also affects pool `0x82ab53e405fa94448597afcc0ba86143b1ab2628` (pangolin_v2, SHIBX/WAVAX).
+
+### Root cause
+SHIBX (`0x440abbf18c54b2782a4917b80a1746d3a2c2cce1`) is a pure SafeMoon/RFI reflection token
+with 10% fee (all goes to `_reflectFee`, no team fee). The static `fotPct(10)` formula computes
+`tTransferAmount = tAmount - tFee` but the EVM delivers `rTransferAmount / rate_after`, which is
+larger because `_reflectFee` reduces `_rTotal` before `balanceOf` is computed.
+
+### Fix
+Added SHIBX to `reflectionTokenConfigs` in `formulas/fot.go` with full RFI reflection math:
+- `_rTotal` at storage slot 6, `_tTotal = 10_000_000_000e18` (constant)
+- `reflectRate=10, reflectDenom=100` (10% pure reflection, no team fee)
+- Removed from static `fotCalculators` (was `fotPct(10)`)
+- The `reflectionTokenModel.AdjustOutput` reads `_rTotal` from storage at quote time
+  and computes `buyer_t = rTransferAmount * _tTotal / (_rTotal - rFee)` matching Solidity exactly
+- Verified: formula matches EVM to 0 ppb (proven in prior SHIBX investigation 2026-03-25)
+
+## 2026-03-25 — RFI reflection math for AvaFOX (AFM): pool 0x4ea4440e35
+
+### Investigation
+Pool `0x4ea4440e35ed4194c777f0cf26a33298c77bb3c5` (lfj_v1, AFM/WAVAX), dir=1.
+Mismatch: formula=225149111504925896, evm=225149639549106105 (formula 0.0002% LESS).
+AFM (`0x03ae7c5c`) is a SafeMoon/RFI reflection token: `_taxFee=1` (1% reflection via `_reflectFee`)
++ `TeamFee=3` (hardcoded in `_getValues`, goes to contract address via `_takeTeam`).
+
+### Root cause
+The static fee formula `amount*1/100 + amount*3/100` correctly computes the total deducted amount
+but doesn't account for RFI reflection redistribution. After `_reflectFee(rFee)` reduces `_rTotal`,
+the rate = `_rTotal / _tTotal` decreases, making the recipient's `balanceOf` = `rTransferAmount / newRate`
+slightly larger than `tTransferAmount`. The excess is `tTransfer * rFee / (_rTotal - rFee)` (~2.35 PPM).
+
+### Fix
+Added AFM to `reflectionTokenConfigs` in `formulas/fot.go` with exact RFI math:
+`actualReceived = tTransferAmount * _rTotal / (_rTotal - rFee)` where `rFee = tFee * rate`.
+Reads `_rTotal` from storage slot 6 at quote time. Removed AFM from `fotCalculators` (overridden).
+Verified: formula now matches EVM to within tolerance (pool no longer appears in correctness mismatches).
+
 ## 2026-03-25 — Balancer V3 WITH_RATE token rate providers: 0x304e19e302 (balancer_v3, eweETH-1/waAvaWETH), dir=0
 
 ### Investigation

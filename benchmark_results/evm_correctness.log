@@ -156,3 +156,7 @@ time=2026-03-25_15:26 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=
 time=2026-03-25_23:21 git=76b9687 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124
 time=2026-03-25_23:37 git=d08fb80 result=100 match=6438 mismatch=26 formula_only=722 evm_only=482
 time=2026-03-25_23:42 git=82cfccf result=100 match=6438 mismatch=26 formula_only=722 evm_only=482
+time=2026-03-25_23:51 git=ad3ee40 result=100 match=6438 mismatch=26 formula_only=722 evm_only=482
+time=2026-03-26_00:03 git=ad3ee40 result=100 match=6440 mismatch=24 formula_only=722 evm_only=482
+time=2026-03-26_00:04 git=ad3ee40 result=100 match=6440 mismatch=24 formula_only=722 evm_only=482
+time=2026-03-26_00:06 git=ad3ee40 result=100 match=6446 mismatch=18 formula_only=722 evm_only=482

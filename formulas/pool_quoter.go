@@ -43,7 +43,7 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		poolTokens:  make(map[common.Address][2]common.Address),
 		poolTypes:   make(map[common.Address]int),
 		poolDex:     make(map[common.Address]string),
-		tokenModels: NewTokenModelRegistry(),
+		tokenModels: NewTokenModelRegistry(reader),
 	}
 }
 

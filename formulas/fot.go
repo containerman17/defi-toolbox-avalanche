@@ -1,6 +1,10 @@
 package formulas
 
-import "math/big"
+import (
+	"math/big"
+
+	"github.com/ava-labs/libevm/common"
+)
 
 // Fee-on-transfer (FoT) token transfer tax rates on Avalanche C-Chain.
 //
@@ -18,9 +22,13 @@ func FotCalcFee(token string, amount *big.Int) (*big.Int, bool) {
 	return calc(amount), true
 }
 
-// IsFotToken returns true if the token has a fee-on-transfer tax.
+// IsFotToken returns true if the token has a fee-on-transfer tax
+// (either static in fotCalculators or stateful in reflectionTokenConfigs).
 func IsFotToken(token string) bool {
-	_, ok := fotCalculators[token]
+	if _, ok := fotCalculators[token]; ok {
+		return true
+	}
+	_, ok := reflectionTokenConfigs[token]
 	return ok
 }
 
@@ -157,33 +165,11 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return total
 	},
 
-	// Green Token (GREEN): fee = amount*1/100 + amount*3/100 (reflection 1% + team 3%)
-	// _getTValues(tAmount, _taxFee=1, TeamFee=3) — TeamFee is HARDCODED as 3 in _getValues,
-	// not _teamFee (which is also 1). Two separate Solidity divisions.
-	// No DEX pair exemption; only _isExcludedFromFee addresses are exempt (pool is not).
-	// Reflection token: ~2.93 PPM residual after FoT correction due to rFee redistribution.
-	// Pool: 0x40029f0cd32423b04f101d44458858395ef6385e (lfj_v1, GREEN/WAVAX)
-	"0x4d6fc3925fcadca6ad952afbd649ec44e756b000": func(amount *big.Int) *big.Int {
-		tFee := new(big.Int).Mul(amount, big.NewInt(1))
-		tFee.Div(tFee, big.NewInt(100))
-		tTeam := new(big.Int).Mul(amount, big.NewInt(3))
-		tTeam.Div(tTeam, big.NewInt(100))
-		return tFee.Add(tFee, tTeam)
-	},
+	// Green Token (GREEN): moved to reflectionTokenConfigs for exact RFI math (0 ppb).
+	// Was: 1% reflection + 3% team = 4% total, ~2.93 PPM residual with static fee.
 
-	// AvaFOX (AFM): fee = amount*1/100 + amount*3/100 (reflection 1% + team 3%)
-	// _getValues calls _getTValues(tAmount, _taxFee=1, TeamFee=3) — TeamFee HARDCODED as 3,
-	// _teamFee state var is also 1 but _getValues always passes literal 3.
-	// Two separate Solidity divisions. No DEX pair exemption.
-	// Reflection token: ~2.35 PPM residual after FoT correction due to rFee redistribution.
-	// Pool: 0x4ea4440e35ed4194c777f0cf26a33298c77bb3c5 (lfj_v1, AFM/WAVAX)
-	"0x03ae7c5c942547772e1e0f01c04699ebf1cc9761": func(amount *big.Int) *big.Int {
-		tFee := new(big.Int).Mul(amount, big.NewInt(1))
-		tFee.Div(tFee, big.NewInt(100))
-		tTeam := new(big.Int).Mul(amount, big.NewInt(3))
-		tTeam.Div(tTeam, big.NewInt(100))
-		return tFee.Add(tFee, tTeam)
-	},
+	// AvaFOX (AFM): moved to reflectionTokenConfigs for exact RFI math (0 ppb).
+	// Was: 1% reflection + 3% team = 4% total, ~2.35 PPM residual with static fee.
 
 	// BYAS: fee = amount * 30 / 1000
 	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": func(amount *big.Int) *big.Int {
@@ -312,27 +298,9 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Confirmed: formula*(1-0.10) = evm to within 1 wei.
 	"0x9b413747801cb9def889bc865fe43c2a65585fb1": fotPct(10),
 
-	// SHIBX (SHIBAVAX): fee = tAmount.mul(10).div(100) (10% reflection tax, hardcoded)
-	// _getTValues: tFee = tAmount * 10 / 100 — unconditional, no DEX pair exemption.
-	// Pool is NOT in _isExcluded (confirmed on-chain); tradeLimit=0 (no cap).
-	// Reflection drift on dir=1: after _reflectFee(rFee) reduces _rTotal, the new rate
-	// makes rTransferAmount/rate_after slightly > tTransferAmount (formula < evm).
-	// Observed at 0x82ab53e405 (pangolin_v2): formula=2134175282636413095288426,
-	// evm=2134225891660252472733703 → diff = 23.713 ppm (0.00237%).
-	//
-	// The drift IS correctable by reading _rTotal (slot 6) at quote time:
-	//   tFee = tAmount * 10 / 100
-	//   tTransfer = tAmount - tFee
-	//   rate = _rTotal / _tTotal   (_tTotal = 10_000_000_000e18, constant)
-	//   rFee = tFee * rate
-	//   buyer_t = tTransfer * rate * _tTotal / (_rTotal - rFee)
-	// This formula matches evm_out to 0 ppb (verified 2026-03-25).
-	// _rTotal lives at storage slot 6; _tTotal is a Solidity constant (not in storage).
-	// NOT yet implemented (requires stateful TokenModel with per-quote storage read).
-	//
-	// Pools: 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
-	//        0x3f7e7ca0046c0e8b4f83114d06df56861f3e3cd4 (partyswap, SHIBX/WAVAX), dir=1.
-	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
+	// SHIBX (SHIBAVAX): moved to reflectionTokenConfigs for exact RFI math (0 ppb).
+	// Was: 10% reflection tax, ~23.7 PPM residual with static fee.
+	// Pools: 0x82ab53e405 (pangolin_v2), 0x3f7e7ca004 (partyswap).
 
 	// Raini Studios Token (RST): fee = (amount * transferFeeBasisPoints) / 10000
 	// transferFeeBasisPoints=100 (1%, confirmed on-chain; MAX_FEE=200, mutable).
@@ -427,22 +395,7 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// DEX pair exemption possible (_isExcludedFromFee)
 	"0x22897cf0da31e1f118649d9f6ad1809cabd84948": fotBps(103),
 
-	// KIOO (Reflectx): fees = amount*3/100 + amount*1/100 (TWO separate divisions, 4% total)
-	// _getTransferAmounts: fees=(amount*FEES_PERCENT)/100; burn=(amount*BURN_PERCENT)/100
-	// FEES_PERCENT=3, BURN_PERCENT=1 (constants, immutable). No DEX pair exemption.
-	// Reflection token: _reflectSupply decreases on every transfer, redistributing
-	// to all holders. Residual PPM-level drift on dir=1 (formula slightly > EVM) is
-	// unavoidable — the recipient's actual balance = (amount-fees-burn)*(T-burn)/(T-fees-burn),
-	// which deviates infinitesimally from (amount-fees-burn) as T >> amount. Cannot be
-	// fixed with a static fee.
-	// Pool: 0x6ccf639b551d5cc7d335360863c6555e44bde885 (lfj_v1, KIOO/USDT.e), dir=1 USDT.e→KIOO.
-	"0x45cdaf3fd17bd31d9830fa977159162dd2431683": func(amount *big.Int) *big.Int {
-		fees := new(big.Int).Mul(amount, big.NewInt(3))
-		fees.Div(fees, big.NewInt(100))
-		burn := new(big.Int).Mul(amount, big.NewInt(1))
-		burn.Div(burn, big.NewInt(100))
-		return fees.Add(fees, burn)
-	},
+	// KIOO (Reflectx): moved to reflectionTokenConfigs for exact RFI+burn math.
 
 	// MMTH (Mammoth): fee = amount * (10000 - taxfee) / 10000, taxfee=100 → 1%
 	// taxenabled=true, pool is not tax-exempt
@@ -597,4 +550,101 @@ var FotFormulaIssueTokens = map[string]bool{
 	"0x6c14c1898c843ff66ca51e87244690bbc28df215": true, // 0x2cf90b72 pool (ORNG)
 	"0x420fca0121dc28039145009570975747295f2329": true, // 0x3a2cbbd1 pool
 	"0x407e0ce3ef9d370e00a972cba7344158ed60a6cd": true, // 0x78f81cf4 pool
+}
+
+// reflectionTokenConfig holds the parameters for an RFI/SafeMoon reflection token.
+// These tokens have a reflection fee that reduces _rTotal on each transfer, causing
+// the recipient to receive slightly more tokens than tTransferAmount.
+// For tokens with burn (e.g. KIOO/Reflectx), set burnRate/burnDenom and tTotalSlot.
+type reflectionTokenConfig struct {
+	rTotalSlot   common.Hash            // storage slot for _rTotal (_reflectSupply)
+	tTotalSlot   common.Hash            // storage slot for _tTotal (zero = use constant tTotal)
+	tTotal       *big.Int               // constant total supply (used when tTotalSlot is zero)
+	reflectRate  int64                  // reflection fee numerator (e.g. 1 for 1%)
+	reflectDenom int64                  // reflection fee denominator (e.g. 100)
+	burnRate     int64                  // burn fee numerator (0 = no burn)
+	burnDenom    int64                  // burn fee denominator (0 = no burn)
+	calcFee      func(*big.Int) *big.Int // total fee (reflection + team/burn), same math as fotCalculators
+}
+
+// reflectionTokenConfigs maps token addresses to their reflection config.
+// These override any fotCalculators entry for the same address.
+var reflectionTokenConfigs = map[string]reflectionTokenConfig{
+	// Green Token (GREEN): 1% reflection + 3% team = 4% total fee.
+	// _taxFee=1 is the reflection fee that reduces _rTotal via _reflectFee(rFee).
+	// TeamFee=3 is taken via _takeTeam (adds to contract's rOwned, does NOT reduce _rTotal).
+	// _rTotal at storage slot 6 (after Ownable's 2 slots + 4 mappings).
+	// _tTotal = 1_000_000_000_000 * 1e9 = 1e21 (constant, not in storage).
+	// Pool: 0x40029f0cd32423b04f101d44458858395ef6385e (lfj_v1, GREEN/WAVAX).
+	// Verified: reflection formula matches EVM to 0 ppb.
+	"0x4d6fc3925fcadca6ad952afbd649ec44e756b000": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Mul(big.NewInt(1000000000000), big.NewInt(1e9)),
+		reflectRate:  1,
+		reflectDenom: 100,
+		calcFee: func(amount *big.Int) *big.Int {
+			tFee := new(big.Int).Mul(amount, big.NewInt(1))
+			tFee.Div(tFee, big.NewInt(100))
+			tTeam := new(big.Int).Mul(amount, big.NewInt(3))
+			tTeam.Div(tTeam, big.NewInt(100))
+			return tFee.Add(tFee, tTeam)
+		},
+	},
+
+	// AvaFOX (AFM): 1% reflection + 3% team = 4% total fee.
+	// _taxFee=1 is the reflection fee that reduces _rTotal via _reflectFee(rFee).
+	// TeamFee=3 is HARDCODED in _getValues (not from _teamFee state var which is 1).
+	// _rTotal at storage slot 6 (same layout as GREEN: Ownable 2 slots + 4 mappings).
+	// _tTotal = 1_000_000_000_000 * 1e9 = 1e21 (constant, not in storage).
+	// Pool: 0x4ea4440e35ed4194c777f0cf26a33298c77bb3c5 (lfj_v1, AFM/WAVAX), dir=1.
+	"0x03ae7c5c942547772e1e0f01c04699ebf1cc9761": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Mul(big.NewInt(1000000000000), big.NewInt(1e9)),
+		reflectRate:  1,
+		reflectDenom: 100,
+		calcFee: func(amount *big.Int) *big.Int {
+			tFee := new(big.Int).Mul(amount, big.NewInt(1))
+			tFee.Div(tFee, big.NewInt(100))
+			tTeam := new(big.Int).Mul(amount, big.NewInt(3))
+			tTeam.Div(tTeam, big.NewInt(100))
+			return tFee.Add(tFee, tTeam)
+		},
+	},
+
+	// SHIBX (SHIBAVAX): 10% pure reflection tax (all goes to _reflectFee, no team fee).
+	// _getTValues: tFee = tAmount.mul(10).div(100) — unconditional, no DEX pair exemption.
+	// _rTotal at storage slot 6. _tTotal = 10_000_000_000e18 (constant).
+	// Pool is NOT _isExcluded; tradeLimit=0 (no cap).
+	// Pools: 0x82ab53e405 (pangolin_v2, SHIBX/WAVAX), 0x3f7e7ca004 (partyswap, SHIBX/WAVAX).
+	// Verified: reflection formula matches EVM to 0 ppb (2026-03-25).
+	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Mul(big.NewInt(10_000_000_000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)),
+		reflectRate:  10,
+		reflectDenom: 100,
+		calcFee:      fotPct(10),
+	},
+
+	// KIOO (Reflectx): 3% reflection fee + 1% burn = 4% total.
+	// _reflectFeeBurn reduces _reflectSupply by (reflectFees + reflectBurn) and _totalSupply by burn.
+	// Unlike GREEN/AFM, burn changes BOTH _reflectSupply and _totalSupply, so both must be
+	// read from storage. FEES_PERCENT=3 (reflection), BURN_PERCENT=1 (burn).
+	// Storage layout (Ownable + Reflectx): slot 0=_owner, slot 1=_reflectSupply, slot 2=_totalSupply.
+	// MAX_SUPPLY = 72_000_000_000e18 (initial; _totalSupply decreases with each burn).
+	// Pools: 0xf3f119ceb9 (lfj_v1, KIOO/WAVAX), 0x6ccf639b55 (lfj_v1, KIOO/USDT.e), etc.
+	"0x45cdaf3fd17bd31d9830fa977159162dd2431683": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+		tTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
+		reflectRate:  3,
+		reflectDenom: 100,
+		burnRate:     1,
+		burnDenom:    100,
+		calcFee: func(amount *big.Int) *big.Int {
+			fees := new(big.Int).Mul(amount, big.NewInt(3))
+			fees.Div(fees, big.NewInt(100))
+			burn := new(big.Int).Mul(amount, big.NewInt(1))
+			burn.Div(burn, big.NewInt(100))
+			return fees.Add(fees, burn)
+		},
+	},
 }

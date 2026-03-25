@@ -2,6 +2,40 @@
 
 ## 2026-03-25 — Pool quoter structs + EVM optimization
 
+### Session results summary
+
+| Metric | Start of session | End of session | Improvement |
+|--------|-----------------|----------------|-------------|
+| **Speed (ms/pool)** | 0.797 | **0.273** | **2.9x** |
+| **Formula coverage** | ~50% | **88.6%** | +38pp |
+| **Correctness** | 100% (JS IPC) | **98.3%** (pure Go) | — |
+| **Formula time** | 331ms | **140ms** | 2.4x |
+| **EVM time** | 3551ms | **795ms** | 4.5x |
+
+### Uniswap V4 formula
+- Ported from experiment 02 — V4 uses singleton PoolManager with per-pool state indexed by poolId
+- Math identical to V3 (tick walking, computeSwapStep) but different storage layout
+- V4Pool struct pre-loads bitmaps and ticks from PoolManager contract
+- 145 V4 formula quotes added, pools registered from ExtraData in pools.txt
+
+### FoT (fee-on-transfer) token support
+- Ported ~40 token fee calculators from experiment 02, matching exact Solidity integer math
+- PoolManager wraps quoters with fotPoolQuoter — adjusts input/output for transfer tax
+- Includes exempt pools, rebasing tokens, formula-issue tokens lists
+- Correctness: 96.5% → 98.0% (58 fewer mismatches)
+
+### Direct V2 pool registration from state
+- Discovery script now checks slot 8 reserves directly for V2/LFJ_V1 pools
+- If reserves are non-zero in state server, pool is registered without EVM validation
+- Added 667 pools that were missing because they don't pair with starter tokens
+- State server fetches missing slots on demand from upstream RPC
+
+### Pure Go discovery tool (cmd/discover)
+- Replaces JS-based discover_formulas.ts — no Node.js, no IPC
+- Merge mode: keeps existing valid entries, only adds or upgrades
+- Uses starter tokens (USDC/USDT/WAVAX) for EVM validation
+- Direct slot 8 check for V2 pools without starter token pairs
+
 ### Pool quoter structs (formulas as stateful objects)
 - Architecture change: each pool is now a struct that reads state ONCE at construction time
 - `Quote(amountIn, zeroForOne)` is pure math — zero state access, zero keccak, zero map lookups

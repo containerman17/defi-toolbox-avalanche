@@ -273,7 +273,7 @@ func main() {
 	registerV4Pools(pools)
 
 	// Register Balancer V3 pools from state
-	registerBalancerV3Pools(pools, state, cfg)
+	registerBalancerV3Pools(pools, state, cfg, registry)
 
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
@@ -747,9 +747,8 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 			if !skipFormulas {
 				// Try pool struct
 				if quoter := pm.Get(pool.Address); quoter != nil {
-					if _, ok := quoter.Quote(amountIn, zeroForOne); ok {
-						continue
-					}
+					quoter.Quote(amountIn, zeroForOne)
+					continue // formula quoter exists — skip EVM even if quote returns 0 (empty pool)
 				}
 				// Fallback to function-based formula
 				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
@@ -767,7 +766,7 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 }
 
 // registerBalancerV3Pools discovers and registers Balancer V3 pool parameters via EVM calls.
-func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig) {
+func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry) {
 	count := 0
 	for _, p := range pools {
 		if p.PoolType != 6 || len(p.Tokens) < 2 {
@@ -793,6 +792,7 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 					Amp:       ampVal,
 				}
 				formulas.RegisterBalancerV3Pool(poolAddr, info)
+				registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)
 				count++
 				continue
 			}
@@ -823,6 +823,7 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 							Weights:   weights,
 						}
 						formulas.RegisterBalancerV3Pool(poolAddr, info)
+						registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)
 						count++
 						continue
 					}

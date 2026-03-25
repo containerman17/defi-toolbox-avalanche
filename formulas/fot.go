@@ -29,6 +29,12 @@ func IsFotExemptPool(pool string) bool {
 	return FotExemptPools[pool]
 }
 
+// IsFotExemptInputPool returns true if the pool is exempt from FoT on the input side only.
+// This covers tokens where fee is skipped when the pool is the recipient (to == pool).
+func IsFotExemptInputPool(pool string) bool {
+	return FotExemptInputPools[pool]
+}
+
 // Helper: fee = amount * rate / 10000 (standard bps division)
 func fotBps(rate int64) func(*big.Int) *big.Int {
 	return func(amount *big.Int) *big.Int {
@@ -365,7 +371,25 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return fees.Add(fees, burn)
 	},
 
+	// MMTH (Mammoth): fee = amount * (10000 - taxfee) / 10000, taxfee=100 → 1%
+	// taxenabled=true, pool is not tax-exempt
+	"0x09ef821c35b4577f856ca416377bd2dddbd3d0c9": fotBps(100),
+
 	// NOTE: 0xe668f8030bf17f3931a3069f31f4fa56efe9dd54 (WSPP) — confirmed NOT FoT, removed.
+}
+
+// FotExemptInputPools lists pool addresses where FoT should NOT be applied on the
+// INPUT side only. This occurs when a token's transfer() skips fees when `to` is a
+// registered LP address (i.e., when selling INTO the pool, no fee is charged), but
+// still charges fees when transferring OUT of the pool to a buyer.
+//
+// Example: bCASH (0x4ba16daf) checks lp[to]==1; the pool is registered, so
+// transferring bCASH to the pool (dir=0) is fee-free, but transferring bCASH out
+// to a buyer (dir=1) still incurs the 10% fee.
+var FotExemptInputPools = map[string]bool{
+	// bCASH (0x4ba16daf): lp[pool]=1 → fee-free when pool is `to` (dir=0, input side).
+	// Fee still applies when pool is `from` and buyer is `to` (dir=1, output side).
+	"0x07280f32830e3a1ca7b535b603b09890e692eaf6": true, // bCASH/WAVAX pangolin_v2
 }
 
 // FotExemptPools lists pool addresses where FoT should NOT be applied even though
@@ -382,6 +406,9 @@ var FotExemptPools = map[string]bool{
 	"0x04a954bc8af9a1fdc2ce5f3192bdca369a4512cc": true, // HERESY/WAVAX pharaoh_v1
 	"0x2bcbf5c38a0e11985779f507c5b98ad1fdd7b196": true, // HERESY/WAVAX pharaoh_v1
 	"0x08ca0e8905beb997a6ade2a9a89a5a31eb1698ff": true, // HERESY/WAVAX pharaoh_v3
+
+	// YFX (0x8901...): pool has NOT_TAXED_TO and NOT_TAXED_FROM roles — fully exempt.
+	"0x640f87fef16c1e767ed80bae124e067b49d3e6a7": true, // YFX/USDC.e pharaoh_v1
 
 	// BulletCollection (0xf84b...): only charges fee on registered AMM pairs.
 	// Pool 0x3c4beea7 (lfj_v1) is NOT registered as an AMM pair.

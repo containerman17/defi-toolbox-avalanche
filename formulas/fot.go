@@ -147,6 +147,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return new(big.Int).Sub(amount, kept)
 	},
 
+	// SABTIWE2.0 (Stars Arena Bailout Edition): fee = amountToTake1(value) = ceil(value,50)*50/100 ≈ 50%
+	// hyperSonic=true && liqBugFixed=true (on-chain confirmed via storage slot 15).
+	// transfer() path: totalLoss = ceil(amount,50)*50/100; tokensToTransfer = amount - totalLoss.
+	// For large amounts (multiples of 50), ceil(v,50)=v so fee = v*50/100 = v/2 exactly.
+	// Output token in pool 0xdf56a97e (lfj_v1), dir=1 WAVAX→SABTIWE2.0.
+	"0x791ae3e4ade59a63fd2a1c1da9218c1e4da4db16": fotPct(50),
+
 	// Waifu: taxAmount is dynamic, reads 0 at pinned block 0x4cea4a8 — no fee active.
 	// Removed: "0xff24003428fb2e969c39edee4e9f464b0b78313d": fotBps(50),
 
@@ -205,6 +212,9 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 
 	// Miller (20lab.app): fee = amount * 1074 / 10000 (10.74%)
 	"0x3c859470c9b6220036fa4461f516ad8049671176": fotBps(1074),
+
+	// SHIBX: fee = tAmount * 10 / 100 (10% reflection tax, hardcoded)
+	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
 
 	// Mistel Finance (reflection): fee = amount*3/100 + amount*8/100 (~11%)
 	"0xf3f8772f92028bfb6d641c28bbcf1dbded424767": func(amount *big.Int) *big.Int {

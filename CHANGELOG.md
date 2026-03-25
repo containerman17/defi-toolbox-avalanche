@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-25 — FoT fix: SABTIWE2.0 50% transfer tax
+
+### Pool 0xdf56a97e (lfj_v1): formula 2x EVM on dir=1 (WAVAX→SABTIWE2.0)
+
+- Token: SABTIWE2.0 `0x791ae3e4ade59a63fd2a1c1da9218c1e4da4db16` (Stars Arena Bailout Edition 2.0)
+- Root cause: token has `hyperSonic=true` and `liqBugFixed=true` on-chain (storage slot 15 = `0x0101`)
+- When both flags are set, `transfer()` calls `amountToTake1(value)` which computes `ceil(value,50)*50/100`
+- For amounts that are multiples of 50, `ceil(v,50)=v` → fee = `v/2` exactly (50%)
+- `tokensToTransfer = value - totalLoss = value/2` → recipient gets half
+- Formula computed full X tokens out; only X/2 arrived → formula = 2x EVM (100% over)
+- Fix: added `fotPct(50)` entry for `0x791ae3e4...` in `formulas/fot.go`
+
 ## 2026-03-25 — Formula correctness fixes (agent-investigated)
 
 ### Correctness: 112 → 79 mismatches (98.2% → 98.7%)

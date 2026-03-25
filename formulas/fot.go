@@ -239,6 +239,11 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// EverRise: fee = amount * liquidityFee / 100 (liquidityFee=5, mutable up to 10)
 	"0xc17c30e98541188614df99239cabd40280810ca3": fotPct(5),
 
+	// GOD CHEEMS (GCH): fee = amount * _taxFee / 100 (_taxFee=5, slot[12], reflection token).
+	// Pool 0xa457717dad87d72de49d3f10677c5a3846037595 (lfj_v1, GCH/WAVAX), dir=1.
+	// Confirmed: formula*(1-0.05) ~= evm to within 0.0073% (residual = rFee reflection redistribution).
+	"0xa755c4aa57315933ee7b8de0b41b1f02911f1f5a": fotPct(5),
+
 	// Red Pepe (RPEPE): fee = value * taxRate / 10000 (taxRate=69, mutable)
 	"0xb36faf341c7817d681f23bcedbd3d85467e5ad9f": fotBps(69),
 

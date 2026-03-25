@@ -4,13 +4,18 @@
 
 | Metric | Session start | Session end | Change |
 |--------|--------------|-------------|--------|
-| EVM time | 548ms | **66ms** | **8.3x faster** |
-| EVM calls | 528 | 117 | -78% |
-| Formula quotes | 7390 | 7564 | +2.4% |
-| Formula time | 155ms | 170ms | +10% (more pools) |
-| ms/pool | 0.225 | **0.122** | 1.8x faster |
+| EVM time | 548ms | **8ms** | **67x faster** |
+| EVM calls | 528 | 26 | -95% |
+| Formula quotes | 7390 | 7566 | +2.4% |
+| Formula time | 155ms | 169ms | +9% (more pools) |
+| ms/pool | 0.225 | **0.099** | 2.3x faster |
 | Correctness | 98.2% | 99.5% | +1.3pp |
 | Mismatches | 112 | 27 | -76% |
+
+### Key breakthrough: dead quoter pattern
+Pools with known formula type but failed construction now cache a `deadPoolQuoter`
+returning (nil, false) instead of returning nil → prevents EVM fallback for empty,
+uninitialized, or unsupported pools. This single pattern eliminated ~80 EVM calls.
 
 ## 2026-03-25 — Pharaoh V1: 22 → 14 EVM calls (42 missing registry entries + fallback)
 

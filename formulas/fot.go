@@ -66,9 +66,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// =====================================================================
 
 	// Good Bridging (GB): fee = tAmount.div(100) (integer div, 1%, unconditional)
-	// Reflection token: rFee redistribution causes tiny residual drift after FoT correction.
-	// Pool: 0x77eb05e7f557fe8003047fb3be690dc429c511ba (partyswap, GB/WAVAX), dir=1.
-	// Pool is NOT _isExcluded → participates in reflection; drift is within tolerance.
+	// Reflection token: after _reflectFee(rFee) reduces _rTotal, the new rate makes
+	// rTransferAmount/newRate slightly > tTransferAmount (formula < evm). Drift ≈ ~3.7 PPM
+	// for typical trade sizes (~5e12 GB out of tTotal=14.327880e15). Inherent to SafeMoon
+	// reflection redistribution; cannot be corrected with a static fee.
+	// Affected pools (dir=1, GB is output, pool NOT _isExcluded):
+	//   0x77eb05e7f557fe8003047fb3be690dc429c511ba (partyswap, GB/WAVAX)
+	//   0xd1ef5be30873bb4de09da01d0f7ea743226aec9f (lfj_v1, GB/USDT.e)
 	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": fotPct(1),
 
 	// SLED: fee = amount * 2 / 100

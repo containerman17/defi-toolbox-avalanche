@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-03-25 — GB (Good Bridging) reflection drift: 0xd1ef5be30873 (lfj_v1, GB/USDT.e)
+
+### Investigation
+Pool `0xd1ef5be30873bb4de09da01d0f7ea743226aec9f` (lfj_v1, type=2), dir=1.
+Mismatch: formula=5216374658829, evm=5216393842073 (diff=19,183,244, ~3.677 PPM).
+- Token0: GB (`0x90842eb834cfd2a1db0b1512b254a18e4d396215`), already in `fotCalculators` with `fotPct(1)`.
+- Token1: USDT.e (`0xc7198437980c041c805a1edcba50c1ce5db95118`), no FoT.
+- dir=1: USDT.e is input, GB is output. Pool is NOT `_isExcluded`.
+
+### Root cause
+Inherent SafeMoon reflection drift. After `_reflectFee(rFee)` reduces `_rTotal`, the new rate
+`rSupply/tSupply` is smaller, so `rTransferAmount / newRate` gives the buyer slightly more than
+`tTransferAmount`. Theoretical drift = `tTransfer * tFee / (tTotal - tFee)` ≈ 3.678 PPM,
+matching observed diff exactly (theoretical=19,183,242 vs actual=19,183,244).
+
+Confirmed: both this pool and `0x77eb05e7f557fe8003047fb3be690dc429c511ba` (partyswap, GB/WAVAX)
+are `_isExcluded = false` (verified on-chain via `isExcluded()` = 0x000...000).
+
+The benchmark 0.01 PPM threshold for lfj_v1 is exceeded by ~368x. This cannot be corrected
+with a static fee — it requires a stateful storage read of `_rTotal` at quote time (same as SHIBX).
+
+### Fix
+Updated GB comment in `formulas/fot.go` to document both affected pools and the drift formula.
+No code fix possible with current stateless FoT model.
+
 ## 2026-03-25 — SHIBX reflection drift: proved correctable by reading _rTotal from state
 
 ### Investigation

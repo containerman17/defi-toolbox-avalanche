@@ -14,12 +14,22 @@ import (
 // Balancer V3 Vault address on Avalanche C-Chain.
 var balV3VaultAddr = common.HexToAddress("0xba1333333333a1ba1108e8412f11850a5c319ba9")
 
-// Vault storage slot indices (ERC20MultiToken uses slots 0-2, then VaultStorage starts).
-// _poolConfigBits: mapping(address pool => PoolConfigBits) at slot 3
-// _poolTokenBalances: mapping(address pool => mapping(uint256 tokenIndex => bytes32)) at slot 8
-const (
-	balV3SlotPoolConfigBits     = 3
-	balV3SlotPoolTokenBalances  = 8
+// Vault storage slot indices.
+// C3 linearization: VaultStorage comes before ERC20MultiToken.
+// VaultStorage state variables start at slot 0:
+//   0: _poolConfigBits     mapping(address pool => PoolConfigBits)
+//   1: _poolRoleAccounts   mapping(address pool => PoolRoleAccounts)
+//   2: _hooksContracts     mapping(address pool => IHooks)
+//   3: _poolTokens         mapping(address pool => IERC20[])
+//   4: _poolTokenInfo      mapping(address pool => mapping(IERC20 => TokenInfo))
+//   5: _poolTokenBalances  mapping(address pool => mapping(uint256 index => bytes32))
+//   6: _aggregateFeeAmounts
+//
+// These slot numbers may need verification against the deployed contract.
+// If results don't match, adjust the constants.
+var (
+	balV3SlotPoolConfigBits    = 0
+	balV3SlotPoolTokenBalances = 5
 )
 
 // Fee extraction from PoolConfigBits:

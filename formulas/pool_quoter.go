@@ -69,9 +69,13 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		}
 	}
 
-	// FoT: check if pool tokens require rebasing/formula-issue fallback
+	// FoT: check if pool tokens require rebasing/formula-issue fallback.
+	// Skip for V2 constant product — the formula is simple enough that it always
+	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2
+	// are handled by the fotPoolQuoter wrapper via fotCalculators.
+	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	tokens, hasTokens := pm.poolTokens[pool]
-	if hasTokens {
+	if hasTokens && formulaID != FormulaV2_30bps {
 		t0Hex := strings.ToLower(tokens[0].Hex())
 		t1Hex := strings.ToLower(tokens[1].Hex())
 		if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] ||

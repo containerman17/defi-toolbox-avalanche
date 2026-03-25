@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-25 — Add Balancer V3 formula (Weighted + Stable pools)
+
+### What
+Balancer V3 pools on Avalanche (vault at 0xba1333...ba9) now have formula coverage
+for Weighted and Stable pool types. This eliminates EVM calls for 11 of the 14 active
+balancer_v3 pools (3 GyroECLP pools remain EVM-only due to complex elliptic curve math).
+
+### Pool breakdown (14 active pools)
+- 6 StablePool (StableSwap / Curve-style math with amplification parameter)
+- 5 WeightedPool (x^w * y^w = k generalized constant product)
+- 3 GyroECLPPool (skipped, EVM fallback)
+
+### Implementation
+- Ported Balancer V3 Solidity math to Go: LogExpMath (exp/ln), FixedPoint (mulDown/Up, powDown/Up),
+  WeightedMath (computeOutGivenExactIn), StableMath (computeInvariant, computeBalance, computeOutGivenExactIn)
+- Reads pool state from Vault singleton storage: _poolConfigBits (swap fee, decimal scaling),
+  _poolTokenBalances (packed raw balances)
+- Pool parameters (weights for weighted, amp for stable) discovered via EVM calls at startup
+  (getAmplificationParameter, getNormalizedWeights)
+
+### Files changed
+- formulas/balancer_v3.go -- Balancer V3 swap math (FixedPoint, LogExpMath, WeightedMath, StableMath)
+- formulas/pool_balancer_v3.go -- PoolQuoter struct, vault storage reading, registration
+- formulas/registry.go -- FormulaBalancerV3 constant (ID=7)
+- formulas/pool_quoter.go -- BalancerV3 case in PoolManager.Get()
+- cmd/discover/main.go -- Balancer V3 pool registration from EVM calls
+- cmd/benchmark/main.go -- Balancer V3 pool registration from EVM calls
+
+### Limitations
+- Only 2-token pools supported (multi-token pools need token address mapping in Quote)
+- STANDARD tokens only (WITH_RATE tokens with rate providers need EVM calls for rates)
+- Storage slot numbers (0 for _poolConfigBits, 5 for _poolTokenBalances) need empirical
+  verification against the deployed contract
+
 ## 2026-03-25 — Fix: 30 V3 pools falling through to EVM (60 calls, ~310ms)
 
 ### Root cause

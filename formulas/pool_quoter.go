@@ -99,6 +99,8 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		if p := newV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	case FormulaDODO:
 		if p := newDODOPool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+	case FormulaV4:
+		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}
 	return nil
 }

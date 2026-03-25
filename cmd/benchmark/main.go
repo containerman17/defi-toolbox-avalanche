@@ -242,6 +242,9 @@ func main() {
 	fmt.Fprintf(os.Stderr, "[benchmark] registry: %d validated, %d invalid\n", validated, invalid)
 	fmt.Fprintf(os.Stderr, "[benchmark] pools: %d\n", len(pools))
 
+	// Register V4 pools from ExtraData
+	registerV4Pools(pools)
+
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
 
@@ -640,6 +643,62 @@ func main() {
 			f.Close()
 			fmt.Fprintf(os.Stderr, "\nLogged to %s: %.3f ms/pool\n", logResult, msPerPool)
 		}
+	}
+}
+
+// registerV4Pools parses V4 pool ExtraData and registers them with the formula system.
+func registerV4Pools(pools []pathfinder.Pool) {
+	count := 0
+	for _, p := range pools {
+		if p.PoolType != 9 || p.ExtraData == "" {
+			continue
+		}
+		// ExtraData format: id=0x...,fee=18,ts=1,hooks=0x...
+		var poolIdHex string
+		var fee uint32
+		var tickSpacing int32
+		var hooks string
+		for _, kv := range strings.Split(p.ExtraData, ",") {
+			parts := strings.SplitN(kv, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			switch parts[0] {
+			case "id":
+				poolIdHex = parts[1]
+			case "fee":
+				var f int
+				fmt.Sscanf(parts[1], "%d", &f)
+				fee = uint32(f)
+			case "ts":
+				var t int
+				fmt.Sscanf(parts[1], "%d", &t)
+				tickSpacing = int32(t)
+			case "hooks":
+				hooks = parts[1]
+			}
+		}
+		if poolIdHex == "" || tickSpacing == 0 {
+			continue
+		}
+		var poolId [32]byte
+		idBytes := common.FromHex(poolIdHex)
+		copy(poolId[:], idBytes)
+
+		// Arena hook pools have dynamic fees
+		var hookFeePpm uint32
+		if strings.EqualFold(hooks, "0xe32a5d788c568fc5a671255d17b618e70552e044") {
+			// Arena hook — fee comes from the hook contract, we approximate with lpFee
+			// This is not exact but gets us coverage
+			hookFeePpm = 0
+		}
+
+		poolAddr := strings.ToLower(p.Address.Hex())
+		formulas.RegisterV4Pool(poolAddr, poolId, tickSpacing, fee, hookFeePpm)
+		count++
+	}
+	if count > 0 {
+		fmt.Fprintf(os.Stderr, "[benchmark] registered %d V4 pools\n", count)
 	}
 }
 

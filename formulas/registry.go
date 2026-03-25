@@ -30,6 +30,7 @@ const (
 	FormulaLFJV2     = 3  // LFJ V2 Liquidity Book (discrete bins)
 	FormulaAlgebra   = 4  // Algebra V1 Integral (dynamic fee CL)
 	FormulaDODO      = 5  // DODO PMM
+	FormulaV4        = 6  // Uniswap V4 (singleton PoolManager)
 	FormulaInvalid   = -1 // Do not use formula (FoT, broken, custom fee)
 )
 

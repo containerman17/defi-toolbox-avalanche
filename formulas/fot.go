@@ -129,6 +129,20 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return total
 	},
 
+	// Green Token (GREEN): fee = amount*1/100 + amount*3/100 (reflection 1% + team 3%)
+	// _getTValues(tAmount, _taxFee=1, TeamFee=3) — TeamFee is HARDCODED as 3 in _getValues,
+	// not _teamFee (which is also 1). Two separate Solidity divisions.
+	// No DEX pair exemption; only _isExcludedFromFee addresses are exempt (pool is not).
+	// Reflection token: ~2.93 PPM residual after FoT correction due to rFee redistribution.
+	// Pool: 0x40029f0cd32423b04f101d44458858395ef6385e (lfj_v1, GREEN/WAVAX)
+	"0x4d6fc3925fcadca6ad952afbd649ec44e756b000": func(amount *big.Int) *big.Int {
+		tFee := new(big.Int).Mul(amount, big.NewInt(1))
+		tFee.Div(tFee, big.NewInt(100))
+		tTeam := new(big.Int).Mul(amount, big.NewInt(3))
+		tTeam.Div(tTeam, big.NewInt(100))
+		return tFee.Add(tFee, tTeam)
+	},
+
 	// BYAS: fee = amount * 30 / 1000
 	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(30))
@@ -173,6 +187,16 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// pool 0xdf4eb13a7dd25d0086be88a0c99a8b772ddd0db3 (lfj_v1, USDC.e/Pollen)
 	// ~3.09% observed mismatch matches 1/(1-0.03) ratio exactly.
 	"0xc118d77baf86a93ec41d867675c48c98b19953fd": fotPct(3),
+
+	// Hamster (HAM): fee = tAmount.div(100).mul(2) (div-then-mul, 2% reflection tax)
+	// _getTValues: tFee = tAmount.div(100).mul(2); hardcoded, no exemptions.
+	// Residual ~26 ppm from reflection rate drift — within tolerance.
+	// Pool: 0x1e41a42bd47ea44c09b01e06d498164159e3d0f3 (lfj_v1, WAVAX/HAM)
+	"0xcbcc61f7a0b39512a6f986ddf174caf7232a0808": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Div(amount, big.NewInt(100))
+		fee.Mul(fee, big.NewInt(2))
+		return fee
+	},
 
 	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
 	// noTaxable=false for ALL DEX pairs — the fee IS applied during swaps.

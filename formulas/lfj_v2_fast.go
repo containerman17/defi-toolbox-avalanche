@@ -1,10 +1,7 @@
 package formulas
 
 import (
-	"fmt"
 	"math/big"
-	"os"
-	"strings"
 	"sync"
 
 	"github.com/ava-labs/libevm/crypto"
@@ -488,8 +485,6 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 		return big.NewInt(0)
 	}
 
-	debug := strings.Contains(state.PoolAddress, "50a0778bff") && swapForY
-
 	var amountInLeft, amountOut uint256.Int
 	amountInLeft.SetFromBig(amountIn)
 
@@ -505,22 +500,6 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 		state.VariableFeeParams.TimeOfLastUpdate,
 		blockTimestamp,
 	)
-	if debug {
-		fmt.Fprintf(os.Stderr, "  [DEBUG] pool=%s activeId=%d binStep=%d volRef=%d idRef=%d blockTs=%d timeLastUpdate=%d\n",
-			state.PoolAddress[:12], state.ActiveID, state.BinStep, volRef, idRef, blockTimestamp, state.VariableFeeParams.TimeOfLastUpdate)
-		fmt.Fprintf(os.Stderr, "  [DEBUG] baseFactor=%d varFeeControl=%d maxVolAcc=%d protocolShare=%d layout.params=%d layout.bins=%d\n",
-			state.StaticFeeParams.BaseFactor, state.StaticFeeParams.VariableFeeControl, state.StaticFeeParams.MaxVolatilityAccumulator, state.StaticFeeParams.ProtocolShare, layout.parametersSlot, layout.binsSlot)
-		// Also compute with big.Int version for comparison
-		origLayout := &lfjV2Layout{
-			parametersSlot: big.NewInt(int64(layout.parametersSlot)),
-			binsSlot:       big.NewInt(int64(layout.binsSlot)),
-			treeLevel0Slot: big.NewInt(int64(layout.treeLevel0Slot)),
-			treeLevel1Slot: big.NewInt(int64(layout.treeLevel1Slot)),
-			treeLevel2Slot: big.NewInt(int64(layout.treeLevel2Slot)),
-		}
-		bigOut := QuoteLFJV2Storage(read, state, origLayout, amountIn, swapForY, blockTimestamp)
-		fmt.Fprintf(os.Stderr, "  [DEBUG] bigInt result=%s\n", bigOut.String())
-	}
 
 	activeId := state.ActiveID
 	binStep := state.BinStep
@@ -567,18 +546,10 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 			var maxAmountIn uint256.Int
 			maxAmountIn.Add(&maxAmountInNoFee, &maxFee)
 
-			if debug {
-				fmt.Fprintf(os.Stderr, "  [DEBUG] bin=%d resX=%s resY=%s volAcc=%d totalFee=%s price=%s maxInNoFee=%s maxFee=%s maxIn=%s inLeft=%s\n",
-					activeId, reserveX.Dec(), reserveY.Dec(), volAcc, totalFee.Dec(), price.Dec(), maxAmountInNoFee.Dec(), maxFee.Dec(), maxAmountIn.Dec(), amountInLeft.Dec())
-			}
-
 			if !amountInLeft.Lt(&maxAmountIn) {
 				// Consume entire bin: amountInLeft >= maxAmountIn
 				amountInLeft.Sub(&amountInLeft, &maxAmountIn)
 				amountOut.Add(&amountOut, binReserveOut)
-				if debug {
-					fmt.Fprintf(os.Stderr, "  [DEBUG]   full consume: outAdded=%s newInLeft=%s\n", binReserveOut.Dec(), amountInLeft.Dec())
-				}
 			} else {
 				// Partial fill
 				fee := getFeeAmountFromU256(&amountInLeft, &totalFee)
@@ -596,9 +567,6 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 					out.Set(binReserveOut)
 				}
 
-				if debug {
-					fmt.Fprintf(os.Stderr, "  [DEBUG]   partial fill: fee=%s afterFee=%s out=%s\n", fee.Dec(), amountAfterFee.Dec(), out.Dec())
-				}
 				amountOut.Add(&amountOut, &out)
 				amountInLeft.Clear()
 			}

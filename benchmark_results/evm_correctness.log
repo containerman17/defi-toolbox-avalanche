@@ -145,3 +145,11 @@ time=2026-03-25_15:12 git=c6f7dfd result=99 match=6781 mismatch=41 formula_only=
 time=2026-03-25_15:12 git=c6f7dfd result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
 time=2026-03-25_15:13 git=c6f7dfd result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
 time=2026-03-25_15:13 git=c6f7dfd result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
+time=2026-03-25_15:14 git=61b79b5 result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
+time=2026-03-25_15:19 git=61b79b5 result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
+time=2026-03-25_15:19 git=61b79b5 result=99 match=6781 mismatch=41 formula_only=744 evm_only=124
+time=2026-03-25_15:23 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124
+time=2026-03-25_15:23 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124
+time=2026-03-25_15:25 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124
+time=2026-03-25_15:25 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124
+time=2026-03-25_15:26 git=61b79b5 result=99 match=6782 mismatch=40 formula_only=744 evm_only=124

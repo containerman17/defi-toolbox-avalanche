@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-25 — Full session results
+
+| Metric | Session start | Session end | Change |
+|--------|--------------|-------------|--------|
+| EVM time | 548ms | **66ms** | **8.3x faster** |
+| EVM calls | 528 | 117 | -78% |
+| Formula quotes | 7390 | 7564 | +2.4% |
+| Formula time | 155ms | 170ms | +10% (more pools) |
+| ms/pool | 0.225 | **0.122** | 1.8x faster |
+| Correctness | 98.2% | 99.5% | +1.3pp |
+| Mismatches | 112 | 27 | -76% |
+
 ## 2026-03-25 — V4 formula: 226 EVM calls eliminated (uninitialized pool handling)
 
 ### Problem

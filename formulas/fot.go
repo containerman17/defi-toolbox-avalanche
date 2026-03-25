@@ -35,6 +35,13 @@ func IsFotExemptInputPool(pool string) bool {
 	return FotExemptInputPools[pool]
 }
 
+// IsFotExemptOutputPool returns true if the pool is exempt from FoT on the output side only.
+// This covers tokens where fee is skipped when the pool is the sender (from == pool),
+// e.g. tokens using noTaxable[pool]=true which exempts the pool as a sender.
+func IsFotExemptOutputPool(pool string) bool {
+	return FotExemptOutputPools[pool]
+}
+
 // Helper: fee = amount * rate / 10000 (standard bps division)
 func fotBps(rate int64) func(*big.Int) *big.Int {
 	return func(amount *big.Int) *big.Int {
@@ -58,7 +65,10 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Tokens with exact Solidity math from source code analysis
 	// =====================================================================
 
-	// Good Bridging: fee = amount / 100 (1%, unconditional, amount*1/100)
+	// Good Bridging (GB): fee = tAmount.div(100) (integer div, 1%, unconditional)
+	// Reflection token: rFee redistribution causes tiny residual drift after FoT correction.
+	// Pool: 0x77eb05e7f557fe8003047fb3be690dc429c511ba (partyswap, GB/WAVAX), dir=1.
+	// Pool is NOT _isExcluded → participates in reflection; drift is within tolerance.
 	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": fotPct(1),
 
 	// SLED: fee = amount * 2 / 100
@@ -149,6 +159,20 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return tFee.Add(tFee, tTeam)
 	},
 
+	// AvaFOX (AFM): fee = amount*1/100 + amount*3/100 (reflection 1% + team 3%)
+	// _getValues calls _getTValues(tAmount, _taxFee=1, TeamFee=3) — TeamFee HARDCODED as 3,
+	// _teamFee state var is also 1 but _getValues always passes literal 3.
+	// Two separate Solidity divisions. No DEX pair exemption.
+	// Reflection token: ~2.35 PPM residual after FoT correction due to rFee redistribution.
+	// Pool: 0x4ea4440e35ed4194c777f0cf26a33298c77bb3c5 (lfj_v1, AFM/WAVAX)
+	"0x03ae7c5c942547772e1e0f01c04699ebf1cc9761": func(amount *big.Int) *big.Int {
+		tFee := new(big.Int).Mul(amount, big.NewInt(1))
+		tFee.Div(tFee, big.NewInt(100))
+		tTeam := new(big.Int).Mul(amount, big.NewInt(3))
+		tTeam.Div(tTeam, big.NewInt(100))
+		return tFee.Add(tFee, tTeam)
+	},
+
 	// BYAS: fee = amount * 30 / 1000
 	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(30))
@@ -190,7 +214,11 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x432d38f83a50ec77c409d086e97448794cf76dcf": fotBps(50),
 
 	// Pollen: fee = amount * totalFees / 100 (totalFees=3, confirmed via storage slot 23)
-	// pool 0xdf4eb13a7dd25d0086be88a0c99a8b772ddd0db3 (lfj_v1, USDC.e/Pollen)
+	// Fee gate: _isExcludedFromFees[from||to] — neither known pool is excluded.
+	// automatedMarketMakerPairs is NOT a fee gate (only governs sell-tx-limit).
+	// Applies to all Pollen pools:
+	//   pool 0xdf4eb13a7dd25d0086be88a0c99a8b772ddd0db3 (lfj_v1, USDC.e/Pollen)
+	//   pool 0x2742e6d7bf96154cacca20a6d83c37af615e5d98 (lfj_v1, WAVAX/Pollen)
 	// ~3.09% observed mismatch matches 1/(1-0.03) ratio exactly.
 	"0xc118d77baf86a93ec41d867675c48c98b19953fd": fotPct(3),
 
@@ -214,7 +242,10 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	},
 
 	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
-	// noTaxable=false for ALL DEX pairs — the fee IS applied during swaps.
+	// noTaxable[pool] is set per-pool by owner. Uniswap_v2 pool 0x661368c5bd has noTaxable=true
+	// (pool is sender → output side exempt); sushiswap pools 0x4e29f0aa and 0xb6eda80d are NOT exempt.
+	// Fee gate: !noTaxable[sender] — applies on input side (user sends to pool) for all pools,
+	// but NOT on output side for the uniswap_v2 pool (see FotExemptOutputPools).
 	"0xca3130f29e296f1966e5999889d0824a9032ee97": func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Div(amount, big.NewInt(100))
 		fee.Mul(fee, big.NewInt(5))
@@ -269,7 +300,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Confirmed: formula*(1-0.10) = evm to within 1 wei.
 	"0x9b413747801cb9def889bc865fe43c2a65585fb1": fotPct(10),
 
-	// SHIBX: fee = tAmount * 10 / 100 (10% reflection tax, hardcoded)
+	// SHIBX (SHIBAVAX): fee = tAmount.mul(10).div(100) (10% reflection tax, hardcoded)
+	// _getTValues: tFee = tAmount * 10 / 100 — unconditional, no DEX pair exemption.
+	// Pool is NOT in _isExcluded (confirmed on-chain); tradeLimit=0 (no cap).
+	// Residual PPM-level drift on dir=1 from _reflectFee reducing _rTotal between
+	// formula eval and EVM execution — inherent SafeMoon reflection redistribution,
+	// cannot be fixed with a static fee.
+	// Pool: 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
 	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
 
 	// Raini Studios Token (RST): fee = (amount * transferFeeBasisPoints) / 10000
@@ -397,14 +434,26 @@ var FotExemptInputPools = map[string]bool{
 	"0x07280f32830e3a1ca7b535b603b09890e692eaf6": true, // bCASH/WAVAX pangolin_v2
 }
 
+// FotExemptOutputPools lists pool addresses where FoT should NOT be applied on the
+// OUTPUT side only. This occurs when a token's transfer() skips fees when `from` is
+// the pool (i.e., noTaxable[pool]=true), so buying OUT of the pool is fee-free, but
+// selling INTO the pool (user is sender) still incurs the fee on the input side.
+var FotExemptOutputPools = map[string]bool{
+	// ALAQ (0xca31...): noTaxable[pool]=true — pool is sender on output → no output fee.
+	// Fee still applies when user sends ALAQ into the pool (dir=1, input side).
+	// sushiswap pools 0x4e29f0aa and 0xb6eda80d are NOT in noTaxable → not exempt.
+	"0x661368c5bdecd87475aae157b9ea718c0450125f": true, // ALAQ/WAVAX uniswap_v2
+}
+
 // FotExemptPools lists pool addresses where FoT should NOT be applied even though
 // one of their tokens is in the FoT list. This happens when the token's transfer
 // function checks for specific DEX pair addresses (e.g., isAutomatedMarketMakerPair)
 // and the pool is not registered.
 var FotExemptPools = map[string]bool{
 	// BigRed (0x87bb...): only charges fee on its JoeV2Pair (0x7ef8e0af, lfj_v1).
-	// The V3 pool is not JoeV2Pair, so no fee is charged.
+	// Any other pool is not JoeV2Pair, so no fee is charged.
 	"0x97fe71c72037d307d69694e41f20d97868c848ec": true, // BigRed/USDC uniswap_v3
+	"0x9514c20a3c020ba4bc21f565e92aa2aa2875e6be": true, // BigRed/WAVAX uniswap_v2
 
 	// HERESY (BulletCollection, 0x432d...): only charges fee on registered AMM pairs.
 	// Pharaoh V1/V3 pairs are not registered in the swapManager.
@@ -430,6 +479,10 @@ var FotExemptPools = map[string]bool{
 	"0x2064f67ba4362422eaae6ba7689c0cb0fa82c961": true, // HEFE/WAVAX pharaoh_v1
 	"0x7a02148e4af381735faca391cd2d781b8f1ed272": true, // HEFE/WAVAX pharaoh_v3
 	"0x9b214d9c2872b5cd33f548aadb9c5396fa7e8546": true, // HEFE/USDC pharaoh_v3
+
+	// HEFE (0x18e3...): lfj_v1 HEFE/CANS pool not registered in isLiquidityPool — no fee applied.
+	// Only one LP (0xe11e871d) is registered; isLiquidityPool(this pool) = false confirmed on-chain.
+	"0xb9509de4034e1c7d23c07f5da785472eb4ef53e4": true, // HEFE/CANS lfj_v1
 }
 
 // FotRebasingTokens lists tokens that gain value over time (negative "tax"),

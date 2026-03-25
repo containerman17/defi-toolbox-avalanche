@@ -11,3 +11,11 @@ time=2026-03-25_06:49 git=40b0dcd result=100 match=3498 mismatch=11 formula_only
 time=2026-03-25_06:56 git=40b0dcd result=96 match=3356 mismatch=153 formula_only=198 evm_only=1777
 time=2026-03-25_06:57 git=40b0dcd result=100 match=3498 mismatch=11 formula_only=198 evm_only=1777
 time=2026-03-25_07:13 git=889c145 result=99 match=3477 mismatch=32 formula_only=198 evm_only=1777
+time=2026-03-25_09:19 git=0931614 result=96 match=3485 mismatch=154 formula_only=222 evm_only=1647
+time=2026-03-25_09:20 git=0931614 result=96 match=3485 mismatch=154 formula_only=222 evm_only=1647
+time=2026-03-25_09:20 git=0931614 result=96 match=3503 mismatch=136 formula_only=222 evm_only=1647
+time=2026-03-25_09:23 git=0931614 result=96 match=3503 mismatch=136 formula_only=222 evm_only=1647
+time=2026-03-25_09:26 git=784b39f result=96 match=3510 mismatch=129 formula_only=222 evm_only=1647
+time=2026-03-25_09:27 git=784b39f result=96 match=3510 mismatch=129 formula_only=222 evm_only=1647
+time=2026-03-25_09:41 git=f01620a result=98 match=3471 mismatch=71 formula_only=216 evm_only=1744
+time=2026-03-25_09:44 git=f01620a result=98 match=3471 mismatch=71 formula_only=216 evm_only=1744

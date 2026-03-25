@@ -56,7 +56,24 @@
 | + CallState (thin overlay) | 396 | 331 | 0.351 |
 | + CallerContract (JUMPDEST) | 396 | 331 | 0.351 |
 | + Pool quoter structs | 396 | **48** | **0.335** |
-| **Total improvement** | **1.6x** | **6.9x** | **2.4x** |
+| + Registry refresh (Go discover) | 396 | **70** | **0.323** |
+| **Total improvement** | **1.6x** | **4.7x** | **2.5x** |
+
+### Pure Go formula discovery (cmd/discover)
+- Replaces JS-based `discover_formulas.ts` — no Node.js, no IPC
+- Connects to state-server, quotes all pools via EVM, writes registry
+- Merge mode: keeps existing valid entries, only adds new or upgrades -1 → valid
+- Uses starter tokens (USDC/USDT/WAVAX) for quoting — matches JS behavior
+- Registry refresh: 131 pools upgraded from invalid to valid formula IDs
+
+### Final benchmark (4000 pools, single-threaded)
+
+| Metric | EVM-only | With formulas | Savings |
+|--------|----------|---------------|---------|
+| Total time | 3551ms | **1117ms** | **69%** |
+| ms/pool | 0.888 | **0.323** | **2.7x** |
+| Formula time | — | 70ms | — |
+| EVM time | 3551ms | 1047ms | — |
 
 ### Profiling insights
 - **EVM**: 98% of CPU in EVMInterpreter.Run (opcode dispatch, stack ops). Our StateDB <5%. ~400µs/call is the libevm interpreter floor.

@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { createQuoter, loadPools, buildStateOverrides } from "../sdk.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REGISTRY_PATH = join(__dirname, "../go/formulas/registry.txt");
+const REGISTRY_PATH = join(__dirname, "../../formulas/registry.txt");
 const STATE_SERVER = "ws://127.0.0.1:7449";
 
 const doWrite = process.argv.includes("--write");

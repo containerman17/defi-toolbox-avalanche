@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-25 — IMPORTANT: dishonest benchmark fixed
+
+### What happened
+The speed benchmark was silently skipping EVM for pools where the formula quoter
+returned `(nil, false)`. This made the benchmark report **0 EVM calls, 0ms EVM time**
+when in reality **331 pools still needed EVM quoting** at a cost of **154ms**.
+
+The `deadPoolQuoter` pattern — caching a no-op quoter for pools where formula
+construction fails — was correct for preventing re-construction attempts. But the
+benchmark treated `(nil, false)` as "this pool doesn't exist" instead of "this pool
+needs EVM fallback." It counted the pool as `FailCount` and skipped the EVM call,
+making the speed numbers look artificially good.
+
+### The honest numbers
+| What was reported | What was real |
+|-------------------|---------------|
+| EVM: 0 calls, 0ms | EVM: **331 calls, 154ms** |
+| Formula: 7566, 161ms | Formula: **7669, 199ms** |
+| Total: 0.096 ms/pool | Total: **0.353 ms/pool** (formula + EVM) |
+
+### Lesson
+Speed and correctness benchmarks must be the same test. If a pool has real liquidity
+that only EVM can quote, the speed benchmark must include that EVM call — otherwise
+you're measuring the speed of ignoring work, not the speed of doing it.
+
+### Fix
+Removed the `continue` after `(nil, false)` in the hot pass. Formula failures now
+fall through to EVM, same as the correctness benchmark. The `deadPoolQuoter` still
+prevents re-construction, but the EVM call runs and is timed.
+
 ## 2026-03-25 — reflectionTokenModel: exact _rTotal math for all RFI tokens
 
 ### Achievement

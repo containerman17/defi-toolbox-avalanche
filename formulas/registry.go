@@ -222,7 +222,12 @@ func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, poo
 		if err != nil || dodoState == nil {
 			return nil, false
 		}
-		out := QuoteDODO(dodoState, amountIn.ToBig(), zeroForOne)
+		// Convert zeroForOne to sellBase using the actual baseToken address.
+		// zeroForOne means tokenIn is the lower address (token0).
+		// sellBase is true when tokenIn == baseToken.
+		tokenInHex := strings.ToLower(tokenIn.Hex())
+		sellBase := strings.EqualFold(tokenInHex, dodoState.BaseToken)
+		out := QuoteDODO(dodoState, amountIn.ToBig(), sellBase)
 		if out == nil || out.Sign() <= 0 {
 			return nil, false
 		}

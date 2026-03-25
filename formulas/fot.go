@@ -185,6 +185,15 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return new(big.Int).Div(amount, big.NewInt(14))
 	},
 
+	// EverRise: fee = amount * liquidityFee / 100 (liquidityFee=5, mutable up to 10)
+	"0xc17c30e98541188614df99239cabd40280810ca3": fotPct(5),
+
+	// Red Pepe (RPEPE): fee = value * taxRate / 10000 (taxRate=69, mutable)
+	"0xb36faf341c7817d681f23bcedbd3d85467e5ad9f": fotBps(69),
+
+	// BABYTOKEN: fee = amount * totalFees / 100 (totalFees=6, mutable up to 25)
+	"0x50ad50fce988bcbf0d11f0c633e34c3510efbe54": fotPct(6),
+
 	// =====================================================================
 	// Tokens not yet source-analyzed — using standard bps approximation.
 	// These are tokens that showed consistent bps rates across multiple pools.
@@ -277,9 +286,6 @@ var FotExemptPools = map[string]bool{
 	// BulletCollection (0xf84b...): only charges fee on registered AMM pairs.
 	// Pool 0x3c4beea7 (lfj_v1) is NOT registered as an AMM pair.
 	"0x3c4beea709e9a46f869ef5c1e9b18fd2195bd87f": true, // BulletCollection/USDC lfj_v1
-
-	// ALAQ (0xca31...): pool 0x661368c5 is noTaxable for this pair — no fee applied.
-	"0x661368c5bdecd87475aae157b9ea718c0450125f": true, // ALAQ/WAVAX uniswap_v2
 
 	// HEFE (0x18e3...): pharaoh pools are not registered LPs — no fee applied.
 	"0xc4fa66b4839af7379a4fcbe5dd048b18fe99a2ac": true, // HEFE/USDC pharaoh_v1

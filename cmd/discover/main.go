@@ -341,8 +341,67 @@ func main() {
 		registry.SetFormulaID(p.Address, 0)
 		directResults = append(directResults, poolResult{p.Address, 0, true})
 	}
+	// Direct registry for V3/Pharaoh V3 pools: check slot 0 for sqrtPriceX96
+	slot0 := common.HexToHash("0x0")
+	for _, p := range pools {
+		fid, ok := formulaMap[p.PoolType]
+		if !ok || fid != 2 || len(p.Tokens) < 2 { continue } // V3 only
+		if _, known := registry.GetFormulaID(p.Address); known { continue }
+		val := state.GetState(p.Address, slot0)
+		if val == (common.Hash{}) { continue }
+		// slot0 has sqrtPriceX96 in lower 160 bits — check if non-zero
+		data := val.Bytes()
+		hasPrice := false
+		for _, b := range data[12:32] { // lower 160 bits
+			if b != 0 { hasPrice = true; break }
+		}
+		if !hasPrice { continue }
+		registry.SetFormulaID(p.Address, 2)
+		directResults = append(directResults, poolResult{p.Address, 2, true})
+	}
+
+	// Direct registry for Pharaoh V1: check if pool has reserves via known slots
+	for _, p := range pools {
+		fid, ok := formulaMap[p.PoolType]
+		if !ok || fid != 1 || len(p.Tokens) < 2 { continue }
+		if _, known := registry.GetFormulaID(p.Address); known { continue }
+		// Pharaoh V1 uses various reserve slots — try common ones
+		found := false
+		for _, s := range []int{8, 9, 10, 11} {
+			val := state.GetState(p.Address, common.BigToHash(big.NewInt(int64(s))))
+			if val != (common.Hash{}) {
+				data := val.Bytes()
+				for _, b := range data[4:32] {
+					if b != 0 { found = true; break }
+				}
+				if found { break }
+			}
+		}
+		if !found { continue }
+		registry.SetFormulaID(p.Address, 1)
+		directResults = append(directResults, poolResult{p.Address, 1, true})
+	}
+
+	// Direct registry for Algebra: check slot 2 (globalState)
+	slot2 := common.HexToHash("0x2")
+	for _, p := range pools {
+		fid, ok := formulaMap[p.PoolType]
+		if !ok || fid != 4 || len(p.Tokens) < 2 { continue }
+		if _, known := registry.GetFormulaID(p.Address); known { continue }
+		val := state.GetState(p.Address, slot2)
+		if val == (common.Hash{}) { continue }
+		data := val.Bytes()
+		hasState := false
+		for _, b := range data[12:32] {
+			if b != 0 { hasState = true; break }
+		}
+		if !hasState { continue }
+		registry.SetFormulaID(p.Address, 4)
+		directResults = append(directResults, poolResult{p.Address, 4, true})
+	}
+
 	if len(directResults) > 0 {
-		fmt.Fprintf(os.Stderr, "[discover] directly registered %d V2 pools from slot 8 reserves\n", len(directResults))
+		fmt.Fprintf(os.Stderr, "[discover] directly registered %d pools from storage slots\n", len(directResults))
 	}
 
 	// Filter to formula-eligible types

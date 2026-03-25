@@ -777,6 +777,7 @@ var pharaohV3Pools = map[string]bool{
 	"0xb0336b14d76d373b9ec711efef67a5922e0cad62": true,
 	"0xb05a07651795a8172ae322263f4b04877f40eeeb": true,
 	"0xb0a8a2b8165adc737a709dfdbb887de909a21faa": true,
+	"0xb0b00adc20a49ff0a939a76cab70b32fab90fe68": true,
 	"0xb0ea1afe59237734c9c9868128e775c702bdc70c": true,
 	"0xb1026d2184e3288d180112cb7e96f40382ecf747": true,
 	"0xb137ceec8d32dba1ee4fc85c32800410d30b044e": true,

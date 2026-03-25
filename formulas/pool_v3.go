@@ -433,3 +433,4 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 	next := (compressed + (255 - int(bitPos))) * int(p.tickSpacing)
 	return int32(next), false
 }
+

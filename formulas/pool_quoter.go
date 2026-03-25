@@ -51,7 +51,19 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	formulaID, known := pm.registry.GetFormulaID(pool)
-	if !known || formulaID < 0 {
+	if !known {
+		poolHexLower := strings.ToLower(pool.Hex())
+		// Check lfjV2Registry as fallback — many LFJ V2 pools are not in registry.txt
+		if _, inLFJ := lfjV2Registry[poolHexLower]; inLFJ {
+			formulaID = FormulaLFJV2
+		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
+			// V3 pool known to v3PoolFees but missing from registry.txt
+			formulaID = FormulaV3
+		} else {
+			return nil
+		}
+	}
+	if formulaID < 0 {
 		return nil
 	}
 
@@ -114,8 +126,14 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			token0 = tokens[0]
 		}
 		if p := newDODOPool(pool, pm.reader, token0); p != nil { return wrapAndCache(p) }
+	case FormulaLFJV2:
+		if hasTokens {
+			if p := newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1]); p != nil { return wrapAndCache(p) }
+		}
 	case FormulaV4:
 		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+	case FormulaBalancerV3:
+		if p := newBalancerV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}
 	return nil
 }

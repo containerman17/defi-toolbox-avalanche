@@ -382,21 +382,25 @@ var (
 
 // lfjV2DetectLayout detects the storage layout by reading _parameters from slot 3 or 4.
 // Returns the layout and the decoded parameters value.
+//
+// For V2.1/V2.2 pools (the only ones in lfjV2Registry), the _parameters slot packs
+// activeId at bits 232-255. Valid pools have activeId in (0, 0xFFFFFF). Dead pools
+// that have been fully drained may have activeId=0 but retain non-zero fee params
+// (baseFactor != 0). When both layouts show activeId=0, we fall back to Layout A
+// using baseFactor as a tiebreaker. If baseFactor is also 0 on slot 3, try slot 4.
+// If all else fails, default to Layout A (most common, ~74% of pools) with a zero
+// _parameters value — the resulting state will have activeId=0 and produce zero output.
 func lfjV2DetectLayout(read StateReader, poolAddress string) (*lfjV2Layout, *big.Int, error) {
 	// Try Layout A first (slot 3) - most common (~74%)
 	val, err := read(poolAddress, lfjV2LayoutA.parametersSlot)
 	if err != nil {
 		return nil, nil, err
 	}
-	v := new(big.Int).SetBytes(val[:])
-	activeId := uint32((v.Uint64() >> 40) & 0xFFFFFF) // rough check: activeId at bits 232
-	// Need to check higher bits since activeId is at bits 232-255
 	vBig := new(big.Int).SetBytes(val[:])
-	activeIdBig := new(big.Int).Rsh(vBig, 232)
-	activeIdBig.And(activeIdBig, big.NewInt(0xFFFFFF))
-	activeId = uint32(activeIdBig.Uint64())
+	activeIdBig := new(big.Int).And(new(big.Int).Rsh(vBig, 232), big.NewInt(0xFFFFFF))
+	activeIdA := uint32(activeIdBig.Uint64())
 
-	if activeId > 0 && activeId < 0xFFFFFF {
+	if activeIdA > 0 && activeIdA < 0xFFFFFF {
 		return &lfjV2LayoutA, vBig, nil
 	}
 
@@ -405,16 +409,29 @@ func lfjV2DetectLayout(read StateReader, poolAddress string) (*lfjV2Layout, *big
 	if err != nil {
 		return nil, nil, err
 	}
-	vBig = new(big.Int).SetBytes(val[:])
-	activeIdBig = new(big.Int).Rsh(new(big.Int).SetBytes(val[:]), 232)
-	activeIdBig.And(activeIdBig, big.NewInt(0xFFFFFF))
-	activeId = uint32(activeIdBig.Uint64())
+	vBigB := new(big.Int).SetBytes(val[:])
+	activeIdBig = new(big.Int).And(new(big.Int).Rsh(vBigB, 232), big.NewInt(0xFFFFFF))
+	activeIdB := uint32(activeIdBig.Uint64())
 
-	if activeId > 0 && activeId < 0xFFFFFF {
-		return &lfjV2LayoutB, vBig, nil
+	if activeIdB > 0 && activeIdB < 0xFFFFFF {
+		return &lfjV2LayoutB, vBigB, nil
 	}
 
-	return nil, nil, fmt.Errorf("could not detect LFJ V2 layout for %s (activeId=%d)", poolAddress, activeId)
+	// Both layouts show activeId=0 or 0xFFFFFF — pool may be dead/empty.
+	// Use baseFactor (bits 0-15) as a tiebreaker: the slot with non-zero baseFactor
+	// is more likely to be the real _parameters slot.
+	baseFactorA := uint16(new(big.Int).And(vBig, big.NewInt(0xFFFF)).Uint64())
+	baseFactorB := uint16(new(big.Int).And(vBigB, big.NewInt(0xFFFF)).Uint64())
+	if baseFactorA != 0 {
+		return &lfjV2LayoutA, vBig, nil
+	}
+	if baseFactorB != 0 {
+		return &lfjV2LayoutB, vBigB, nil
+	}
+
+	// Both fee params are zero — completely uninitialised or edge case.
+	// Default to Layout A; activeId=0 will produce zero output safely.
+	return &lfjV2LayoutA, vBig, nil
 }
 
 // lfjV2DecodeParameters extracts all parameters from the packed _parameters bytes32.

@@ -12,6 +12,28 @@
 | Correctness | 98.2% | 99.5% | +1.3pp |
 | Mismatches | 112 | 27 | -76% |
 
+## 2026-03-25 — Pharaoh V1: 22 → 14 EVM calls (42 missing registry entries + fallback)
+
+### Problem
+284 Pharaoh V1 pools, 546 formula quotes succeeded, but 22 EVM calls remained (11 pools).
+
+### Root causes and fixes
+| Cause | Pools | Fix |
+|-------|-------|-----|
+| Missing from `pharaoh_v1_registry.go` | 42 | Probed on-chain via `metadata()` + `getAmountOut()` + storage slot detection; added all 42 entries |
+| Marked `-1` in `registry.txt` with no fallback path | 32 | Added Pharaoh V1 fallback in `PoolManager.Get()`: if pool is in `pharaohV1Registry`, use `FormulaPharaohV1` regardless of registry status. Also fixed 32 entries from `-1` to `1` in `registry.txt` |
+| Fee=0 detected incorrectly (was 19 bps) | 1 | Fixed fee for `0x580798fa...` (factory-based fee not readable from pool storage) |
+
+### Remaining 14 EVM calls (7 pools)
+- 5 pools created after state server snapshot (block 81M+ vs 80M) — no code/storage available
+- 2 pools with FoT/rebasing tokens (correctly excluded from formula path)
+
+### Files changed
+- `formulas/pharaoh_v1_registry.go`: 430 → 472 entries (+42 pools)
+- `formulas/pool_quoter.go`: Added `pharaohV1Registry` fallback for `-1` pools
+- `formulas/registry.txt`: 32 Pharaoh V1 pools changed from `-1` to `1`
+- `evm-quoter/scripts/probe_pharaoh_v1.ts`: New script for probing missing pools
+
 ## 2026-03-25 — V4 formula: 226 EVM calls eliminated (uninitialized pool handling)
 
 ### Problem

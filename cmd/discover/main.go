@@ -41,6 +41,7 @@ var formulaMap = map[int]int{
 	7: 1, // pharaoh_v1 → Pharaoh V1
 	8: 0, // v2 family → V2 constant product
 	9: 6, // uniswap_v4 → V4 (singleton PoolManager)
+	6: 7, // balancer_v3 → Balancer V3 (Weighted + Stable via Vault)
 }
 
 var formulaNames = map[int]string{
@@ -51,6 +52,7 @@ var formulaNames = map[int]string{
 	4:  "Algebra V1 Integral",
 	5:  "DODO PMM",
 	6:  "V4 PoolManager",
+	7:  "Balancer V3",
 	-1: "invalid (FoT/broken)",
 }
 
@@ -312,12 +314,18 @@ func main() {
 		if poolIdHex != "" && tickSpacing != 0 {
 			var poolId [32]byte
 			copy(poolId[:], common.FromHex(poolIdHex))
-			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0)
+			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0, common.Address{})
 			v4Count++
 		}
 	}
 	if v4Count > 0 {
 		fmt.Fprintf(os.Stderr, "[discover] registered %d V4 pools\n", v4Count)
+	}
+
+	// Register Balancer V3 pools by reading parameters from EVM/storage
+	balV3Count := registerBalancerV3PoolsFromState(pools, state, cfg)
+	if balV3Count > 0 {
+		fmt.Fprintf(os.Stderr, "[discover] registered %d Balancer V3 pools\n", balV3Count)
 	}
 
 	type poolResult struct {
@@ -629,4 +637,79 @@ func loadTokenAmounts() map[common.Address]*uint256.Int {
 		}
 	}
 	return result
+}
+
+// registerBalancerV3PoolsFromState registers Balancer V3 pools by reading parameters
+// from pool contract storage/EVM. Returns the count of registered pools.
+func registerBalancerV3PoolsFromState(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig) int {
+	count := 0
+	for _, p := range pools {
+		if p.PoolType != 6 || len(p.Tokens) < 2 {
+			continue
+		}
+		// Only handle 2-token pools for now (>2 tokens need more complex index mapping)
+		if len(p.Tokens) != 2 {
+			continue
+		}
+
+		poolAddr := strings.ToLower(p.Address.Hex())
+
+		// Try getAmplificationParameter() → selector 0x6daccffa
+		// Returns (uint256 value, bool isUpdating, uint256 precision)
+		ampSelector := common.FromHex("0x6daccffa")
+		ampResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, ampSelector)
+		if err == nil && len(ampResult) >= 96 {
+			// StablePool: parse amp value
+			ampVal := new(big.Int).SetBytes(ampResult[0:32])
+			if ampVal.Sign() > 0 {
+				info := &formulas.BalancerV3PoolInfo{
+					PoolType:  formulas.BalV3Stable,
+					NumTokens: len(p.Tokens),
+					Tokens:    p.Tokens,
+					Amp:       ampVal,
+				}
+				formulas.RegisterBalancerV3Pool(poolAddr, info)
+				count++
+				continue
+			}
+		}
+
+		// Try getNormalizedWeights() → selector 0xf89f27ed
+		// Returns uint256[] (dynamic array of weights)
+		weightsSelector := common.FromHex("0xf89f27ed")
+		weightsResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, weightsSelector)
+		if err == nil && len(weightsResult) >= 96 {
+			// WeightedPool: parse weights array
+			// ABI: offset (32 bytes) + length (32 bytes) + length * 32 bytes
+			if len(weightsResult) >= 64 {
+				numWeights := new(big.Int).SetBytes(weightsResult[32:64]).Int64()
+				if numWeights == int64(len(p.Tokens)) && len(weightsResult) >= 64+int(numWeights)*32 {
+					weights := make([]*big.Int, numWeights)
+					allValid := true
+					for i := int64(0); i < numWeights; i++ {
+						off := 64 + i*32
+						weights[i] = new(big.Int).SetBytes(weightsResult[off : off+32])
+						if weights[i].Sign() <= 0 {
+							allValid = false
+							break
+						}
+					}
+					if allValid {
+						info := &formulas.BalancerV3PoolInfo{
+							PoolType:  formulas.BalV3Weighted,
+							NumTokens: len(p.Tokens),
+							Tokens:    p.Tokens,
+							Weights:   weights,
+						}
+						formulas.RegisterBalancerV3Pool(poolAddr, info)
+						count++
+						continue
+					}
+				}
+			}
+		}
+
+		// If neither worked, it's likely a GyroECLP or other exotic pool type — skip
+	}
+	return count
 }

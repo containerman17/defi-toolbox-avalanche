@@ -272,6 +272,9 @@ func main() {
 	// Register V4 pools from ExtraData
 	registerV4Pools(pools)
 
+	// Register Balancer V3 pools from state
+	registerBalancerV3Pools(pools, state, cfg)
+
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
 
@@ -353,7 +356,7 @@ func main() {
 						match++ // within 0.01 PPM tolerance
 					} else {
 						mismatch++
-						if mismatch <= 10 {
+						if mismatch <= 200 {
 							fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
 								p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
 						}
@@ -712,16 +715,14 @@ func registerV4Pools(pools []pathfinder.Pool) {
 		idBytes := common.FromHex(poolIdHex)
 		copy(poolId[:], idBytes)
 
-		// Arena hook pools have dynamic fees
 		var hookFeePpm uint32
-		if strings.EqualFold(hooks, "0xe32a5d788c568fc5a671255d17b618e70552e044") {
-			// Arena hook — fee comes from the hook contract, we approximate with lpFee
-			// This is not exact but gets us coverage
-			hookFeePpm = 0
+		var hooksAddr common.Address
+		if hooks != "" {
+			hooksAddr = common.HexToAddress(hooks)
 		}
 
 		poolAddr := strings.ToLower(p.Address.Hex())
-		formulas.RegisterV4Pool(poolAddr, poolId, tickSpacing, fee, hookFeePpm)
+		formulas.RegisterV4Pool(poolAddr, poolId, tickSpacing, fee, hookFeePpm, hooksAddr)
 		count++
 	}
 	if count > 0 {
@@ -762,6 +763,75 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 			cs.Reset()
 			evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 		}
+	}
+}
+
+// registerBalancerV3Pools discovers and registers Balancer V3 pool parameters via EVM calls.
+func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig) {
+	count := 0
+	for _, p := range pools {
+		if p.PoolType != 6 || len(p.Tokens) < 2 {
+			continue
+		}
+		// Only handle 2-token pools for now
+		if len(p.Tokens) != 2 {
+			continue
+		}
+
+		poolAddr := strings.ToLower(p.Address.Hex())
+
+		// Try getAmplificationParameter() → selector 0x6daccffa
+		ampSelector := common.FromHex("0x6daccffa")
+		ampResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, ampSelector)
+		if err == nil && len(ampResult) >= 96 {
+			ampVal := new(big.Int).SetBytes(ampResult[0:32])
+			if ampVal.Sign() > 0 {
+				info := &formulas.BalancerV3PoolInfo{
+					PoolType:  formulas.BalV3Stable,
+					NumTokens: len(p.Tokens),
+					Tokens:    p.Tokens,
+					Amp:       ampVal,
+				}
+				formulas.RegisterBalancerV3Pool(poolAddr, info)
+				count++
+				continue
+			}
+		}
+
+		// Try getNormalizedWeights() → selector 0xf89f27ed
+		weightsSelector := common.FromHex("0xf89f27ed")
+		weightsResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, weightsSelector)
+		if err == nil && len(weightsResult) >= 96 {
+			if len(weightsResult) >= 64 {
+				numWeights := new(big.Int).SetBytes(weightsResult[32:64]).Int64()
+				if numWeights == int64(len(p.Tokens)) && len(weightsResult) >= 64+int(numWeights)*32 {
+					weights := make([]*big.Int, numWeights)
+					allValid := true
+					for i := int64(0); i < numWeights; i++ {
+						off := 64 + i*32
+						weights[i] = new(big.Int).SetBytes(weightsResult[off : off+32])
+						if weights[i].Sign() <= 0 {
+							allValid = false
+							break
+						}
+					}
+					if allValid {
+						info := &formulas.BalancerV3PoolInfo{
+							PoolType:  formulas.BalV3Weighted,
+							NumTokens: len(p.Tokens),
+							Tokens:    p.Tokens,
+							Weights:   weights,
+						}
+						formulas.RegisterBalancerV3Pool(poolAddr, info)
+						count++
+						continue
+					}
+				}
+			}
+		}
+	}
+	if count > 0 {
+		fmt.Fprintf(os.Stderr, "[benchmark] registered %d Balancer V3 pools\n", count)
 	}
 }
 

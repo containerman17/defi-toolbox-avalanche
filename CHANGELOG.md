@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-25 — Fix: 30 V3 pools falling through to EVM (60 calls, ~310ms)
+
+### Root cause
+30 V3 pools (28 pharaoh_v3, 2 uniswap_v3) were in the pool collector's top 4000
+and in v3PoolFees, but missing from registry.txt. PoolManager.Get() returned nil
+because GetFormulaID() found no entry, causing 60 EVM calls (30 pools x 2 directions).
+
+### Fix
+- Added v3PoolFees fallback in PoolManager.Get(): if a pool is not in registry.txt
+  but IS in v3PoolFees, auto-assign FormulaV3 (same pattern as existing lfjV2Registry fallback)
+- Added 1 missing pool (0xb0b00adc20a49ff0a939a76cab70b32fab90fe68) to v3PoolFees
+  (fee=20000, tickSpacing=200) and pharaohV3Pools — confirmed via on-chain RPC calls
+- This converts 60 EVM calls (~310ms) to formula calls (~0.1ms)
+
+### Files changed
+- formulas/pool_quoter.go — v3PoolFees fallback in Get()
+- formulas/v3_registry.go — added missing pharaoh_v3 pool
+- formulas/pharaoh_v3_registry.go — added missing pharaoh_v3 pool
+
 ## 2026-03-25 — FoT fix: BigRed 5 missing FotExemptPools entries (lfj_v1 + lfj_v2)
 
 ### Pool 0xab043e1b1c (lfj_v1, formula 2): formula 2-3% LESS than EVM both directions

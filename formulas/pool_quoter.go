@@ -51,20 +51,22 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	formulaID, known := pm.registry.GetFormulaID(pool)
-	if !known {
-		poolHexLower := strings.ToLower(pool.Hex())
-		// Check lfjV2Registry as fallback — many LFJ V2 pools are not in registry.txt
+	poolHexLower := strings.ToLower(pool.Hex())
+	if !known || formulaID < 0 {
+		// Check lfjV2Registry as fallback — pools may be missing from registry.txt
+		// or marked -1 due to function-based formula direction bug (now fixed in struct path)
 		if _, inLFJ := lfjV2Registry[poolHexLower]; inLFJ {
 			formulaID = FormulaLFJV2
-		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
-			// V3 pool known to v3PoolFees but missing from registry.txt
-			formulaID = FormulaV3
+		} else if !known {
+			if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
+				formulaID = FormulaV3
+			} else {
+				return nil
+			}
 		} else {
+			// known but formulaID < 0, and not in lfjV2Registry
 			return nil
 		}
-	}
-	if formulaID < 0 {
-		return nil
 	}
 
 	// FoT: check if pool tokens require rebasing/formula-issue fallback

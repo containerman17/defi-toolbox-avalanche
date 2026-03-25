@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
 
@@ -14,7 +15,8 @@ type V4Pool struct {
 	poolId       [32]byte
 	tickSpacing  int32
 	hookFeePpm   uint32
-	swapFee      uint32 // pre-computed effective swap fee
+	lpFee        uint32 // from on-chain slot0 (LP fee in ppm, e.g. 500 = 0.05%)
+	protocolFee  uint32 // from on-chain slot0 (24-bit packed: lower 12 = 0→1, upper 12 = 1→0)
 	sqrtPriceX96 uint256.Int
 	tick         int32
 	liquidity    uint256.Int
@@ -38,15 +40,16 @@ func newV4Pool(addr common.Address, reader StorageReader) *V4Pool {
 		return reader(common.Address(a), common.Hash(slot)), nil
 	}
 
-	state, err := FetchV4StateFromBytes(bytesReader, info.poolId, info.tickSpacing, info.hookFeePpm)
+	// Read ArenaHook fee from storage if hooks == arenaHookAddress
+	hookFeePpm := info.hookFeePpm
+	if hookFeePpm == 0 && info.hooks == common.HexToAddress(arenaHookAddress) {
+		hookFeePpm = readArenaHookFee(reader, info.poolId)
+	}
+
+	state, err := FetchV4StateFromBytes(bytesReader, info.poolId, info.tickSpacing, hookFeePpm)
 	if err != nil || state.SqrtPriceX96.Sign() == 0 {
 		return nil
 	}
-
-	// Pre-compute effective swap fee (same as QuoteV4U256 does per-call)
-	// We use zeroForOne=true protocolFee; since most V4 pools have protocolFee=0
-	// and the fee is symmetric, this is fine for pre-computation.
-	// The Quote method recomputes per-direction anyway.
 
 	stateSlot := v4GetPoolStateSlot(info.poolId)
 	bitmapSlotBase := v4AddOffset32(stateSlot, v4TickBitmapOffset)
@@ -99,7 +102,9 @@ func newV4Pool(addr common.Address, reader StorageReader) *V4Pool {
 		addr:             addr,
 		poolId:           info.poolId,
 		tickSpacing:      info.tickSpacing,
-		hookFeePpm:       info.hookFeePpm,
+		hookFeePpm:       hookFeePpm,
+		lpFee:            state.LpFee,
+		protocolFee:      state.ProtocolFee,
 		bitmapWords:      bitmapWords,
 		tickLiquidityNet: tickLiquidityNet,
 	}
@@ -119,38 +124,19 @@ func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		return nil, false
 	}
 
-	// Build V4State from pre-loaded data for QuoteV4U256-style logic
-	// but using pre-loaded bitmaps/ticks instead of storage reads.
-
-	// Determine swap fee per-direction
-	// For V4 pools on Avalanche, protocolFee is typically 0, so swapFee = lpFee.
-	// We read protocolFee from state to be correct.
-	state := &V4State{
-		SqrtPriceX96: p.sqrtPriceX96.ToBig(),
-		Tick:         p.tick,
-		Liquidity:    p.liquidity.ToBig(),
-		TickSpacing:  p.tickSpacing,
-		PoolId:       p.poolId,
-		HookFeePpm:   p.hookFeePpm,
-	}
-
-	// We need protocolFee and lpFee to compute swapFee.
-	// Since we stored the full state at construction, re-read slot0 would be needed.
-	// For simplicity, use the pre-loaded state values from FetchV4StateFromBytes.
-	// The pool_v4 constructor already read these; store them in the struct.
-
+	// Determine swap fee per-direction using stored lpFee and protocolFee.
 	var protocolFee uint32
 	if zeroForOne {
-		protocolFee = state.ProtocolFee & 0xFFF
+		protocolFee = p.protocolFee & 0xFFF
 	} else {
-		protocolFee = (state.ProtocolFee >> 12) & 0xFFF
+		protocolFee = (p.protocolFee >> 12) & 0xFFF
 	}
 
 	var swapFee uint32
 	if protocolFee == 0 {
-		swapFee = p.swapFee // pre-stored lpFee
+		swapFee = p.lpFee
 	} else {
-		swapFee = protocolFee + p.swapFee - (protocolFee*p.swapFee)/uint32(v4MaxSwapFee)
+		swapFee = protocolFee + p.lpFee - (protocolFee*p.lpFee)/uint32(v4MaxSwapFee)
 	}
 
 	// Price limit
@@ -295,10 +281,11 @@ func (p *V4Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 
 // v4PoolInfo holds the parameters needed to construct a V4Pool.
 type v4PoolInfo struct {
-	poolId     [32]byte
+	poolId      [32]byte
 	tickSpacing int32
-	hookFeePpm uint32
-	lpFee      uint32
+	hookFeePpm  uint32
+	lpFee       uint32
+	hooks       common.Address
 }
 
 // v4PoolIds maps pool pseudo-address (lowercase hex) to pool parameters.
@@ -306,19 +293,44 @@ type v4PoolInfo struct {
 var v4PoolIds = map[string]*v4PoolInfo{}
 
 // RegisterV4Pool registers a V4 pool's parameters for construction.
-func RegisterV4Pool(poolAddress string, poolId [32]byte, tickSpacing int32, lpFee uint32, hookFeePpm uint32) {
+func RegisterV4Pool(poolAddress string, poolId [32]byte, tickSpacing int32, lpFee uint32, hookFeePpm uint32, hooks common.Address) {
 	v4PoolIds[poolAddress] = &v4PoolInfo{
 		poolId:      poolId,
 		tickSpacing: tickSpacing,
 		hookFeePpm:  hookFeePpm,
 		lpFee:       lpFee,
+		hooks:       hooks,
 	}
 }
 
-// newV4PoolFromInfo constructs a V4Pool from pre-registered info + StorageReader.
-// Used internally by newV4Pool.
+// readArenaHookFee reads the ArenaHook's total fee (pool-specific + protocol) from storage.
+// Returns the fee in ppm (parts per million), e.g. 2000 = 0.2%.
+func readArenaHookFee(reader StorageReader, poolId [32]byte) uint32 {
+	feeHelperAddr := common.HexToAddress(arenaFeeHelperAddr)
+
+	// Read poolIdToTotalFeePpm[poolId] from slot 3
+	// mapping slot = keccak256(key ++ slot)
+	slotPadded := common.LeftPadBytes(big.NewInt(3).Bytes(), 32)
+	data := make([]byte, 64)
+	copy(data[0:32], poolId[:])
+	copy(data[32:64], slotPadded)
+	mappingSlot := common.BytesToHash(crypto.Keccak256(data))
+	poolFeeRaw := reader(feeHelperAddr, mappingSlot)
+	poolFeePpm := new(big.Int).SetBytes(poolFeeRaw[:]).Uint64()
+
+	// Read protocolFeeSettings from slot 6
+	// Struct packing: recipient(address,160bits) | protocolFeePpm(uint16,16bits) | referralFeePpm(uint16,16bits)
+	slot6 := common.BigToHash(big.NewInt(6))
+	settingsRaw := reader(feeHelperAddr, slot6)
+	settingsVal := new(big.Int).SetBytes(settingsRaw[:])
+	// protocolFeePpm is at bits [160:176)
+	protocolFeePpm := new(big.Int).Rsh(settingsVal, 160)
+	protocolFeePpm.And(protocolFeePpm, big.NewInt(0xFFFF))
+
+	return uint32(poolFeePpm + protocolFeePpm.Uint64())
+}
+
 func init() {
 	// v4PoolManagerAddr is initialized in v4_u256.go init()
 	// v4PoolIds will be populated at runtime by RegisterV4Pool
-	_ = big.NewInt // suppress unused import if needed
 }

@@ -1,0 +1,5 @@
+[benchmark] initial_dump: block=80000000, 617710 storage, 10856 accounts
+[benchmark] registry: 8152 validated, 962 invalid
+[benchmark] pools: 10000
+[benchmark] registered 1019 V4 pools
+[correctness] comparing formula vs EVM for 10000 pools...

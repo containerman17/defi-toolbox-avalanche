@@ -30,8 +30,9 @@ const (
 	FormulaLFJV2     = 3  // LFJ V2 Liquidity Book (discrete bins)
 	FormulaAlgebra   = 4  // Algebra V1 Integral (dynamic fee CL)
 	FormulaDODO      = 5  // DODO PMM
-	FormulaV4        = 6  // Uniswap V4 (singleton PoolManager)
-	FormulaInvalid   = -1 // Do not use formula (FoT, broken, custom fee)
+	FormulaV4          = 6  // Uniswap V4 (singleton PoolManager)
+	FormulaBalancerV3  = 7  // Balancer V3 (Weighted + Stable pools via Vault singleton)
+	FormulaInvalid     = -1 // Do not use formula (FoT, broken, custom fee)
 )
 
 // Registry maps pool addresses to formula IDs.
@@ -256,8 +257,16 @@ func (r *Registry) dispatchFormula(readStorage StorageReader, formulaID int, poo
 		if err != nil || lfjState == nil {
 			return nil, false
 		}
+		// Map zeroForOne to swapForY using tokenX info from immutable registry.
+		// zeroForOne=true means selling token0 (lower address).
+		// swapForY=true means selling tokenX.
+		// They match only when tokenXIsToken0.
+		swapForY := zeroForOne
+		if imm, ok := lfjV2Registry[poolHex]; ok && !imm.TokenXIsToken0 {
+			swapForY = !zeroForOne
+		}
 		amtIn := amountIn.ToBig()
-		out := QuoteLFJV2Fast(stateReader, lfjState, layout, amtIn, zeroForOne, 0)
+		out := QuoteLFJV2Fast(stateReader, lfjState, layout, amtIn, swapForY, 0)
 		if out == nil || out.Sign() <= 0 {
 			return nil, false
 		}

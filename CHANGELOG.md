@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-03-25 — Pool quoter structs + EVM optimization
+
+### Pool quoter structs (formulas as stateful objects)
+- Architecture change: each pool is now a struct that reads state ONCE at construction time
+- `Quote(amountIn, zeroForOne)` is pure math — zero state access, zero keccak, zero map lookups
+- `PoolManager` handles lazy construction + contract-level invalidation via `Invalidate(addr)`
+- Implemented: V2Pool, V3Pool (with pre-scanned tick index), PharaohV1Pool, DODOPool
+- Not yet structs: LFJ V2, Algebra — still use function-based formula path
+
+### V3Pool pre-scanned tick index
+- Old approach: linear bitmap scan copied from Solidity (one SLOAD at a time)
+- Median V3 pool: 6 initialized ticks but scanned 425 bitmap words (mostly zeros)
+- V3Pool constructor: scans all bitmap words once, reads liquidityNet for each initialized tick
+- Quote: binary search O(log n) on sorted tick array instead of linear scan
+- 82 V3 pools total, 2,621 initialized ticks across all of them, ~330KB memory
+
+### Per-type formula results (struct vs original function-based)
+
+| Type | Pools | Original formula (ms) | Struct formula (ms) | Speedup |
+|------|-------|-----------------------|---------------------|---------|
+| V3 (uniswap_v3) | 317 | 274 | **5.7** | **48x** |
+| V2 | 1229 | 2.5 | **0.3** | **8x** |
+| LFJ V1 | 1758 | 2.3 | **0.3** | **8x** |
+| Pharaoh V1 | 286 | 2.5 | **1.4** | **2x** |
+| LFJ V2 (no struct) | 111 | 22 | 22 | 1x |
+| Algebra (no struct) | 58 | 16 | 16 | 1x |
+| **Total formula** | | **331** | **44** | **7.5x** |
+
+### Combined benchmark results (formula + EVM, 4000 pools)
+
+| Metric | Baseline (session start) | Current | Improvement |
+|--------|--------------------------|---------|-------------|
+| Overall ms/pool | 0.375 | **0.318** | **15% faster** |
+| Formula time | 331ms | **44ms** | **7.5x faster** |
+| EVM time | ~1200ms | ~1160ms | ~3% (noise) |
+| V3 formula µs/quote | 553 | **11.5** | **48x faster** |
+| V2 formula µs/quote | 1.7 | **0.2** | **8x faster** |
+
+### Full session optimization stack (from original baseline)
+
+| Change | EVM µs/quote | Formula ms | Overall ms/pool |
+|--------|-------------|-----------|-----------------|
+| Baseline (StateDB overlay) | 627 | — | 0.797 |
+| + Formula engine | 627 | 331 | 0.375 |
+| + CallState (thin overlay) | 396 | 331 | 0.351 |
+| + CallerContract (JUMPDEST) | 396 | 331 | 0.351 |
+| + Pool quoter structs | 396 | **44** | **0.318** |
+| **Total improvement** | **1.6x** | **7.5x** | **2.5x** |
+
+### Profiling insights
+- **EVM**: 98% of CPU in EVMInterpreter.Run (opcode dispatch, stack ops). Our StateDB <5%. ~400µs/call is the libevm interpreter floor.
+- **V3 formula math**: 63% was uint256 mulDiv (Knuth Algorithm D). 7% keccak, 7% map lookups.
+- **Go vs Rust comparison**: Implemented full V3 formula in Rust with ruint. Go holiman/uint256 was 1.2x FASTER than Rust ruint. Rewriting in Rust won't help.
+- **V3 bitmap scanning was the real bottleneck**: pools with 6 initialized ticks read 3462 bitmap words of zeros. Pre-scanning + binary search eliminated this entirely.
+
+### Pure Go benchmark system
+- Replaced JS IPC benchmark (bench.mjs) with pure Go benchmark (cmd/benchmark)
+- 2 warm passes (hardcoded) + 1 timed hot pass
+- Auto-logs to benchmark_results/evm_speed.log (skipped with --skip-formulas or --profile-mode)
+- Per-type breakdown with formula read/math time split
+
 ## 2026-03-24 — Go migration + formula engine
 
 ### Repo restructuring

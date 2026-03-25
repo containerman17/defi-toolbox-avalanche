@@ -246,8 +246,14 @@ func main() {
 	// Apply overrides flat — no overlay indirection, CallState reads one layer
 	baseWithOverrides := pathfinder.ApplyOverridesFlat(state, overrides)
 
+	// Pre-build PoolManager for struct-based quoting
+	warmReader := func(addr common.Address, key common.Hash) common.Hash {
+		return state.GetState(addr, key)
+	}
+	warmPM := formulas.NewPoolManager(registry, warmReader)
+
 	// Warm passes before the hot (timed) pass.
-	// Default 2: first builds JUMPDEST/tick caches, second warms CPU caches.
+	// Default 2: first builds pool structs + JUMPDEST caches, second warms CPU caches.
 	numPasses := 2
 	for i, arg := range os.Args {
 		if arg == "--passes" && i+1 < len(os.Args) {
@@ -256,7 +262,7 @@ func main() {
 	}
 	for pass := 1; pass <= numPasses; pass++ {
 		passT0 := time.Now()
-		quoteAll(baseWithOverrides, cfg, registry, pools, skipFormulas, state)
+		quoteAll(baseWithOverrides, cfg, registry, pools, skipFormulas, state, warmPM)
 		fmt.Fprintf(os.Stderr, "[benchmark] pass %d: %dms\n", pass, time.Since(passT0).Milliseconds())
 	}
 
@@ -285,8 +291,10 @@ func main() {
 	// Pool type names for display
 	typeNames := map[int]string{
 		0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
-		4: "dodo", 5: "woofi", 6: "balancer_v3", 7: "pharaoh_v1",
+		4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
 		8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
+		13: "platypus", 16: "balancer_v2", 17: "cavalre", 18: "kyber_dmm",
+		19: "synapse", 20: "trident",
 	}
 
 	// Hot pass with timing — uses CallState (thin overlay) + CallerContract (JUMPDEST sharing)
@@ -321,6 +329,12 @@ func main() {
 	evmCtx := statedb.GetCachedContext(cfg)
 	cs := statedb.NewCallState(baseWithOverrides)
 
+	// Pool manager: struct-based quoting (reads state once, quotes from memory)
+	poolReader := func(addr common.Address, key common.Hash) common.Hash {
+		return state.GetState(addr, key)
+	}
+	pm := formulas.NewPoolManager(registry, poolReader)
+
 	for i := range pools {
 		pool := &pools[i]
 		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
@@ -331,13 +345,30 @@ func main() {
 			tokenOut := pool.Tokens[tokenIdx[1]]
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 			ts := getStats(pool.PoolType)
+			zeroForOne := tokenIn.Cmp(tokenOut) < 0
 
-			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
-
-			// Try formula
+			// Try pool struct first (pure math, zero state access, no calldata needed)
 			if !skipFormulas {
+				if quoter := pm.Get(pool.Address); quoter != nil {
+					ft0 := time.Now()
+					if out, ok := quoter.Quote(amountIn, zeroForOne); ok {
+						elapsed := time.Since(ft0).Nanoseconds()
+						ts.FormulaCount++
+						ts.FormulaMs += float64(elapsed) / 1e6
+						ts.FormulaMathNs += elapsed
+						ts.OkCount++
+						_ = out
+						continue
+					}
+					// Struct exists but returned zero — skip TryQuote fallback
+					ts.FailCount++
+					continue
+				}
+				// No struct (LFJ V2, Algebra) — fallback to function-based formula
+				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 				var readCount int
 				var readNs int64
+				ft0 := time.Now()
 				reader := func(addr common.Address, key common.Hash) common.Hash {
 					rt0 := time.Now()
 					val := state.GetState(addr, key)
@@ -345,7 +376,6 @@ func main() {
 					readCount++
 					return val
 				}
-				ft0 := time.Now()
 				if ret, ok := registry.TryQuote(reader, calldata); ok {
 					totalNs := time.Since(ft0).Nanoseconds()
 					mathNs := totalNs - readNs
@@ -364,6 +394,8 @@ func main() {
 					continue
 				}
 			}
+
+			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
 			// EVM fallback — skip if profiling formulas only
 			if profileMode == "formulas-only" {
@@ -495,7 +527,7 @@ func main() {
 	}
 }
 
-func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry, pools []pathfinder.Pool, skipFormulas bool, rawState *statedb.StateDB) {
+func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry, pools []pathfinder.Pool, skipFormulas bool, rawState *statedb.StateDB, pm *formulas.PoolManager) {
 	evmCtx := statedb.GetCachedContext(cfg)
 	cs := statedb.NewCallState(base)
 	for i := range pools {
@@ -507,15 +539,24 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 			tokenIn := pool.Tokens[tokenIdx[0]]
 			tokenOut := pool.Tokens[tokenIdx[1]]
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
+			zeroForOne := tokenIn.Cmp(tokenOut) < 0
 
 			if !skipFormulas {
+				// Try pool struct
+				if quoter := pm.Get(pool.Address); quoter != nil {
+					if _, ok := quoter.Quote(amountIn, zeroForOne); ok {
+						continue
+					}
+				}
+				// Fallback to function-based formula
+				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 				reader := func(addr common.Address, key common.Hash) common.Hash { return rawState.GetState(addr, key) }
 				if _, ok := registry.TryQuote(reader, calldata); ok {
 					continue
 				}
 			}
 
+			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 			cs.Reset()
 			evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 		}

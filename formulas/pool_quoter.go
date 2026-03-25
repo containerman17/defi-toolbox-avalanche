@@ -82,7 +82,15 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 				// V4 pool registered via RegisterV4Pool but not yet in registry.txt
 				formulaID = FormulaV4
 			} else {
-				return nil
+				// Last resort: assign formula based on poolType from pools.txt
+				switch pm.poolTypes[pool] {
+				case 3: // lfj_v2
+					formulaID = FormulaLFJV2
+				case 7: // pharaoh_v1
+					formulaID = FormulaPharaohV1
+				default:
+					return nil
+				}
 			}
 		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
 			// V3 pools marked -1 in registry.txt can still use the V3 formula —

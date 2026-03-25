@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-25 — FoT fix: BigRed 5 missing FotExemptPools entries (lfj_v1 + lfj_v2)
+
+### Pool 0xab043e1b1c (lfj_v1, formula 2): formula 2-3% LESS than EVM both directions
+
+- Pool: `0xab043e1b1cb3ac3a97485b71b77e586b6d4422aa` (BigRed/AMI, lfj_v1)
+- FoT token: BigRed `0x87bbfc9dcb66caa8ce7582a3f17b60a25cd8a248` — `fotPct(3)` already in fotCalculators
+- Root cause: BigRed's `_transfer()` only charges fee when `from == JoeV2Pair || to == JoeV2Pair`
+  where `JoeV2Pair` is a single hardcoded address set at deploy time = `0x7ef8e0af1a2be468aa54d31f50d50eb6a039da0e`.
+  Verified on-chain: `JoeV2Pair()` returns `0x7ef8e0af...` (confirmed via eth_call selector `0x5224c0d2`).
+  All other pools — including 0xab043e1b and 4 more — are not `JoeV2Pair` and pay zero fee.
+- Fix: Added 5 missing BigRed pools to `FotExemptPools` in `formulas/fot.go`:
+  - `0xab043e1b1cb3ac3a97485b71b77e586b6d4422aa` BigRed/AMI lfj_v1
+  - `0x95375153743540a3a443b6cddece480e99576c32` BigRed/COOP lfj_v1
+  - `0xb562931b866369770e8d2ae72782f9186e9f561f` BigRed/NICK lfj_v1
+  - `0x8f2b16e2386000caefb9211c70fc631dcd2327bb` KIMBO/BigRed lfj_v1
+  - `0x65659f44053eaf634ef924edb6427014b6f00b60` BigRed/WAVAX lfj_v2
+- The one pool that DOES charge fee (`0x7ef8e0af`, lfj_v1, BigRed/WAVAX) remains active in fotCalculators.
+
+## 2026-03-25 — Investigation: SHIBX pool 0x82ab53e405 mismatch (dir=1, reflection residual)
+
+### Pool 0x82ab53e405fa (pangolin_v2, formula 0): tiny formula/EVM diff on dir=1
+
+- Pool: `0x82ab53e405fa94448597afcc0ba86143b1ab2628` (SHIBX/WAVAX, pangolin_v2)
+- Token: SHIBX `0x440abbf18c54b2782a4917b80a1746d3a2c2cce1` (SHIBAVAX — SafeMoon reflection fork)
+- Direction 1: WAVAX→SHIBX (SHIBX is the output token transferred to buyer)
+- Root cause confirmed: **reflection redistribution residual** — not a formula bug.
+  - `_getTValues`: `tFee = tAmount.mul(10).div(100)` — exactly matches `fotPct(10)` in fot.go.
+  - Pool is NOT in `_isExcluded` (confirmed via `isExcluded(pool)` → false).
+  - `tradeLimit = 0` (no cap), so fee always applies.
+  - The drift arises from `_reflectFee` decrementing `_rTotal` by `rFee` on each transfer.
+    This shifts the r→t rate between the moment our formula evaluates the expected output
+    and when the EVM actually executes `tokenFromReflection`. The result is a PPM-level
+    over-estimate by the formula (formula > evm) — classic SafeMoon reflection mechanics.
+- Action: No code fix needed; formula is already correct. Updated fot.go comment to document
+  the pool, on-chain confirmation, and the residual explanation.
+
 ## 2026-03-25 — FoT fix: bCASH direction-specific LP exemption (FotExemptInputPools)
 
 ### Pool 0x07280f3283 (pangolin_v2, formula 0): formula 10% LESS than EVM on dir=0

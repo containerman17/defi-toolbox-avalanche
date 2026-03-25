@@ -1,5 +1,52 @@
 # Changelog
 
+## 2026-03-25 — DODO Bug C: DPP Advanced pools have mtFeeRate=0
+
+### 15 DODO pools using DSP-layout detection path (all DPP Advanced / DPP 1.0.0)
+
+- Root cause: Pools with version "DPP Advanced 1.0.0", "DPP Advanced 1.1.0", and "DPP 1.0.0"
+  use the same storage layout as DSP pools (slot 8 has packed mtFeeModel|lpFeeRate).
+  The Go code read the feeRateImpl address, found it non-zero, and applied
+  `mtFeeRate = lpFeeRate * 25 / 100`. But FeeRateDIP3Impl.getFeeRate() only recognizes
+  "DSP 1.0.1"/"DSP 1.0.2"/"DVM 1.0.2"/"DVM 1.0.3" version strings. For DPP Advanced pools,
+  the version check fails and getFeeRate() returns 0.
+- The single actual DSP pool on Avalanche (0xbb02ae33, "DSP 1.0.1") uses the DPP-like
+  detection path (slot8[0]='D'), NOT the DSP code path, so it was unaffected.
+- Result: formula underquoted by ~0.02% (mtFee was subtracted when it shouldn't be).
+- Fix: set mtFeeRate=0 for all pools in fetchDODOStateDSP, since every pool reaching
+  that code path is a DPP/DPP Advanced pool with unrecognized version.
+- Verified: correctness benchmark shows 0 DODO mismatches after fix.
+
+## 2026-03-25 — FoT fix: MetaFloki 10% reflection transfer tax
+
+### Pool 0x235bd272c8 (pangolin_v2, formula 0): formula 11.11% over EVM on dir=1 (MetaFloki→WAVAX)
+
+- Token: MetaFloki `0x9b413747801cb9def889bc865fe43c2a65585fb1` (ERC20 reflection token)
+- Root cause: MetaFloki has `_taxFee = 10` (reflection tax) and `_teamFee = 10` (team tax).
+  The recipient-visible FoT is `_taxFee` only: `tFee = tAmount * 10 / 100`.
+  `_teamFee` is also deducted from sender but goes to the contract via `_takeTeam` (credits `_rOwned[address(this)]`),
+  NOT subtracted from recipient's `rOwned` — so the recipient gets `tAmount * (1 - 10/100) = 90%`.
+- Both fees are mutable (owner can set 1-25 each) — using current on-chain value 10 for taxFee.
+- Verification: `formula * (1 - 0.10) = 103361472345634880 ≈ evm = 103361472345634881` (off by 1 wei).
+- Note: benchmark truncates address to 12 chars; pool shown as `0x235bD272c8F3C52eD828c85FFE03E048C3Ccc2b8`
+  is a misread — actual pool is `0x235bd272c84acb448db66fd0c47727f8eb582594`.
+- Fix: added `fotPct(10)` for `0x9b413747801cb9def889bc865fe43c2a65585fb1` in `formulas/fot.go`.
+
+## 2026-03-25 — FoT fix: KIOO (Reflectx) 4% transfer tax
+
+### Pool 0xf3f119ceb9 (lfj_v1, registry formula 0): formula 4.2% over EVM on dir=1 (WAVAX→KIOO)
+
+- Token: KIOO `0x45cdaf3fd17bd31d9830fa977159162dd2431683` (Reflectx contract)
+- Root cause: KIOO has a 4% FoT — `_getTransferAmounts` applies two separate integer-truncating divisions:
+  `fees = (amount * FEES_PERCENT) / 100` (FEES_PERCENT=3) and `burn = (amount * BURN_PERCENT) / 100` (BURN_PERCENT=1)
+  Both constants are immutable in the source (Solidity constants, not storage variables)
+- Total tax = fees + burn ≈ 4% (two separate truncating divisions, not a single 4%)
+- KIOO is also a reflection token: after FoT correction a ~27 PPM residual remains due to
+  the reflection rate (_getRate = _reflectSupply / _totalSupply) shifting with pool balance
+- Fix: added two-division FoT calculator for `0x45cdaf3fd17bd31d9830fa977159162dd2431683` in `formulas/fot.go`
+- Note: pool address reported as `0xf3F119cEb9C59abC23C0FD94b0D3e456C2EA6E94` was a misread —
+  benchmark truncates address to 12 chars; actual pool is `0xf3f119ceb9a59e15dfc9d4989df39ac076d2796b`
+
 ## 2026-03-25 — FoT fix: SABTIWE2.0 50% transfer tax
 
 ### Pool 0xdf56a97e (lfj_v1): formula 2x EVM on dir=1 (WAVAX→SABTIWE2.0)

@@ -169,6 +169,11 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Pharaoh/V3 pairs are NOT registered → exempt (see FotExemptPools).
 	"0x432d38f83a50ec77c409d086e97448794cf76dcf": fotBps(50),
 
+	// Pollen: fee = amount * totalFees / 100 (totalFees=3, confirmed via storage slot 23)
+	// pool 0xdf4eb13a7dd25d0086be88a0c99a8b772ddd0db3 (lfj_v1, USDC.e/Pollen)
+	// ~3.09% observed mismatch matches 1/(1-0.03) ratio exactly.
+	"0xc118d77baf86a93ec41d867675c48c98b19953fd": fotPct(3),
+
 	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
 	// noTaxable=false for ALL DEX pairs — the fee IS applied during swaps.
 	"0xca3130f29e296f1966e5999889d0824a9032ee97": func(amount *big.Int) *big.Int {
@@ -213,6 +218,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Miller (20lab.app): fee = amount * 1074 / 10000 (10.74%)
 	"0x3c859470c9b6220036fa4461f516ad8049671176": fotBps(1074),
 
+	// MetaFloki: fee = tAmount * taxFee / 100 (taxFee=10, reflection only).
+	// _teamFee=10 is also deducted from sender but credited to contract via _takeTeam,
+	// NOT subtracted from recipient's rOwned — recipient-visible FoT is taxFee=10% only.
+	// Pool 0x235bd272c84acb448db66fd0c47727f8eb582594 (pangolin_v2), dir=1.
+	// Confirmed: formula*(1-0.10) = evm to within 1 wei.
+	"0x9b413747801cb9def889bc865fe43c2a65585fb1": fotPct(10),
+
 	// SHIBX: fee = tAmount * 10 / 100 (10% reflection tax, hardcoded)
 	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
 
@@ -224,6 +236,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		team.Div(team, big.NewInt(100))
 		return tax.Add(tax, team)
 	},
+
+	// ARENA BURN (Gladiator): fee = (value * fee) / denominator = value * 20000 / 1000000 (2%)
+	// Source: _transfer() sets _fee = (value*fee)/denominator when _trade (from==pool || to==pool).
+	// fee var was changed from 30000 (3%) to 20000 (2%) via setTax().
+	// denominator=1000000, fee=20000 → 2% = fotBps(200) (integer-identical: x*20000/1000000 == x*200/10000)
+	// Applies on both buy (from==pool) and sell (to==pool) sides.
+	"0x8a398a53dbd7181d3131eafa1c8e73760889a9ad": fotBps(200),
 
 	// =====================================================================
 	// Tokens not yet source-analyzed — using standard bps approximation.
@@ -296,6 +315,17 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// DEX pair exemption possible (_isExcludedFromFee)
 	"0x22897cf0da31e1f118649d9f6ad1809cabd84948": fotBps(103),
 
+	// KIOO (Reflectx): fees = amount*3/100 + amount*1/100 (TWO separate divisions, 4% total)
+	// _getTransferAmounts: fees=(amount*FEES_PERCENT)/100; burn=(amount*BURN_PERCENT)/100
+	// FEES_PERCENT=3, BURN_PERCENT=1 (constants, immutable)
+	"0x45cdaf3fd17bd31d9830fa977159162dd2431683": func(amount *big.Int) *big.Int {
+		fees := new(big.Int).Mul(amount, big.NewInt(3))
+		fees.Div(fees, big.NewInt(100))
+		burn := new(big.Int).Mul(amount, big.NewInt(1))
+		burn.Div(burn, big.NewInt(100))
+		return fees.Add(fees, burn)
+	},
+
 	// NOTE: 0xe668f8030bf17f3931a3069f31f4fa56efe9dd54 (WSPP) — confirmed NOT FoT, removed.
 }
 
@@ -317,6 +347,11 @@ var FotExemptPools = map[string]bool{
 	// BulletCollection (0xf84b...): only charges fee on registered AMM pairs.
 	// Pool 0x3c4beea7 (lfj_v1) is NOT registered as an AMM pair.
 	"0x3c4beea709e9a46f869ef5c1e9b18fd2195bd87f": true, // BulletCollection/USDC lfj_v1
+
+	// ARENA BURN / Gladiator (0x8a39...): fee only applies when _trade flag is set.
+	// Only pool 0xc7087eb4 triggers _trade; other pools are exempt.
+	"0xdf9db5a5f3a00e0e27def12af95b4528ec23cf86": true, // Gladiator/ArenaToken lfj_v1
+	"0x592ac0969b67457842af49555633b1f5ff730cb5": true, // Gladiator/WAVAX lfj_v1
 
 	// HEFE (0x18e3...): pharaoh pools are not registered LPs — no fee applied.
 	"0xc4fa66b4839af7379a4fcbe5dd048b18fe99a2ac": true, // HEFE/USDC pharaoh_v1

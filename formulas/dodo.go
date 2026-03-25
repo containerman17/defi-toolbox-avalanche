@@ -47,8 +47,10 @@ import (
 // Detection: slot 5 first byte = 0x44 ('D' from "DLP") → DVM.
 // Otherwise DSP or DPP-like (distinguished by slot 8 content).
 //
-// mtFeeRate = lpFeeRate * 25 / 100 for all pools (FeeRateDIP3Impl formula).
-// All 36 DODO pools on Avalanche use the same model contract.
+// mtFeeRate computation depends on pool version (checked by FeeRateDIP3Impl):
+//   DVM 1.0.2/1.0.3, DSP 1.0.1/1.0.2: mtFeeRate = lpFeeRate * 25 / 100
+//   DPP Advanced, DPP 1.0.0: mtFeeRate = 0 (version not recognized by FeeRateDIP3Impl)
+// All 36 DODO pools on Avalanche use the same fee model contract.
 
 var (
 	dodoONE  = new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil) // 1e18
@@ -192,29 +194,13 @@ func fetchDODOStateDSP(reader StateReader, poolAddress string, slot5, slot8 [32]
 	mask64 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
 	lpFeeRate := new(big.Int).And(new(big.Int).Rsh(slot8Val, 160), mask64)
 
-	// Read mtFeeRate from the fee rate model contract.
-	// The _MT_FEE_RATE_MODEL_ address is in the lower 160 bits of slot 8.
-	// Its slot 2 holds feeRateImpl. If feeRateImpl == address(0), mtFeeRate = 0.
-	mask160 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1))
-	mtFeeModelAddr := new(big.Int).And(slot8Val, mask160)
-	var mtFeeRate *big.Int
-	if mtFeeModelAddr.Sign() == 0 {
-		mtFeeRate = big.NewInt(0)
-	} else {
-		modelHex := strings.ToLower(fmt.Sprintf("0x%040x", mtFeeModelAddr))
-		feeImplSlot, err := reader(modelHex, big.NewInt(2))
-		if err != nil {
-			mtFeeRate = big.NewInt(0)
-		} else {
-			feeImpl := new(big.Int).SetBytes(feeImplSlot[12:32])
-			if feeImpl.Sign() == 0 {
-				mtFeeRate = big.NewInt(0)
-			} else {
-				// Non-zero feeRateImpl: use the hardcoded 25% formula as fallback
-				mtFeeRate = new(big.Int).Div(new(big.Int).Mul(lpFeeRate, big.NewInt(25)), big.NewInt(100))
-			}
-		}
-	}
+	// mtFeeRate for DSP-layout pools:
+	// All pools reaching this code path are "DPP Advanced" or "DPP 1.0.0" pools.
+	// Their version strings are NOT recognized by FeeRateDIP3Impl
+	// (only "DSP 1.0.1"/"DSP 1.0.2"/"DVM 1.0.2"/"DVM 1.0.3" are recognized),
+	// so getFeeRate() returns 0. The single actual DSP pool on Avalanche
+	// uses the DPP-like detection path (slot8[0]='D'), not this code path.
+	mtFeeRate := big.NewInt(0)
 
 	// slot 9: packed(_K_ uint64 | _I_ uint128)
 	// K at bits 0-63, I at bits 64-191

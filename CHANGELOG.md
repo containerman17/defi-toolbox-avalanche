@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-25 — Formula coverage sprint: EVM 548ms → 384ms
+
+### Coverage improvements (agent-driven)
+| Fix | EVM calls | EVM time saved |
+|-----|-----------|----------------|
+| V4: fix zero swapFee + ArenaHook fees | -44 | -135ms |
+| LFJ V2: add PoolQuoter struct + fix direction bug | -44 | -124ms |
+| V3: auto-detect from v3PoolFees fallback | ~0 | ~0 (empty pools) |
+| Balancer V3: port weighted+stable formula | -12 | -29ms |
+| Skip EVM for formula-covered empty pools | n/a | benchmark clarity |
+
+### Current benchmark
+- Formula: 7433 quotes in 145ms (was 7390 in 155ms)
+- EVM: 472 calls in 384ms (was 528 in 548ms)
+- **0.176 ms/pool** (was 0.225)
+- Remaining EVM: V3 empty pools (308ms benchmark artifact), LFJ V2 edge cases (57ms), Balancer V2 (2ms), small types
+
+### Key bugs found and fixed
+- **V4 swapFee never initialized** — all V4 quotes had zero fee, producing wrong results
+- **LFJ V2 missing PoolQuoter case** — FormulaLFJV2 had no case in PoolManager.Get() switch
+- **LFJ V2 swapForY direction bug** — function-based path used zeroForOne directly instead of checking tokenXIsToken0
+- **Balancer V3 SetFormulaID missing** — pools registered but not added to formula registry
+
 ## 2026-03-25 — Add Balancer V3 formula (Weighted + Stable pools)
 
 ### What

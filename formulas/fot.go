@@ -19,7 +19,7 @@ func FotCalcFee(token string, amount *big.Int) (*big.Int, bool) {
 	if !ok {
 		return nil, false
 	}
-	return calc(amount), true
+	return calc.calcFee(amount), true
 }
 
 // IsFotToken returns true if the token has a fee-on-transfer tax
@@ -50,25 +50,59 @@ func IsFotExemptOutputPool(pool string) bool {
 	return FotExemptOutputPools[pool]
 }
 
-// Helper: fee = amount * rate / 10000 (standard bps division)
-func fotBps(rate int64) func(*big.Int) *big.Int {
-	return func(amount *big.Int) *big.Int {
-		fee := new(big.Int).Mul(amount, big.NewInt(rate))
-		fee.Div(fee, big.NewInt(10000))
-		return fee
+// fotCalc holds a fee calculator and an optional received-amount calculator.
+// When calcReceived is set, it computes the post-fee amount directly using the
+// complement form (e.g., amount * (10000 - fee) / 10000), which matches
+// Solidity's integer division rounding exactly. Without it, the model falls
+// back to amount - calcFee(amount), which can be 1 wei MORE than Solidity
+// when amount is not divisible by the fee denominator.
+type fotCalc struct {
+	calcFee      func(*big.Int) *big.Int
+	calcReceived func(*big.Int) *big.Int // optional; used by fotTokenModel.adjust
+}
+
+// Helper: fee = amount * rate / 10000, received = amount * (10000 - rate) / 10000
+func fotBps(rate int64) fotCalc {
+	complement := 10000 - rate
+	return fotCalc{
+		calcFee: func(amount *big.Int) *big.Int {
+			fee := new(big.Int).Mul(amount, big.NewInt(rate))
+			fee.Div(fee, big.NewInt(10000))
+			return fee
+		},
+		calcReceived: func(amount *big.Int) *big.Int {
+			result := new(big.Int).Mul(amount, big.NewInt(complement))
+			result.Div(result, big.NewInt(10000))
+			return result
+		},
 	}
 }
 
-// Helper: fee = amount * rate / 100
-func fotPct(rate int64) func(*big.Int) *big.Int {
-	return func(amount *big.Int) *big.Int {
-		fee := new(big.Int).Mul(amount, big.NewInt(rate))
-		fee.Div(fee, big.NewInt(100))
-		return fee
+// Helper: fee = amount * rate / 100, received = amount * (100 - rate) / 100
+func fotPct(rate int64) fotCalc {
+	complement := 100 - rate
+	return fotCalc{
+		calcFee: func(amount *big.Int) *big.Int {
+			fee := new(big.Int).Mul(amount, big.NewInt(rate))
+			fee.Div(fee, big.NewInt(100))
+			return fee
+		},
+		calcReceived: func(amount *big.Int) *big.Int {
+			result := new(big.Int).Mul(amount, big.NewInt(complement))
+			result.Div(result, big.NewInt(100))
+			return result
+		},
 	}
 }
 
-var fotCalculators = map[string]func(*big.Int) *big.Int{
+// fotCustom wraps a custom fee calculator without a complement form.
+// The model will use amount - calcFee(amount), which is correct for
+// tokens with multi-step fee deductions matching Solidity's subtraction.
+func fotCustom(calcFee func(*big.Int) *big.Int) fotCalc {
+	return fotCalc{calcFee: calcFee}
+}
+
+var fotCalculators = map[string]fotCalc{
 	// =====================================================================
 	// Tokens with exact Solidity math from source code analysis
 	// =====================================================================
@@ -80,7 +114,7 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": fotPct(2),
 
 	// Tortuga: fee = amount*3/100 + amount*3/100 + amount*1/100 (THREE separate divisions)
-	"0xab2712b217f0015b602c06e4fb66b8cf8b04f894": func(amount *big.Int) *big.Int {
+	"0xab2712b217f0015b602c06e4fb66b8cf8b04f894": fotCustom(func(amount *big.Int) *big.Int {
 		f1 := new(big.Int).Mul(amount, big.NewInt(3))
 		f1.Div(f1, big.NewInt(100))
 		f2 := new(big.Int).Mul(amount, big.NewInt(3))
@@ -88,7 +122,7 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		f3 := new(big.Int).Mul(amount, big.NewInt(1))
 		f3.Div(f3, big.NewInt(100))
 		return f1.Add(f1, f2).Add(f1, f3)
-	},
+	}),
 
 	// GoodToken (GOOD): fee = (amount * 2) / 100 (2% tax, only when sender==lp || recipient==lp)
 	// Pool: 0x21013fe86ad9646c41cd1f9d57e69e933524dcd5 (lfj_v1, GOOD/0x420f)
@@ -99,13 +133,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x556b959d952085405e7c630bc45a34ace73854eb": fotPct(20),
 
 	// WorldOfDogs: fee = amount*6/100 + amount*5/100 (TWO separate divisions)
-	"0xadcfb771e88fd804e0fb04eef6492a0daf389c51": func(amount *big.Int) *big.Int {
+	"0xadcfb771e88fd804e0fb04eef6492a0daf389c51": fotCustom(func(amount *big.Int) *big.Int {
 		f1 := new(big.Int).Mul(amount, big.NewInt(6))
 		f1.Div(f1, big.NewInt(100))
 		f2 := new(big.Int).Mul(amount, big.NewInt(5))
 		f2.Div(f2, big.NewInt(100))
 		return f1.Add(f1, f2)
-	},
+	}),
 
 	// SPORE: moved to reflectionTokenConfigs for exact RFI math.
 	// Was: 6% pure reflection (div-then-mul), ~0.575 PPM residual with static fee.
@@ -121,15 +155,15 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 
 	// 0x4fc8: same double-division pattern, total 500 bps
 	// DEX pair exemption possible (_isExcluded[recipient] or FeeAddress)
-	"0x4fc8aab93a6e4e6928fd7e9ba979a715ccf55a6a": func(amount *big.Int) *big.Int {
+	"0x4fc8aab93a6e4e6928fd7e9ba979a715ccf55a6a": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(500))
 		fee.Div(fee, big.NewInt(100))
 		fee.Div(fee, big.NewInt(100))
 		return fee
-	},
+	}),
 
 	// Bonfire: fee = 3 * (amount * 300 / 100 / 100) — three separate fees of 300 each
-	"0xa0a924dcb97a597351a5c3787234b706845e7510": func(amount *big.Int) *big.Int {
+	"0xa0a924dcb97a597351a5c3787234b706845e7510": fotCustom(func(amount *big.Int) *big.Int {
 		// Each sub-fee: amount * 300 / 100 / 100
 		oneFee := func() *big.Int {
 			f := new(big.Int).Mul(amount, big.NewInt(300))
@@ -141,7 +175,7 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		total.Add(total, oneFee())
 		total.Add(total, oneFee())
 		return total
-	},
+	}),
 
 	// Green Token (GREEN): moved to reflectionTokenConfigs for exact RFI math (0 ppb).
 	// Was: 1% reflection + 3% team = 4% total, ~2.93 PPM residual with static fee.
@@ -150,22 +184,22 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Was: 1% reflection + 3% team = 4% total, ~2.35 PPM residual with static fee.
 
 	// BYAS: fee = amount * 30 / 1000
-	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": func(amount *big.Int) *big.Int {
+	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(30))
 		fee.Div(fee, big.NewInt(1000))
 		return fee
-	},
+	}),
 
 	// BigRed: fee = amount * 3 / 100 (300 bps, only on pair trades after buyCount>100)
 	"0x87bbfc9dcb66caa8ce7582a3f17b60a25cd8a248": fotPct(3),
 
 	// fBomb: fee = amount - amount * 99 / 100 (100 bps burn)
 	// DEX pair exemption possible (taxExempt list)
-	"0x5c09a9ce08c4b332ef1cc5f7cadb1158c32767ce": func(amount *big.Int) *big.Int {
+	"0x5c09a9ce08c4b332ef1cc5f7cadb1158c32767ce": fotCustom(func(amount *big.Int) *big.Int {
 		kept := new(big.Int).Mul(amount, big.NewInt(99))
 		kept.Div(kept, big.NewInt(100))
 		return new(big.Int).Sub(amount, kept)
-	},
+	}),
 
 	// SABTIWE2.0 (Stars Arena Bailout Edition): fee = amountToTake1(value) = ceil(value,50)*50/100 ≈ 50%
 	// hyperSonic=true && liqBugFixed=true (on-chain confirmed via storage slot 15).
@@ -202,46 +236,46 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// _getTValues: tFee = tAmount.div(100).mul(2); hardcoded, no exemptions.
 	// Residual ~26 ppm from reflection rate drift — within tolerance.
 	// Pool: 0x1e41a42bd47ea44c09b01e06d498164159e3d0f3 (lfj_v1, WAVAX/HAM)
-	"0xcbcc61f7a0b39512a6f986ddf174caf7232a0808": func(amount *big.Int) *big.Int {
+	"0xcbcc61f7a0b39512a6f986ddf174caf7232a0808": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Div(amount, big.NewInt(100))
 		fee.Mul(fee, big.NewInt(2))
 		return fee
-	},
+	}),
 
 	// AtlantisUniverse (AUA): fee = (amount / 100) * 2 (integer div first, then mul — 2% reflection tax)
 	// _getTValues: tFee = tAmount.div(100).mul(2) — unconditional, no DEX pair exemption.
 	// Pool: 0xd755a2083b8a85048705b72e6d176ea25a71dad8 (lfj_v1, WAVAX/AUA), dir=0.
-	"0xb8edc9145e21a7c3345b848ca73300fa35150b0f": func(amount *big.Int) *big.Int {
+	"0xb8edc9145e21a7c3345b848ca73300fa35150b0f": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Div(amount, big.NewInt(100))
 		fee.Mul(fee, big.NewInt(2))
 		return fee
-	},
+	}),
 
 	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
 	// noTaxable[pool] is set per-pool by owner. Uniswap_v2 pool 0x661368c5bd has noTaxable=true
 	// (pool is sender → output side exempt); sushiswap pools 0x4e29f0aa and 0xb6eda80d are NOT exempt.
 	// Fee gate: !noTaxable[sender] — applies on input side (user sends to pool) for all pools,
 	// but NOT on output side for the uniswap_v2 pool (see FotExemptOutputPools).
-	"0xca3130f29e296f1966e5999889d0824a9032ee97": func(amount *big.Int) *big.Int {
+	"0xca3130f29e296f1966e5999889d0824a9032ee97": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Div(amount, big.NewInt(100))
 		fee.Mul(fee, big.NewInt(5))
 		return fee
-	},
+	}),
 
 	// HEFE: fee = amount * 10 / 1000 (1% tax on buys/sells for registered LPs)
-	"0x18e3605b13f10016901eac609b9e188cf7c18973": func(amount *big.Int) *big.Int {
+	"0x18e3605b13f10016901eac609b9e188cf7c18973": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(10))
 		fee.Div(fee, big.NewInt(1000))
 		return fee
-	},
+	}),
 
 	// Vaccine: fee = amount * 19 / 10000 (0.19% = covidnineteenFee=19 bps)
 	"0x89d4c4dbcd477345f8fbb083d1194faeafba1522": fotBps(19),
 
 	// HOWDY: fee = floor(amount / 14)
-	"0x7b640a60daa4ee5fbc2ce81797c11d174daa3b4f": func(amount *big.Int) *big.Int {
+	"0x7b640a60daa4ee5fbc2ce81797c11d174daa3b4f": fotCustom(func(amount *big.Int) *big.Int {
 		return new(big.Int).Div(amount, big.NewInt(14))
-	},
+	}),
 
 	// EverRise: fee = amount * liquidityFee / 100 (liquidityFee=5, mutable up to 10)
 	"0xc17c30e98541188614df99239cabd40280810ca3": fotPct(5),
@@ -258,13 +292,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x50ad50fce988bcbf0d11f0c633e34c3510efbe54": fotPct(6),
 
 	// Avalanche Subnets Memes (DODO factory): fee = amount*660/10000 + amount*330/10000 (9.9%)
-	"0xf80fc26d5d20cca25c1c987abf7932942f9e57eb": func(amount *big.Int) *big.Int {
+	"0xf80fc26d5d20cca25c1c987abf7932942f9e57eb": fotCustom(func(amount *big.Int) *big.Int {
 		burn := new(big.Int).Mul(amount, big.NewInt(660))
 		burn.Div(burn, big.NewInt(10000))
 		team := new(big.Int).Mul(amount, big.NewInt(330))
 		team.Div(team, big.NewInt(10000))
 		return burn.Add(burn, team)
-	},
+	}),
 
 	// Miller (20lab.app): fee = amount * 1074 / 10000 (10.74%)
 	"0x3c859470c9b6220036fa4461f516ad8049671176": fotBps(1074),
@@ -287,13 +321,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x23675ba5d0a8075da5ba18756554e7633cea2c85": fotBps(100),
 
 	// Mistel Finance (reflection): fee = amount*3/100 + amount*8/100 (~11%)
-	"0xf3f8772f92028bfb6d641c28bbcf1dbded424767": func(amount *big.Int) *big.Int {
+	"0xf3f8772f92028bfb6d641c28bbcf1dbded424767": fotCustom(func(amount *big.Int) *big.Int {
 		tax := new(big.Int).Mul(amount, big.NewInt(3))
 		tax.Div(tax, big.NewInt(100))
 		team := new(big.Int).Mul(amount, big.NewInt(8))
 		team.Div(team, big.NewInt(100))
 		return tax.Add(tax, team)
-	},
+	}),
 
 	// ARENA BURN (Gladiator): fee = (value * fee) / denominator = value * 20000 / 1000000 (2%)
 	// Source: _transfer() sets _fee = (value*fee)/denominator when _trade (from==pool || to==pool).
@@ -375,8 +409,8 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 
 	// KIOO (Reflectx): moved to reflectionTokenConfigs for exact RFI+burn math.
 
-	// MMTH (Mammoth): fee = amount * (10000 - taxfee) / 10000, taxfee=100 → 1%
-	// taxenabled=true, pool is not tax-exempt
+	// MMTH (Mammoth): recipient gets amount * (10000 - taxfee) / 10000, taxfee=100 → 1%
+	// taxenabled=true, pool is not tax-exempt. Fee = amount * taxfee / 10000.
 	"0x09ef821c35b4577f856ca416377bd2dddbd3d0c9": fotBps(100),
 
 	// Build Token (BUILD): fee = amount * transferFee / 10000 (transferFee=100, 1%)
@@ -576,7 +610,7 @@ var reflectionTokenConfigs = map[string]reflectionTokenConfig{
 		tTotal:       new(big.Int).Mul(big.NewInt(10_000_000_000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)),
 		reflectRate:  10,
 		reflectDenom: 100,
-		calcFee:      fotPct(10),
+		calcFee:      fotPct(10).calcFee,
 	},
 
 	// KIOO (Reflectx): 3% reflection fee + 1% burn = 4% total.

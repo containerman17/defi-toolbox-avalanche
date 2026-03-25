@@ -209,7 +209,7 @@ func NewTokenModelRegistry(reader StorageReader) *TokenModelRegistry {
 		defaultModel: defaultTokenModel{},
 	}
 	for addr, calc := range fotCalculators {
-		r.models[addr] = &fotTokenModel{calcFee: calc}
+		r.models[addr] = &fotTokenModel{calcFee: calc.calcFee, calcReceived: calc.calcReceived}
 	}
 	// Register reflection token models (override any fotCalculators entry for same address)
 	if reader != nil {

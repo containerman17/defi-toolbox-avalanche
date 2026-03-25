@@ -3,9 +3,8 @@ package formulas
 import (
 	"fmt"
 	"math/big"
+
 	"github.com/ava-labs/libevm/crypto"
-
-
 )
 
 // Pharaoh V1 is a Solidly-fork AMM with two curve types:

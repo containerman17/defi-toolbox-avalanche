@@ -1,8 +1,9 @@
-// cmd/discover — Pure Go formula registry discovery
+// cmd/discover — Formula registry discovery with multi-amount verification
 //
-// Assigns formula IDs to pools by quoting each via EVM.
-// If EVM returns non-zero output → pool gets a formula ID.
-// If EVM reverts or returns 0 → pool gets -1 (invalid/FoT).
+// For each pool not in registry.txt, probes formula vs EVM with up to 10 amounts.
+// If all amounts match exactly → assigns the formula ID.
+// If any disagree → assigns -1 (broken formula).
+// Existing registry entries are never overwritten (append-only).
 //
 // Usage:
 //   go run ./cmd/discover/ [--write] [--state-server ws://localhost:7449] [--limit 5000]
@@ -53,7 +54,7 @@ var formulaNames = map[int]string{
 	5:  "DODO PMM",
 	6:  "V4 PoolManager",
 	7:  "Balancer V3",
-	-1: "invalid (FoT/broken)",
+	-1: "invalid (formula mismatch)",
 }
 
 var (
@@ -61,15 +62,7 @@ var (
 	DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 )
 
-// Starter tokens — only these have known-good balance override slots.
-// Discovery quotes each pool using a starter token as input.
-var starterTokens = map[common.Address]bool{
-	common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): true, // USDC
-	common.HexToAddress("0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"): true, // USDT
-	common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"): true, // WAVAX
-}
-
-// ─── State server connection (same as cmd/benchmark) ───
+// ─── State server connection ───
 
 type wsFetcher struct {
 	conn    *websocket.Conn
@@ -328,103 +321,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[discover] registered %d Balancer V3 pools\n", balV3Count)
 	}
 
-	type poolResult struct {
-		addr      common.Address
-		formulaID int
-		ok        bool
-	}
-
-	// Direct registry for V2/LFJ_V1 pools: check slot 8 reserves directly from state.
-	// No EVM needed — if reserves are non-zero, the V2 formula works.
-	slot8 := common.HexToHash("0x8")
-	var directResults []poolResult
-	for _, p := range pools {
-		fid, ok := formulaMap[p.PoolType]
-		if !ok || fid != 0 || len(p.Tokens) < 2 { continue }
-		if _, known := registry.GetFormulaID(p.Address); known { continue }
-		val := state.GetState(p.Address, slot8)
-		if val == (common.Hash{}) { continue }
-		data := val.Bytes()
-		hasReserves := false
-		for _, b := range data[4:32] {
-			if b != 0 { hasReserves = true; break }
-		}
-		if !hasReserves { continue }
-		registry.SetFormulaID(p.Address, 0)
-		directResults = append(directResults, poolResult{p.Address, 0, true})
-	}
-	// Direct registry for V3/Pharaoh V3 pools: check slot 0 for sqrtPriceX96
-	slot0 := common.HexToHash("0x0")
-	for _, p := range pools {
-		fid, ok := formulaMap[p.PoolType]
-		if !ok || fid != 2 || len(p.Tokens) < 2 { continue } // V3 only
-		if _, known := registry.GetFormulaID(p.Address); known { continue }
-		val := state.GetState(p.Address, slot0)
-		if val == (common.Hash{}) { continue }
-		// slot0 has sqrtPriceX96 in lower 160 bits — check if non-zero
-		data := val.Bytes()
-		hasPrice := false
-		for _, b := range data[12:32] { // lower 160 bits
-			if b != 0 { hasPrice = true; break }
-		}
-		if !hasPrice { continue }
-		registry.SetFormulaID(p.Address, 2)
-		directResults = append(directResults, poolResult{p.Address, 2, true})
-	}
-
-	// Direct registry for Pharaoh V1: check if pool has reserves via known slots
-	for _, p := range pools {
-		fid, ok := formulaMap[p.PoolType]
-		if !ok || fid != 1 || len(p.Tokens) < 2 { continue }
-		if _, known := registry.GetFormulaID(p.Address); known { continue }
-		// Pharaoh V1 uses various reserve slots — try common ones
-		found := false
-		for _, s := range []int{8, 9, 10, 11} {
-			val := state.GetState(p.Address, common.BigToHash(big.NewInt(int64(s))))
-			if val != (common.Hash{}) {
-				data := val.Bytes()
-				for _, b := range data[4:32] {
-					if b != 0 { found = true; break }
-				}
-				if found { break }
-			}
-		}
-		if !found { continue }
-		registry.SetFormulaID(p.Address, 1)
-		directResults = append(directResults, poolResult{p.Address, 1, true})
-	}
-
-	// Direct registry for Algebra: check slot 2 (globalState)
-	slot2 := common.HexToHash("0x2")
-	for _, p := range pools {
-		fid, ok := formulaMap[p.PoolType]
-		if !ok || fid != 4 || len(p.Tokens) < 2 { continue }
-		if _, known := registry.GetFormulaID(p.Address); known { continue }
-		val := state.GetState(p.Address, slot2)
-		if val == (common.Hash{}) { continue }
-		data := val.Bytes()
-		hasState := false
-		for _, b := range data[12:32] {
-			if b != 0 { hasState = true; break }
-		}
-		if !hasState { continue }
-		registry.SetFormulaID(p.Address, 4)
-		directResults = append(directResults, poolResult{p.Address, 4, true})
-	}
-
-	if len(directResults) > 0 {
-		fmt.Fprintf(os.Stderr, "[discover] directly registered %d pools from storage slots\n", len(directResults))
-	}
-
-	// Filter to formula-eligible types
-	var eligible []pathfinder.Pool
-	for _, p := range pools {
-		if _, ok := formulaMap[p.PoolType]; ok && len(p.Tokens) >= 2 {
-			eligible = append(eligible, p)
-		}
-	}
-	fmt.Fprintf(os.Stderr, "[discover] %d formula-eligible\n", len(eligible))
-
 	// Build overrides and apply
 	overrides := router.BuildOverrides(ROUTER, pools)
 	base := pathfinder.ApplyOverridesFlat(state, overrides)
@@ -432,137 +328,170 @@ func main() {
 	evmCtx := statedb.GetCachedContext(cfg)
 	cs := statedb.NewCallState(base)
 
-	// Warm pass
+	// Build StorageReader for formula quoting (uses same state as EVM)
+	storageReader := func(addr common.Address, key common.Hash) common.Hash {
+		return base.GetState(addr, key)
+	}
+
+	// Build PoolManager for formula quoting
+	pm := formulas.NewPoolManager(registry, storageReader)
+	pm.SetBlockTimestamp(cfg.Timestamp)
+	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		cs.Reset()
+		ret, _, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, to, data)
+		if err != nil {
+			return nil, false
+		}
+		return ret, true
+	})
+
+	// Register pool tokens and types in PoolManager
+	for _, p := range pools {
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+		}
+	}
+
+	// Filter to formula-eligible pools not already in registry
+	type candidate struct {
+		pool      pathfinder.Pool
+		formulaID int
+	}
+	var candidates []candidate
+	skipped := 0
+	for _, p := range pools {
+		fid, ok := formulaMap[p.PoolType]
+		if !ok || len(p.Tokens) < 2 {
+			continue
+		}
+		if _, known := registry.GetFormulaID(p.Address); known {
+			skipped++
+			continue
+		}
+		candidates = append(candidates, candidate{pool: p, formulaID: fid})
+	}
+	fmt.Fprintf(os.Stderr, "[discover] %d candidates (%d skipped, already in registry)\n", len(candidates), skipped)
+
+	// Warm pass — run one EVM call per pool to populate state cache
 	fmt.Fprintf(os.Stderr, "[discover] warm pass...\n")
-	for _, p := range eligible {
+	for _, c := range candidates {
+		p := c.pool
 		amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 		calldata := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, p.Tokens[0], p.Tokens[1], amountIn)
 		cs.Reset()
 		evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 	}
 
-	// Discovery pass
-	fmt.Fprintf(os.Stderr, "[discover] quoting %d pools via EVM...\n", len(eligible))
+	// Discovery pass with multi-amount verification
+	fmt.Fprintf(os.Stderr, "[discover] verifying %d pools (formula vs EVM, up to 10 amounts)...\n", len(candidates))
 	t0 := time.Now()
 
-	type stats struct {
-		ok   int
-		fail int
+	type fillResult struct {
+		addr      common.Address
+		formulaID int
 	}
-	byFormula := make(map[int]*stats)
+	var results []fillResult
 
-	var results []poolResult
+	filled := 0
+	matched := 0
+	mismatched := 0
 
-	for _, p := range eligible {
-		formulaID := formulaMap[p.PoolType]
+	for _, c := range candidates {
+		p := c.pool
 
-		// Try each direction — use token-specific amount if known, otherwise 1e18
-		valid := false
+		// Try both directions: token0→token1 and token1→token0
+		bestFormulaID := -1
+
 		for _, dir := range [][2]int{{0, 1}, {1, 0}} {
 			tokenIn := p.Tokens[dir[0]]
 			tokenOut := p.Tokens[dir[1]]
+			zeroForOne := dir[0] == 0
 
-			// Get amount for this token — need override for tokenIn
-			amountIn, hasAmount := tokenAmounts[tokenIn]
+			baseAmount, hasAmount := tokenAmounts[tokenIn]
 			if !hasAmount {
-				continue // can't test without known amount/override
+				continue
 			}
 
-			calldata := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, tokenIn, tokenOut, amountIn)
-			cs.Reset()
-			ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
-			if evmErr == nil && len(ret) >= 32 {
-				var out uint256.Int
-				out.SetBytes(ret[:32])
-				if !out.IsZero() {
-					valid = true
+			// Step 1: EVM probe with base amount
+			evmOut := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, baseAmount)
+
+			// Step 2: Formula probe with base amount
+			// Invalidate pool cache so we build fresh for each probe
+			pm.Invalidate(p.Address)
+			pq := pm.Get(p.Address)
+			formulaOut := formulaQuote(pq, baseAmount, zeroForOne)
+
+			// Step 3: Check if they match (including both being zero)
+			if !amountsEqual(evmOut, formulaOut) {
+				continue
+			}
+
+			// Step 4: Multi-amount verification (10 amounts)
+			allMatch := true
+			for mult := uint64(1); mult <= 10; mult++ {
+				testAmount := new(uint256.Int).Mul(baseAmount, uint256.NewInt(mult))
+
+				evmResult := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, testAmount)
+
+				// Rebuild formula quoter for each test (clean state)
+				pm.Invalidate(p.Address)
+				pq = pm.Get(p.Address)
+				fResult := formulaQuote(pq, testAmount, zeroForOne)
+
+				if !amountsEqual(evmResult, fResult) {
+					allMatch = false
 					break
 				}
+			}
+
+			if allMatch {
+				bestFormulaID = c.formulaID
+				break // Found a matching direction, done
 			}
 		}
 
-		if valid {
-			results = append(results, poolResult{p.Address, formulaID, true})
-			if byFormula[formulaID] == nil {
-				byFormula[formulaID] = &stats{}
-			}
-			byFormula[formulaID].ok++
+		results = append(results, fillResult{addr: p.Address, formulaID: bestFormulaID})
+		filled++
+		if bestFormulaID >= 0 {
+			matched++
 		} else {
-			// Check if pool has a known FoT token — if so, the formula can handle it
-			// with FoT adjustment instead of marking as -1.
-			fotRecoverable := false
-			for _, t := range p.Tokens {
-				tHex := strings.ToLower(t.Hex())
-				// Skip rebasing and formula-issue tokens — they must stay -1
-				if formulas.FotRebasingTokens[tHex] || formulas.FotFormulaIssueTokens[tHex] {
-					fotRecoverable = false
-					break
-				}
-				if formulas.IsFotToken(tHex) {
-					fotRecoverable = true
-				}
-			}
-			// Also check if pool is FoT-exempt (fee doesn't apply, so EVM failure is real)
-			poolHexStr := strings.ToLower(p.Address.Hex())
-			if formulas.IsFotExemptPool(poolHexStr) {
-				fotRecoverable = false
-			}
-
-			if fotRecoverable {
-				results = append(results, poolResult{p.Address, formulaID, true})
-				if byFormula[formulaID] == nil {
-					byFormula[formulaID] = &stats{}
-				}
-				byFormula[formulaID].ok++
-			} else {
-				results = append(results, poolResult{p.Address, -1, false})
-				if byFormula[-1] == nil {
-					byFormula[-1] = &stats{}
-				}
-				byFormula[-1].fail++
-			}
+			mismatched++
 		}
 	}
 
 	elapsed := time.Since(t0)
 	fmt.Fprintf(os.Stderr, "[discover] done in %dms\n\n", elapsed.Milliseconds())
 
-	// Print summary
-	fmt.Fprintf(os.Stderr, "Results:\n")
-	for _, id := range []int{-1, 0, 1, 2, 3, 4, 5, 6} {
-		s := byFormula[id]
-		if s == nil {
-			continue
-		}
-		name := formulaNames[id]
-		if id == -1 {
-			fmt.Fprintf(os.Stderr, "  %s: %d failed\n", name, s.fail)
-		} else {
-			fmt.Fprintf(os.Stderr, "  %s: %d validated\n", name, s.ok)
-		}
-	}
+	// Print stats
+	fmt.Fprintf(os.Stderr, "Stats:\n")
+	fmt.Fprintf(os.Stderr, "  Pools filled:   %d\n", filled)
+	fmt.Fprintf(os.Stderr, "  Formula match:  %d\n", matched)
+	fmt.Fprintf(os.Stderr, "  Formula fail:   %d (assigned -1)\n", mismatched)
+	fmt.Fprintf(os.Stderr, "  Skipped:        %d (already in registry)\n", skipped)
 
-	// Build registry content
-	var lines []string
-	lines = append(lines, "# Formula registry — auto-generated by cmd/discover")
-	lines = append(lines, "# format: pool_address:formula_id")
-	lines = append(lines, "# 0=V2, 1=PharaohV1, 2=V3, 3=LFJV2, 4=Algebra, 5=DODO, 6=V4, -1=invalid")
+	// Per-formula breakdown
+	byFormula := make(map[int]int)
 	for _, r := range results {
-		lines = append(lines, fmt.Sprintf("%s:%d", strings.ToLower(r.addr.Hex()), r.formulaID))
+		byFormula[r.formulaID]++
+	}
+	fmt.Fprintf(os.Stderr, "\nBy formula:\n")
+	for _, id := range []int{0, 1, 2, 3, 4, 5, 6, 7, -1} {
+		cnt := byFormula[id]
+		if cnt == 0 { continue }
+		name := formulaNames[id]
+		fmt.Fprintf(os.Stderr, "  %s: %d\n", name, cnt)
 	}
 
 	if doWrite {
 		registryPath := "formulas/registry.txt"
 
-		// Merge mode: read existing registry, only add/update entries.
-		// Never overwrite a valid entry with -1 (pool may work with different amounts).
+		// Read existing registry
 		existing := make(map[string]int)
 		if data, err := os.ReadFile(registryPath); err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
 				line = strings.TrimSpace(line)
-				if line == "" || strings.HasPrefix(line, "#") {
-					continue
-				}
+				if line == "" || strings.HasPrefix(line, "#") { continue }
 				parts := strings.SplitN(line, ":", 2)
 				if len(parts) == 2 {
 					var id int
@@ -572,30 +501,21 @@ func main() {
 			}
 		}
 
-		// Combine EVM-validated results with directly registered V2 pools
-		allResults := append(results, directResults...)
-
-		added, updated := 0, 0
-		for _, r := range allResults {
+		added := 0
+		for _, r := range results {
 			addr := strings.ToLower(r.addr.Hex())
-			oldID, exists := existing[addr]
-			if !exists {
-				// New pool — add it
-				existing[addr] = r.formulaID
-				added++
-			} else if r.ok && oldID == -1 {
-				// Was invalid, now valid — update
-				existing[addr] = r.formulaID
-				updated++
+			if _, exists := existing[addr]; exists {
+				continue // NEVER overwrite existing entries
 			}
-			// Don't overwrite valid entries with -1
+			existing[addr] = r.formulaID
+			added++
 		}
 
 		// Write merged registry
 		var outLines []string
 		outLines = append(outLines, "# Formula registry — auto-generated by cmd/discover")
 		outLines = append(outLines, "# format: pool_address:formula_id")
-		outLines = append(outLines, "# 0=V2, 1=PharaohV1, 2=V3, 3=LFJV2, 4=Algebra, 5=DODO, -1=invalid")
+		outLines = append(outLines, "# 0=V2, 1=PharaohV1, 2=V3, 3=LFJV2, 4=Algebra, 5=DODO, 6=V4, 7=BalancerV3, -1=invalid")
 		for addr, id := range existing {
 			outLines = append(outLines, fmt.Sprintf("%s:%d", addr, id))
 		}
@@ -605,11 +525,43 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to write: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "\nMerged into %s: %d added, %d updated (total %d entries)\n",
-			registryPath, added, updated, len(existing))
+		fmt.Fprintf(os.Stderr, "\nAppended to %s: %d new entries (total %d)\n",
+			registryPath, added, len(existing))
 	} else {
-		fmt.Fprintf(os.Stderr, "\nDry run — pass --write to merge (%d new results)\n", len(results))
+		fmt.Fprintf(os.Stderr, "\nDry run — pass --write to append (%d new results)\n", len(results))
 	}
+}
+
+// evmQuote runs a single-pool swap via EVM. Returns nil on revert (treated as zero).
+func evmQuote(evmCtx *statedb.CachedContext, cs *statedb.CallState, pool common.Address, poolType int, tokenIn, tokenOut common.Address, amount *uint256.Int) *uint256.Int {
+	calldata := pathfinder.EncodeSwapSingle(pool, poolType, tokenIn, tokenOut, amount)
+	cs.Reset()
+	ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+	if evmErr != nil || len(ret) < 32 {
+		return uint256.NewInt(0) // revert → zero
+	}
+	var out uint256.Int
+	out.SetBytes(ret[:32])
+	return &out
+}
+
+// formulaQuote runs a quote via PoolManager. Returns nil on failure (treated as zero).
+func formulaQuote(pq formulas.PoolQuoter, amount *uint256.Int, zeroForOne bool) *uint256.Int {
+	if pq == nil {
+		return uint256.NewInt(0)
+	}
+	out, ok := pq.Quote(amount, zeroForOne)
+	if !ok || out == nil {
+		return uint256.NewInt(0)
+	}
+	return out
+}
+
+// amountsEqual compares two amounts. Both nil/zero counts as equal.
+func amountsEqual(a, b *uint256.Int) bool {
+	if a == nil { a = uint256.NewInt(0) }
+	if b == nil { b = uint256.NewInt(0) }
+	return a.Eq(b)
 }
 
 // loadTokenAmounts reads formulas/data/token_amounts.txt and returns

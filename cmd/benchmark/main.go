@@ -405,19 +405,6 @@ func main() {
 							fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
 								p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
 						}
-						// Debug: print pool state for 1-wei diffs on pharaoh_v1
-						if diff.IsUint64() && diff.Uint64() == 1 && p.PoolType == 7 {
-							poolAddr := p.Address
-							// Read reserves from storage
-							slot16 := common.BigToHash(big.NewInt(16))
-							slot17 := common.BigToHash(big.NewInt(17))
-							r0val := state.GetState(poolAddr, slot16)
-							r1val := state.GetState(poolAddr, slot17)
-							r0 := new(big.Int).SetBytes(r0val[:])
-							r1 := new(big.Int).SetBytes(r1val[:])
-							fmt.Fprintf(os.Stderr, "  DEBUG %s zfo=%v r0=%s r1=%s formula=%s evm=%s\n",
-								poolAddr.Hex(), zeroForOne, r0.String(), r1.String(), formulaOut.Dec(), evmOut.Dec())
-						}
 					}
 				}
 			}

@@ -66,18 +66,24 @@ to accept `*formulas.Registry`).
 
 | Metric | Session start | Session end | Change |
 |--------|--------------|-------------|--------|
-| EVM time | 548ms | **8ms** | **67x faster** |
-| EVM calls | 528 | 26 | -95% |
-| Formula quotes | 7390 | 7566 | +2.4% |
-| Formula time | 155ms | 169ms | +9% (more pools) |
-| ms/pool | 0.225 | **0.099** | 2.3x faster |
-| Correctness | 98.2% | 99.5% | +1.3pp |
-| Mismatches | 112 | 27 | -76% |
+| EVM time | 548ms | **0ms** | **eliminated** |
+| EVM calls | 528 | **0** | -100% |
+| Formula quotes | 7390 | **7566** | +2.4% |
+| Formula time | 155ms | 161ms | +4% (more pools) |
+| ms/pool | 0.225 | **0.096** | **2.3x faster** |
+| Correctness | 98.2% | **99.4%** | +1.2pp |
+| Mismatches | 112 | **40** | -64% |
 
-### Key breakthrough: dead quoter pattern
-Pools with known formula type but failed construction now cache a `deadPoolQuoter`
-returning (nil, false) instead of returning nil → prevents EVM fallback for empty,
-uninitialized, or unsupported pools. This single pattern eliminated ~80 EVM calls.
+### Key breakthroughs
+1. **Dead quoter pattern** — pools with known formula type but failed construction cache a
+   `deadPoolQuoter` returning (nil, false). Prevents EVM fallback for empty/uninitialized pools.
+2. **New formulas** — Balancer V3 (weighted+stable), Balancer V2 (weighted), Hurricane V2
+   (slot 11, variable fee), Fraxswap V2 (slot 28, configurable fee)
+3. **V4 swapFee bug** — was never initialized (always 0), all V4 quotes had zero fee
+4. **LFJ V2 struct quoter** — new PoolQuoter with correct tokenX direction mapping + blockTimestamp
+5. **FoT exemptions** — per-pool, per-direction (input/output) exempt pools
+6. **V3 coverage** — auto-detect from v3PoolFees, dynamic fee from storage, layout validation
+7. **~50 agents dispatched** — opus for complex bugs, sonnet for FoT token identification
 
 ## 2026-03-25 — Pharaoh V1: 22 → 14 EVM calls (42 missing registry entries + fallback)
 

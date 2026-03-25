@@ -22,3 +22,5 @@ time=2026-03-25_09:07 git=15030ab result=0.564 pools=4000 formulas=3951 evm=4019
 time=2026-03-25_09:08 git=15030ab result=0.328 pools=4000 formulas=4085 evm=3882 ok=5559
 time=2026-03-25_09:11 git=0c74570 result=0.323 pools=4000 formulas=4085 evm=3882 ok=5559
 time=2026-03-25_09:23 git=0931614 result=0.321 pools=4000 formulas=4085 evm=3882 ok=5559
+time=2026-03-25_09:26 git=784b39f result=0.338 pools=4000 formulas=4085 evm=3882 ok=5559
+time=2026-03-25_09:27 git=784b39f result=0.332 pools=4000 formulas=4085 evm=3882 ok=5559

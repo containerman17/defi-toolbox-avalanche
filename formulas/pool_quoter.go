@@ -19,19 +19,21 @@ type PoolQuoter interface {
 
 // PoolManager holds pool structs and handles lazy construction + invalidation.
 type PoolManager struct {
-	pools      map[common.Address]PoolQuoter
-	registry   *Registry
-	reader     StorageReader
-	poolTokens map[common.Address][2]common.Address // pool → [token0, token1]
+	pools       map[common.Address]PoolQuoter
+	registry    *Registry
+	reader      StorageReader
+	poolTokens  map[common.Address][2]common.Address // pool → [token0, token1]
+	tokenModels *TokenModelRegistry
 }
 
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
 func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 	return &PoolManager{
-		pools:      make(map[common.Address]PoolQuoter),
-		registry:   registry,
-		reader:     reader,
-		poolTokens: make(map[common.Address][2]common.Address),
+		pools:       make(map[common.Address]PoolQuoter),
+		registry:    registry,
+		reader:      reader,
+		poolTokens:  make(map[common.Address][2]common.Address),
+		tokenModels: NewTokenModelRegistry(),
 	}
 }
 
@@ -72,17 +74,19 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}()
 
 	// Build inner pool struct (concrete type checks to avoid nil-interface issue)
-	wantFot := hasTokens && !IsFotExemptPool(strings.ToLower(pool.Hex()))
-	var t0Hex, t1Hex string
-	if wantFot {
-		t0Hex = strings.ToLower(tokens[0].Hex())
-		t1Hex = strings.ToLower(tokens[1].Hex())
-		wantFot = IsFotToken(t0Hex) || IsFotToken(t1Hex)
+	poolExempt := hasTokens && IsFotExemptPool(strings.ToLower(pool.Hex()))
+	var model0, model1 TokenModel
+	if hasTokens && !poolExempt {
+		t0Hex := strings.ToLower(tokens[0].Hex())
+		t1Hex := strings.ToLower(tokens[1].Hex())
+		model0 = pm.tokenModels.GetModel(t0Hex)
+		model1 = pm.tokenModels.GetModel(t1Hex)
 	}
+	wantFot := model0 != nil && model1 != nil && (model0.IsFoT() || model1.IsFoT())
 
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		if wantFot {
-			wrapped := &fotPoolQuoter{inner: inner, token0Hex: t0Hex, token1Hex: t1Hex}
+			wrapped := &fotPoolQuoter{inner: inner, model0: model0, model1: model1}
 			pm.pools[pool] = wrapped
 			return wrapped
 		}
@@ -122,9 +126,9 @@ func poolHex(addr common.Address) string {
 
 // fotPoolQuoter wraps a PoolQuoter to apply FoT tax adjustments on input/output.
 type fotPoolQuoter struct {
-	inner     PoolQuoter
-	token0Hex string // lowercase hex of token0
-	token1Hex string // lowercase hex of token1
+	inner  PoolQuoter
+	model0 TokenModel // token0's model
+	model1 TokenModel // token1's model
 }
 
 func (f *fotPoolQuoter) Address() common.Address {
@@ -132,27 +136,19 @@ func (f *fotPoolQuoter) Address() common.Address {
 }
 
 func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
-	var tokenInHex, tokenOutHex string
+	var modelIn, modelOut TokenModel
 	if zeroForOne {
-		tokenInHex = f.token0Hex
-		tokenOutHex = f.token1Hex
+		modelIn = f.model0
+		modelOut = f.model1
 	} else {
-		tokenInHex = f.token1Hex
-		tokenOutHex = f.token0Hex
+		modelIn = f.model1
+		modelOut = f.model0
 	}
 
 	// Adjust input: if tokenIn is FoT, pool receives less
-	effectiveIn := amountIn
-	if fee, ok := FotCalcFee(tokenInHex, amountIn.ToBig()); ok {
-		feeU256, overflow := uint256.FromBig(fee)
-		if overflow {
-			return nil, false
-		}
-		adjusted := new(uint256.Int).Sub(amountIn, feeU256)
-		if adjusted.IsZero() || adjusted.Sign() < 0 {
-			return nil, false
-		}
-		effectiveIn = adjusted
+	effectiveIn := modelIn.AdjustInput(amountIn)
+	if effectiveIn == nil {
+		return nil, false
 	}
 
 	out, ok := f.inner.Quote(effectiveIn, zeroForOne)
@@ -161,15 +157,9 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.
 	}
 
 	// Adjust output: if tokenOut is FoT, user receives less
-	if fee, hasFot := FotCalcFee(tokenOutHex, out.ToBig()); hasFot {
-		feeU256, overflow := uint256.FromBig(fee)
-		if overflow {
-			return nil, false
-		}
-		out = new(uint256.Int).Sub(out, feeU256)
-		if out.IsZero() || out.Sign() < 0 {
-			return nil, false
-		}
+	out = modelOut.AdjustOutput(out)
+	if out == nil {
+		return nil, false
 	}
 
 	return out, true

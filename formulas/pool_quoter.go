@@ -89,7 +89,10 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 				case 7: // pharaoh_v1
 					formulaID = FormulaPharaohV1
 				default:
-					return nil
+					// Unknown pool type — cache dead quoter to prevent EVM fallback
+					dead := &deadPoolQuoter{addr: pool}
+					pm.pools[pool] = dead
+					return dead
 				}
 			}
 		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
@@ -139,7 +142,9 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		t1Hex := strings.ToLower(tokens[1].Hex())
 		if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] ||
 			FotFormulaIssueTokens[t0Hex] || FotFormulaIssueTokens[t1Hex] {
-			return nil
+			dead := &deadPoolQuoter{addr: pool}
+			pm.pools[pool] = dead
+			return dead
 		}
 	}
 

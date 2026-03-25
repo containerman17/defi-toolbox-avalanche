@@ -323,7 +323,7 @@ func main() {
 	}
 
 	// Register Balancer V3 pools by reading parameters from EVM/storage
-	balV3Count := registerBalancerV3PoolsFromState(pools, state, cfg)
+	balV3Count := registerBalancerV3PoolsFromState(pools, state, cfg, registry)
 	if balV3Count > 0 {
 		fmt.Fprintf(os.Stderr, "[discover] registered %d Balancer V3 pools\n", balV3Count)
 	}
@@ -641,7 +641,7 @@ func loadTokenAmounts() map[common.Address]*uint256.Int {
 
 // registerBalancerV3PoolsFromState registers Balancer V3 pools by reading parameters
 // from pool contract storage/EVM. Returns the count of registered pools.
-func registerBalancerV3PoolsFromState(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig) int {
+func registerBalancerV3PoolsFromState(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry) int {
 	count := 0
 	for _, p := range pools {
 		if p.PoolType != 6 || len(p.Tokens) < 2 {
@@ -709,7 +709,11 @@ func registerBalancerV3PoolsFromState(pools []pathfinder.Pool, state *statedb.St
 			}
 		}
 
-		// If neither worked, it's likely a GyroECLP or other exotic pool type — skip
+		// Pool type 6 but neither Stable nor Weighted (e.g. GyroECLP).
+		// Register FormulaBalancerV3 without a pool info entry so that
+		// newBalancerV3Pool returns nil, and PoolManager.Get() caches a
+		// deadPoolQuoter — preventing EVM fallback entirely.
+		registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)
 	}
 	return count
 }

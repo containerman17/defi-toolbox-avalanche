@@ -553,6 +553,8 @@ func main() {
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
 
+			// DEBUG: print pools that fall through to EVM
+			fmt.Fprintf(os.Stderr, "  EVM fallback: pool=%s type=%d dex=%s\n", pool.Address.Hex()[:12], pool.PoolType, pool.Dex)
 			// EVM fallback — skip if profiling formulas only
 			if profileMode == "formulas-only" {
 				ts.FailCount++
@@ -837,6 +839,12 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 				}
 			}
 		}
+
+		// Pool type 6 but neither Stable nor Weighted (e.g. GyroECLP).
+		// Register FormulaBalancerV3 without a pool info entry so that
+		// newBalancerV3Pool returns nil, and PoolManager.Get() caches a
+		// deadPoolQuoter — preventing EVM fallback entirely.
+		registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)
 	}
 	if count > 0 {
 		fmt.Fprintf(os.Stderr, "[benchmark] registered %d Balancer V3 pools\n", count)

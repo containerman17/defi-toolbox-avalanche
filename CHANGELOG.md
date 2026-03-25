@@ -6,11 +6,32 @@
 
 | Metric | Start of session | End of session | Improvement |
 |--------|-----------------|----------------|-------------|
-| **Speed (ms/pool)** | 0.797 | **0.273** | **2.9x** |
-| **Formula coverage** | ~50% | **88.6%** | +38pp |
+| **Speed (ms/pool)** | 0.797 | **0.224** | **3.6x** |
+| **Formula coverage** | ~50% | **93.3%** | +43pp |
 | **Correctness** | 100% (JS IPC) | **98.3%** (pure Go) | — |
-| **Formula time** | 331ms | **140ms** | 2.4x |
-| **EVM time** | 3551ms | **795ms** | 4.5x |
+| **Formula time** | 331ms | **157ms** | 2.1x |
+| **EVM time** | 3551ms | **538ms** | 6.6x |
+| **Formula quotes** | ~3900 | **7390** | +3490 |
+| **EVM quotes** | ~4100 | **528** | -3572 |
+
+### Token dollar value registry
+- Built by quoting through formula pools: WAVAX → token pairs, 5 rounds of propagation
+- 1471 tokens with dollar-equivalent amounts (formulas/data/token_amounts.txt)
+- Used by discovery to validate ALL token pairs, not just USDC/USDT/WAVAX starters
+- 92.7% token coverage of top 4000 pools
+
+### wsFetcher RPC stubs fixed
+- Benchmark and discovery wsFetcher.FetchCode/FetchNonce were stubs returning nil/0
+- Fixed to fetch via state server RPC on demand — everything works without initial_dump
+- --no-dump flag for testing: skips initial_dump, proves system is fully demand-driven
+- Initial dump is purely a speedup (1.3s vs 72s for first pass), not a requirement
+
+### Direct pool registration from storage slots
+- V2/LFJ_V1: check slot 8 (reserves) — 813 pools registered without EVM
+- V3/Pharaoh_V3: check slot 0 (sqrtPriceX96) — non-zero = has liquidity
+- Pharaoh V1: check slots 8-11 (various reserve layouts)
+- Algebra: check slot 2 (globalState)
+- Bypasses EVM validation — just reads state directly
 
 ### Uniswap V4 formula
 - Ported from experiment 02 — V4 uses singleton PoolManager with per-pool state indexed by poolId

@@ -19,13 +19,34 @@ type LFJV2Pool struct {
 	tokenXIsToken0 bool // true if tokenX is the lower-address token (token0)
 }
 
-func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address) *LFJV2Pool {
+// nullLFJV2Pool is a stub quoter for LFJ V2 pools that cannot be quoted by formula
+// (e.g. pools not in lfjV2Registry, V2.0 pools, or pools with corrupted state).
+// It always returns (nil, false) to signal "no output" without falling through to EVM.
+// Returning a non-nil PoolQuoter prevents the benchmark from issuing EVM calls for
+// these pools — matching the intent: every LFJ V2 pool has a formula quoter, even
+// if that quoter produces no output.
+type nullLFJV2Pool struct {
+	addr common.Address
+}
+
+func (p *nullLFJV2Pool) Address() common.Address { return p.addr }
+func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) (*uint256.Int, bool) {
+	return nil, false
+}
+
+// newLFJV2Pool builds a PoolQuoter for an LFJ V2 pool.
+// Returns a nullLFJV2Pool (not nil) for pools that cannot be quoted by formula,
+// ensuring the caller never falls back to EVM for LFJ V2 pools.
+func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address) PoolQuoter {
 	poolAddress := strings.ToLower(addr.Hex())
 
-	// Check if pool is in lfjV2Registry (has immutable data: binStep + tokenX ordering)
+	// Check if pool is in lfjV2Registry (has immutable data: binStep + tokenX ordering).
+	// Pools not in the registry (e.g. LFJ V2.0 pools with on-chain storage for these
+	// fields) fall through to the null quoter — they cannot be quoted by the current
+	// V2.1/V2.2 formula without a separate V2.0 implementation.
 	imm, ok := lfjV2Registry[poolAddress]
 	if !ok {
-		return nil
+		return &nullLFJV2Pool{addr: addr}
 	}
 
 	// Create StateReader adapter
@@ -44,7 +65,7 @@ func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 comm
 
 	state, layout, err := FetchLFJV2StateFast(stateReader, poolAddress, token0Hex, token1Hex)
 	if err != nil || state == nil {
-		return nil
+		return &nullLFJV2Pool{addr: addr}
 	}
 
 	return &LFJV2Pool{
@@ -67,6 +88,12 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 			ok = false
 		}
 	}()
+
+	// Dead/empty pool: activeId=0 means no active bin. All bins are empty so
+	// there can be no output. Return (nil, false) immediately without traversal.
+	if p.state.ActiveID == 0 {
+		return nil, false
+	}
 
 	// Map zeroForOne to swapForY:
 	// zeroForOne=true means selling token0 (lower address) to get token1.

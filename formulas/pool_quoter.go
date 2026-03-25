@@ -127,10 +127,14 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	// are handled by the fotPoolQuoter wrapper via fotCalculators.
 	// Skip for V3 — the swap formula uses sqrtPrice/liquidity/ticks from storage,
 	// not token balances. Rebasing and formula-issue tokens don't affect V3 math.
+	// Skip for LFJ V2 — discrete bin math uses bin reserves/parameters from storage,
+	// not affected by rebasing. FoT taxes handled by fotPoolQuoter wrapper.
+	// Skip for Pharaoh V1 — solidly-style formula uses reserves from storage.
 	// FoT taxes are handled by the fotPoolQuoter wrapper.
 	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	tokens, hasTokens := pm.poolTokens[pool]
-	if hasTokens && formulaID != FormulaV2_30bps && formulaID != FormulaV3 {
+	if hasTokens && formulaID != FormulaV2_30bps && formulaID != FormulaV3 &&
+		formulaID != FormulaLFJV2 && formulaID != FormulaPharaohV1 {
 		t0Hex := strings.ToLower(tokens[0].Hex())
 		t1Hex := strings.ToLower(tokens[1].Hex())
 		if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] ||

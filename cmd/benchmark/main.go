@@ -405,6 +405,13 @@ func main() {
 							fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
 								p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
 						}
+						// Debug: print pool state for 1-wei diffs on pharaoh_v1
+						if diff.IsUint64() && diff.Uint64() == 1 && p.PoolType == 7 {
+							if q := pm.Get(p.Address); q != nil {
+								fmt.Fprintf(os.Stderr, "  DEBUG %s pool_type=%d zfo=%v amountIn=%s\n",
+									p.Address.Hex(), p.PoolType, zeroForOne, amountIn.Dec())
+							}
+						}
 					}
 				}
 			}

@@ -152,10 +152,9 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	// FoT: check if pool tokens require rebasing/formula-issue fallback.
-	// FotFormulaIssueTokens IS checked for V2 pools: pure RFI reflection tokens (SPORE, GB,
-	// DICK) produce a measurable excess even in V2 because the EVM router measures
-	// balanceOf(router) change, which captures reflection redistribution making the
-	// received amount slightly larger than tTransferAmount = raw - tFee.
+	// FotFormulaIssueTokens contains tokens with non-FoT formula issues (fraxswap TWAMM,
+	// Pharaoh V1 rounding, LFJ V2 precision). RFI reflection tokens (GB, DICK, SPORE)
+	// were moved OUT to reflectionTokenConfigs for exact _rTotal math.
 	// FotRebasingTokens are NOT checked for V2 (rebasing affects balances over time,
 	// not per-transfer; V2 slot-8 reserves already reflect current balances).
 	// Skip for V3 — the swap formula uses sqrtPrice/liquidity/ticks from storage,

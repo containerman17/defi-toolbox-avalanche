@@ -73,15 +73,8 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// Tokens with exact Solidity math from source code analysis
 	// =====================================================================
 
-	// Good Bridging (GB): fee = tAmount.div(100) (integer div, 1%, unconditional)
-	// Reflection token: after _reflectFee(rFee) reduces _rTotal, the new rate makes
-	// rTransferAmount/newRate slightly > tTransferAmount (formula < evm). Drift ≈ ~3.7 PPM
-	// for typical trade sizes (~5e12 GB out of tTotal=14.327880e15). Inherent to SafeMoon
-	// reflection redistribution; cannot be corrected with a static fee.
-	// Affected pools (dir=1, GB is output, pool NOT _isExcluded):
-	//   0x77eb05e7f557fe8003047fb3be690dc429c511ba (partyswap, GB/WAVAX)
-	//   0xd1ef5be30873bb4de09da01d0f7ea743226aec9f (lfj_v1, GB/USDT.e)
-	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": fotPct(1),
+	// Good Bridging (GB): moved to reflectionTokenConfigs for exact RFI math.
+	// Was: 1% pure reflection, ~3.7 PPM residual with static fee.
 
 	// SLED: fee = amount * 2 / 100
 	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": fotPct(2),
@@ -114,12 +107,8 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return f1.Add(f1, f2)
 	},
 
-	// SPORE: fee = amount / 100 * 6 (div THEN mul, 6%, unconditional)
-	"0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985": func(amount *big.Int) *big.Int {
-		fee := new(big.Int).Div(amount, big.NewInt(100))
-		fee.Mul(fee, big.NewInt(6))
-		return fee
-	},
+	// SPORE: moved to reflectionTokenConfigs for exact RFI math.
+	// Was: 6% pure reflection (div-then-mul), ~0.575 PPM residual with static fee.
 
 	// Safemoon fork: fee = amount * 500 / 10000
 	"0x3960716779870ef8757aeb43f3c4f0c30cb2d557": fotBps(500),
@@ -127,19 +116,8 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// DejàVu: fee = amount * 51 / 10000
 	"0x78aed06eb93351aae6886d9c012888f87b64c918": fotBps(51),
 
-	// Double-division tokens: fee = amount * rate / 100 / 100 (GRANULARITY=100)
-	// 0xaaec (DICK): RFI reflection token (CoinToken), TAX=1%+BURN=1%+CHARITY=2% = 400 bps total.
-	// Formula fee = amount * 400 / 100 / 100. However, due to RFI reflection excess
-	// (same mechanism as Good Bridging): EVM measured amount > tTransferAmount by ~0.13 PPM
-	// (tFee * tTransfer / tTotal), causing formula < evm beyond 0.01 PPM tolerance.
-	// Pool 0x655082c9276d0a7363c3a0e944a9cebdff717c91 (lfj_v1, MIM/DICK) is marked -1 in
-	// registry.txt to fall back to EVM. The FoT entry here is kept for other potential pools.
-	"0xaaec4017381a1d1e564cb88600c001d05b21571d": func(amount *big.Int) *big.Int {
-		fee := new(big.Int).Mul(amount, big.NewInt(400))
-		fee.Div(fee, big.NewInt(100))
-		fee.Div(fee, big.NewInt(100))
-		return fee
-	},
+	// DICK (CoinToken, 0xaaec): moved to reflectionTokenConfigs for exact RFI+burn math.
+	// Was: TAX=1% reflect + BURN=1% + CHARITY=2% = 4% total, ~0.13 PPM residual with static fee.
 
 	// 0x4fc8: same double-division pattern, total 500 bps
 	// DEX pair exemption possible (_isExcluded[recipient] or FeeAddress)
@@ -518,31 +496,7 @@ var FotFormulaIssueTokens = map[string]bool{
 	// (18 wei diff only, not FoT — possible rounding in stable swap math)
 	"0x130966628846bfd36ff31a822705796e8cb8c18d": true,
 
-	// Good Bridging (GB, 0x90842eb834...): pure RFI reflection token, 1% tax.
-	// The formula correctly applies tFee = amountOut/100, giving tTransfer = amountOut - tFee.
-	// However the EVM measures rTransferAmount / newRate where newRate < oldRate (because
-	// _rTotal shrinks by rFee after _reflectFee). This makes the measured received amount
-	// slightly LARGER than tTransfer: residual ≈ tFee * tTransfer / tTotal.
-	// At benchmark amountIn=1e18 WAVAX → ~4.05 PPM excess; scales quadratically with amountOut.
-	// Cannot be corrected without reading _rTotal from the GB token contract.
-	// Pool: 0x0a1041feb651b1daa2f23eba7dab3898d6b9a4fe (pangolin_v2, GB/WAVAX), dir=1.
-	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": true,
-
-	// DICK (0xaaec4017...): CoinToken RFI reflection token, TAX=1%+BURN=1%+CHARITY=2% = 400 bps.
-	// Same RFI drift mechanism as GB and SPORE: formula gives tTransferAmount, EVM measures
-	// rTransferAmount/newRate > tTransferAmount. Excess ≈ tFee * tTransfer / tTotal ≈ 0.129 PPM.
-	// Pool: 0x655082c9276d0a7363c3a0e944a9cebdff717c91 (lfj_v1, MIM/DICK), dir=0.
-	// Also marked -1 in registry.txt as belt-and-suspenders.
-	"0xaaec4017381a1d1e564cb88600c001d05b21571d": true,
-
-	// SPORE (0x6e7f5c0b...): pure RFI reflection token, 6% tFee = tAmount.div(100).mul(6).
-	// Same mechanism as GB/DICK: formula gives tTransferAmount = raw - tFee, but the EVM
-	// measures rTransferAmount / newRate (where newRate < oldRate because _reflectFee shrinks
-	// _rTotal). The buyer's actual received amount = net_received * rTotal / (rTotal - rFee),
-	// which is net_received * (1 + tFee/tTotal) approximately. Residual excess ≈ 0.575 PPM
-	// (tFee * net_received / tTotal), well above the 0.01 PPM tolerance.
-	// Pool: 0x0a63179a8838b5729e79d239940d7e29e40a0116 (pangolin_v2, SPORE/WAVAX), dir=1.
-	"0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985": true,
+	// GB, DICK, SPORE: moved to reflectionTokenConfigs for exact RFI math.
 
 	// LFJ V2 pools with 0% at size 0 but negative diff at size 2:
 	// These are formula precision issues in LFJ V2, not transfer taxes.
@@ -645,6 +599,83 @@ var reflectionTokenConfigs = map[string]reflectionTokenConfig{
 			burn := new(big.Int).Mul(amount, big.NewInt(1))
 			burn.Div(burn, big.NewInt(100))
 			return fees.Add(fees, burn)
+		},
+	},
+
+	// Good Bridging (GB): 1% pure reflection tax (classic reflect.finance fork).
+	// _getTValues: tFee = tAmount.div(100) — unconditional, no team fee, no burn.
+	// _reflectFee only reduces _rTotal by rFee. _tTotal is constant (no burn).
+	// Storage layout (Ownable inherits Context — no slots; Ownable slot 0 = _owner):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_rTotal, slot 7=_tFeeTotal.
+	// _tTotal = 14327880 * 1e9 = 14327880000000000 (constant).
+	// Pools: 0x77eb05e7 (partyswap, GB/WAVAX), 0xd1ef5be3 (lfj_v1, GB/USDT.e),
+	//        0x0a1041fe (pangolin_v2, GB/WAVAX).
+	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Mul(big.NewInt(14327880), big.NewInt(1e9)),
+		reflectRate:  1,
+		reflectDenom: 100,
+		calcFee: func(amount *big.Int) *big.Int {
+			return new(big.Int).Div(amount, big.NewInt(100))
+		},
+	},
+
+	// DICK (CoinToken, 0xaaec): TAX=1% reflect + BURN=1% + CHARITY=2% = 4% total.
+	// CoinToken uses double-division: fee = (amount * FEE * GRANULARITY) / GRANULARITY / 100.
+	// _TAX_FEE=100, _BURN_FEE=100, _CHARITY_FEE=200, _GRANULARITY=100.
+	// tFee = amount*100/100/100 = 1%, tBurn = amount*100/100/100 = 1%, tCharity = amount*200/100/100 = 2%.
+	// _reflectFee: _rTotal = _rTotal.sub(rFee).sub(rBurn) — both tax and burn reduce _rTotal.
+	//              _tTotal = _tTotal.sub(tBurn) — only burn reduces _tTotal.
+	// Charity is sent to FeeAddress via _sendToCharity (rOwned, does NOT reduce _rTotal).
+	// Storage layout (Ownable has public _owner at slot 0):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_NAME, slot 7=_SYMBOL,
+	//   slot 8=_DECIMALS, slot 9=FeeAddress, slot 10=_MAX, slot 11=_DECIMALFACTOR,
+	//   slot 12=_GRANULARITY, slot 13=_tTotal, slot 14=_rTotal.
+	// Pool: 0x655082c9 (lfj_v1, MIM/DICK).
+	"0xaaec4017381a1d1e564cb88600c001d05b21571d": {
+		rTotalSlot:   common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000000e"),
+		tTotalSlot:   common.HexToHash("0x000000000000000000000000000000000000000000000000000000000000000d"),
+		reflectRate:  1,
+		reflectDenom: 100,
+		burnRate:     1,
+		burnDenom:    100,
+		calcFee: func(amount *big.Int) *big.Int {
+			// tFee = amount * 100 / 100 / 100 (1% reflect)
+			tFee := new(big.Int).Mul(amount, big.NewInt(100))
+			tFee.Div(tFee, big.NewInt(100))
+			tFee.Div(tFee, big.NewInt(100))
+			// tBurn = amount * 100 / 100 / 100 (1% burn)
+			tBurn := new(big.Int).Mul(amount, big.NewInt(100))
+			tBurn.Div(tBurn, big.NewInt(100))
+			tBurn.Div(tBurn, big.NewInt(100))
+			// tCharity = amount * 200 / 100 / 100 (2% charity)
+			tCharity := new(big.Int).Mul(amount, big.NewInt(200))
+			tCharity.Div(tCharity, big.NewInt(100))
+			tCharity.Div(tCharity, big.NewInt(100))
+			return tFee.Add(tFee, tBurn).Add(tFee, tCharity)
+		},
+	},
+
+	// SPORE (Spore.Finance): 6% pure reflection tax (no burn, no team).
+	// _getTValues: tFee = tAmount.div(100).mul(6) — div-then-mul, unconditional.
+	// _reflectFee only reduces _rTotal by rFee. _tTotal is constant (no burn).
+	// Storage layout (Ownable slot 0 = _owner):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_rTotal.
+	// _tTotal = 100000000000 * 10^6 * 10^9 = 10^26 (constant).
+	// Pool: 0x0a63179a (pangolin_v2, SPORE/WAVAX).
+	"0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Exp(big.NewInt(10), big.NewInt(26), nil),
+		reflectRate:  6,
+		reflectDenom: 100,
+		calcFee: func(amount *big.Int) *big.Int {
+			// tFee = tAmount.div(100).mul(6) — div then mul
+			fee := new(big.Int).Div(amount, big.NewInt(100))
+			fee.Mul(fee, big.NewInt(6))
+			return fee
 		},
 	},
 }

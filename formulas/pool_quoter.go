@@ -60,17 +60,10 @@ func (pm *PoolManager) SetBlockTimestamp(ts uint64) {
 }
 
 // SetPoolType registers the pool type and DEX provider for a pool (from pools.txt).
-// This allows Get() to try V2 formula for pools marked -1 in registry.txt
-// when the pool type indicates a V2-family DEX.
+// DEX name is used to dispatch V2 variants (hurricane, fraxswap) to correct constructors.
 func (pm *PoolManager) SetPoolType(pool common.Address, poolType int, dex string) {
 	pm.poolTypes[pool] = poolType
 	pm.poolDex[pool] = dex
-}
-
-// isV2Family returns true if pool has poolType 8 (V2 family).
-func (pm *PoolManager) isV2Family(pool common.Address) bool {
-	pt, hasPT := pm.poolTypes[pool]
-	return hasPT && pt == 8
 }
 
 // SetPoolTokens registers the token pair for a pool, enabling FoT adjustment.
@@ -79,7 +72,8 @@ func (pm *PoolManager) SetPoolTokens(pool common.Address, token0, token1 common.
 }
 
 // Get returns a PoolQuoter for the given pool, building it if needed.
-// Returns nil if the pool has no formula or construction fails.
+// Returns nil if the pool has no formula in the registry (→ EVM fallback).
+// The registry is authoritative: -1 means EVM, positive means formula.
 // If the pool has FoT tokens, the returned quoter adjusts input/output automatically.
 func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	if q, ok := pm.pools[pool]; ok {
@@ -87,103 +81,11 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	formulaID, known := pm.registry.GetFormulaID(pool)
-	poolHexLower := strings.ToLower(pool.Hex())
 	if !known || formulaID < 0 {
-		// Check lfjV2Registry as fallback — pools may be missing from registry.txt
-		// or marked -1 due to function-based formula direction bug (now fixed in struct path)
-		if _, inLFJ := lfjV2Registry[poolHexLower]; inLFJ {
-			formulaID = FormulaLFJV2
-		} else if !known {
-			if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
-				formulaID = FormulaV3
-			} else if _, inV4 := v4PoolIds[poolHexLower]; inV4 {
-				// V4 pool registered via RegisterV4Pool but not yet in registry.txt
-				formulaID = FormulaV4
-			} else {
-				// Last resort: assign formula based on poolType from pools.txt
-				switch pm.poolTypes[pool] {
-				case 3: // lfj_v2
-					formulaID = FormulaLFJV2
-				case 7: // pharaoh_v1
-					formulaID = FormulaPharaohV1
-				default:
-					// Unknown pool type — cache dead quoter to prevent EVM fallback
-					dead := &deadPoolQuoter{addr: pool}
-					pm.pools[pool] = dead
-					return dead
-				}
-			}
-		} else if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
-			// V3 pools marked -1 in registry.txt can still use the V3 formula —
-			// they were likely invalidated for reasons that don't apply to the
-			// struct-based V3 quoter (e.g. dynamic fees now read from storage).
-			formulaID = FormulaV3
-		} else if _, inV4 := v4PoolIds[poolHexLower]; inV4 {
-			// V4 pools marked -1 in registry.txt: retry with V4 formula.
-			// Empty pools return (nil, false) without EVM fallback.
-			formulaID = FormulaV4
-		} else if pm.isV2Family(pool) {
-			// V2-family pools marked -1: retry with V2 formula. The -1 was set by
-			// formula discovery which compared function-based output to EVM. Common
-			// causes: (a) FoT tokens not yet in fotCalculators (now handled by
-			// fotPoolQuoter wrapper), (b) transient state during discovery,
-			// (c) non-standard V2 forks (hurricane, fraxswap) with different
-			// storage layout / fees — handled with DEX-specific constructors.
-			formulaID = FormulaV2_30bps
-		} else if _, inPharaoh := pharaohV1Registry[poolHexLower]; inPharaoh {
-			// Pharaoh V1 pools marked -1: retry with Pharaoh V1 formula. The -1
-			// was set by formula discovery which tested function-based quoting.
-			// Common causes: FoT tokens (now handled by fotPoolQuoter wrapper),
-			// or transient state during discovery.
-			formulaID = FormulaPharaohV1
-		} else {
-			// Last resort for known pools with formulaID < 0: assign by poolType
-			switch pm.poolTypes[pool] {
-			case 3: // lfj_v2
-				formulaID = FormulaLFJV2
-			case 7: // pharaoh_v1
-				formulaID = FormulaPharaohV1
-			default:
-				dead := &deadPoolQuoter{addr: pool}
-				pm.pools[pool] = dead
-				return dead
-			}
-		}
+		return nil // not in registry or marked invalid → EVM fallback
 	}
 
-	// FoT: check if pool tokens require rebasing/formula-issue fallback.
-	// FotFormulaIssueTokens contains tokens with non-FoT formula issues (fraxswap TWAMM,
-	// Pharaoh V1 rounding, LFJ V2 precision). RFI reflection tokens (GB, DICK, SPORE)
-	// were moved OUT to reflectionTokenConfigs for exact _rTotal math.
-	// FotRebasingTokens are NOT checked for V2 (rebasing affects balances over time,
-	// not per-transfer; V2 slot-8 reserves already reflect current balances).
-	// Skip for V3 — the swap formula uses sqrtPrice/liquidity/ticks from storage,
-	// not token balances. Rebasing and formula-issue tokens don't affect V3 math.
-	// Skip for LFJ V2 — discrete bin math uses bin reserves/parameters from storage,
-	// not affected by rebasing. FoT taxes handled by fotPoolQuoter wrapper.
-	// Skip for Pharaoh V1 — solidly-style formula uses reserves from storage.
-	// FoT taxes are handled by the fotPoolQuoter wrapper.
-	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	tokens, hasTokens := pm.poolTokens[pool]
-	if hasTokens {
-		t0Hex := strings.ToLower(tokens[0].Hex())
-		t1Hex := strings.ToLower(tokens[1].Hex())
-		// FotFormulaIssueTokens applies to all formula types including V2.
-		if FotFormulaIssueTokens[t0Hex] || FotFormulaIssueTokens[t1Hex] {
-			dead := &deadPoolQuoter{addr: pool}
-			pm.pools[pool] = dead
-			return dead
-		}
-		// FotRebasingTokens only applies to non-V2, non-V3, non-LFJ V2, non-Pharaoh V1.
-		if formulaID != FormulaV2_30bps && formulaID != FormulaV3 &&
-			formulaID != FormulaLFJV2 && formulaID != FormulaPharaohV1 {
-			if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] {
-				dead := &deadPoolQuoter{addr: pool}
-				pm.pools[pool] = dead
-				return dead
-			}
-		}
-	}
 
 	// Recover from panics during construction
 	defer func() {
@@ -256,25 +158,10 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	case FormulaBalancerV2:
 		if p := newBalancerV2Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}
-	// Pool has a formula type but construction failed (empty/uninitialized).
-	// Cache a dead quoter so we don't retry construction or fall through to EVM.
-	dead := &deadPoolQuoter{addr: pool}
-	pm.pools[pool] = dead
-	return dead
-}
-
-// deadPoolQuoter is a no-op quoter cached for pools where construction failed.
-// Prevents EVM fallback and re-construction attempts for empty/uninitialized pools.
-type deadPoolQuoter struct {
-	addr common.Address
-}
-
-func (d *deadPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
-	return nil, false
-}
-
-func (d *deadPoolQuoter) Address() common.Address {
-	return d.addr
+	// Construction failed — return nil for EVM fallback.
+	// The registry verified this formula works via multi-amount testing,
+	// so failure here is transient (empty pool, missing state).
+	return nil
 }
 
 // Invalidate drops the cached pool struct for a given address.

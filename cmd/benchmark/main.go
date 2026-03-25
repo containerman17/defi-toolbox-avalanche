@@ -407,10 +407,16 @@ func main() {
 						}
 						// Debug: print pool state for 1-wei diffs on pharaoh_v1
 						if diff.IsUint64() && diff.Uint64() == 1 && p.PoolType == 7 {
-							if q := pm.Get(p.Address); q != nil {
-								fmt.Fprintf(os.Stderr, "  DEBUG %s pool_type=%d zfo=%v amountIn=%s\n",
-									p.Address.Hex(), p.PoolType, zeroForOne, amountIn.Dec())
-							}
+							poolAddr := p.Address
+							// Read reserves from storage
+							slot16 := common.BigToHash(big.NewInt(16))
+							slot17 := common.BigToHash(big.NewInt(17))
+							r0val := state.GetState(poolAddr, slot16)
+							r1val := state.GetState(poolAddr, slot17)
+							r0 := new(big.Int).SetBytes(r0val[:])
+							r1 := new(big.Int).SetBytes(r1val[:])
+							fmt.Fprintf(os.Stderr, "  DEBUG %s zfo=%v r0=%s r1=%s formula=%s evm=%s\n",
+								poolAddr.Hex(), zeroForOne, r0.String(), r1.String(), formulaOut.Dec(), evmOut.Dec())
 						}
 					}
 				}
@@ -573,9 +579,8 @@ func main() {
 						_ = out
 						continue
 					}
-					// Struct exists but returned zero — skip TryQuote fallback
-					ts.FailCount++
-					continue
+					// Struct exists but returned zero — fall through to EVM
+					// Don't skip: these pools may have real liquidity that only EVM can quote
 				}
 				// No struct (LFJ V2, Algebra) — fallback to function-based formula
 				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)

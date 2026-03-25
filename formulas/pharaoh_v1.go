@@ -3,8 +3,6 @@ package formulas
 import (
 	"fmt"
 	"math/big"
-	"os"
-
 	"github.com/ava-labs/libevm/crypto"
 
 
@@ -89,12 +87,6 @@ func quotePharaohV1Internal(state *PharaohV1State, amountIn *big.Int, zeroForOne
 	fee := new(big.Int).Mul(amountIn, big.NewInt(int64(feeBps)))
 	fee.Div(fee, big.NewInt(10000))
 	adjustedIn := new(big.Int).Sub(amountIn, fee)
-
-	// Debug: print state for specific pool conditions
-	if !zeroForOne && state.Decimals0.Int64() == 100000000 && state.Decimals1.Int64() == 1000000 {
-		fmt.Fprintf(os.Stderr, "  PHARAOH_DEBUG stable=%v r0=%s r1=%s fee=%d adj=%s zfo=%v sub1=%v\n",
-			state.Stable, state.Reserve0.String(), state.Reserve1.String(), feeBps, adjustedIn.String(), zeroForOne, state.SubtractOne)
-	}
 
 	return getAmountOut(state, adjustedIn, zeroForOne)
 }

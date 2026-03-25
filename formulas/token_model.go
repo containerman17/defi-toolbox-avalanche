@@ -30,7 +30,8 @@ func (d defaultTokenModel) IsFoT() bool                                   { retu
 
 // fotTokenModel subtracts a fee-on-transfer tax from the amount.
 type fotTokenModel struct {
-	calcFee func(*big.Int) *big.Int
+	calcFee      func(*big.Int) *big.Int
+	calcReceived func(*big.Int) *big.Int // if set, computes received amount directly (matches Solidity rounding)
 }
 
 func (f *fotTokenModel) AdjustInput(amount *uint256.Int) *uint256.Int {
@@ -43,15 +44,25 @@ func (f *fotTokenModel) AdjustOutput(amount *uint256.Int) *uint256.Int {
 
 func (f *fotTokenModel) IsFoT() bool { return true }
 
-// adjust subtracts the fee from amount. Returns nil if the result is zero or negative.
+// adjust computes the post-fee amount. If calcReceived is set, use it directly
+// (matches Solidity's `amount * (10000 - fee) / 10000` pattern without rounding error).
+// Otherwise falls back to `amount - calcFee(amount)`.
 func (f *fotTokenModel) adjust(amount *uint256.Int) *uint256.Int {
-	fee := f.calcFee(amount.ToBig())
-	feeU256, overflow := uint256.FromBig(fee)
-	if overflow {
+	amtBig := amount.ToBig()
+	var resultBig *big.Int
+
+	if f.calcReceived != nil {
+		resultBig = f.calcReceived(amtBig)
+	} else {
+		fee := f.calcFee(amtBig)
+		resultBig = new(big.Int).Sub(amtBig, fee)
+	}
+
+	if resultBig.Sign() <= 0 {
 		return nil
 	}
-	adjusted := new(uint256.Int).Sub(amount, feeU256)
-	if adjusted.IsZero() || adjusted.Sign() < 0 {
+	adjusted, overflow := uint256.FromBig(resultBig)
+	if overflow || adjusted.IsZero() {
 		return nil
 	}
 	return adjusted

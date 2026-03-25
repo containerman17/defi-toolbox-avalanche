@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-03-25 — reflectionTokenModel: exact _rTotal math for all RFI tokens
+
+### Achievement
+Implemented stateful `reflectionTokenModel` that reads `_rTotal` (and optionally `_tTotal`)
+from token storage at quote time. Computes exact post-transfer amount including reflection
+redistribution. Verified to 0 ppb accuracy for all configured tokens.
+
+### Tokens using exact reflection math (7 total)
+| Token | Fee | Slots | _tTotal |
+|-------|-----|-------|---------|
+| GREEN | 1%+3% team | rTotal=6 | 1e21 (constant) |
+| AFM (AvaFOX) | 1%+3% team | rTotal=6 | 1e21 (constant) |
+| SHIBX | 10% pure | rTotal=6 | 1e28 (constant) |
+| KIOO | 3%+1% burn | rTotal=1, tTotal=2 | mutable (burn) |
+| GB (Good Bridging) | 1% pure | rTotal=6 | 14327880e9 (constant) |
+| DICK | 1%+1% burn+2% charity | rTotal=14, tTotal=13 | mutable (burn) |
+| SPORE | 6% pure (div-then-mul) | rTotal=6 | 1e26 (constant) |
+
+### Impact
+- Mismatches: 112 → **18** (84% reduction)
+- Correctness: 98.2% → **99.7%**
+- evm-only: 656 → **472** (reflection tokens now formula-quoted instead of blocked)
+
 ## 2026-03-25 — RFI+burn reflection math for KIOO (Reflectx): pool 0xf3f119ceb9
 
 ### Investigation

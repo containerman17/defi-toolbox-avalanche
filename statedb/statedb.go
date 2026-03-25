@@ -391,6 +391,52 @@ func (s *StateDB) NewOverlay() *StateDB {
 	return NewStateDB(s)
 }
 
+// CloneFlat creates a shallow clone sharing account pointers.
+// Override slots get COW storage maps. No overlay indirection.
+func (s *StateDB) CloneFlat() *StateDB {
+	clone := &StateDB{
+		accounts:         make(map[common.Address]*account, len(s.accounts)),
+		accessList:       make(map[common.Address]map[common.Hash]bool),
+		fetcher:          s.fetcher,
+		transientStorage: make(map[common.Address]map[common.Hash]common.Hash),
+	}
+	for addr, a := range s.accounts {
+		clone.accounts[addr] = a
+	}
+	return clone
+}
+
+// SetStorageSlotCOW sets a storage slot with copy-on-write for the storage map.
+// If the account's storage map is shared with another StateDB, it creates a copy first.
+func (s *StateDB) SetStorageSlotCOW(addr common.Address, slot, value common.Hash, sharedAccounts map[common.Address]bool) {
+	a, ok := s.accounts[addr]
+	if !ok {
+		a = &account{
+			balance: uint256.NewInt(0),
+			storage: make(map[common.Hash]common.Hash),
+		}
+		s.accounts[addr] = a
+	} else if sharedAccounts[addr] {
+		// COW: copy storage map before writing
+		newStorage := make(map[common.Hash]common.Hash, len(a.storage)+1)
+		for k, v := range a.storage {
+			newStorage[k] = v
+		}
+		newA := &account{
+			balance:  a.balance,
+			nonce:    a.nonce,
+			code:     a.code,
+			codeHash: a.codeHash,
+			storage:  newStorage,
+			exists:   a.exists,
+		}
+		s.accounts[addr] = newA
+		a = newA
+		delete(sharedAccounts, addr) // Only COW once
+	}
+	a.storage[slot] = value
+}
+
 // NewReusableOverlay creates an overlay that can be Reset() between calls.
 // Pre-allocates maps to avoid per-call allocation.
 func (s *StateDB) NewReusableOverlay() *StateDB {
@@ -464,6 +510,12 @@ type CachedContext struct {
 	rules    params.Rules
 	chainCfg *params.ChainConfig
 	gasPrice *big.Int
+	// CallerContract is a *vm.Contract used as the EVM caller.
+	// When the EVM creates child contracts via NewContract(), it checks
+	// if the caller is a *Contract — if so, it shares the jumpdests map.
+	// This means all calls reusing this context share JUMPDEST analysis.
+	// Without this, every call re-scans contract bytecodes (~15% CPU).
+	callerContract *vm.Contract
 }
 
 var cachedCtx *CachedContext
@@ -508,11 +560,23 @@ func GetCachedContext(cfg EVMConfig) *CachedContext {
 	chainCfg := AvalancheCChainConfig
 	rules := chainCfg.Rules(blockNumber, true, cfg.Timestamp)
 
+	// Create a caller contract for JUMPDEST sharing across all EVM calls.
+	// Using *vm.Contract instead of AccountRef means child calls inherit
+	// the jumpdests bitvector, avoiding redundant bytecode scanning.
+	dummySender := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	callerContract := vm.NewContract(
+		vm.AccountRef(dummySender),
+		vm.AccountRef(dummySender),
+		uint256.NewInt(0),
+		0,
+	)
+
 	cachedCtx = &CachedContext{
-		blockCtx: blockCtx,
-		rules:    rules,
-		chainCfg: chainCfg,
-		gasPrice: new(big.Int).SetUint64(baseFee),
+		blockCtx:       blockCtx,
+		rules:          rules,
+		chainCfg:       chainCfg,
+		gasPrice:       new(big.Int).SetUint64(baseFee),
+		callerContract: callerContract,
 	}
 	return cachedCtx
 }
@@ -531,6 +595,26 @@ func (ctx *CachedContext) Execute(state *StateDB, from, to common.Address, data 
 
 	gasLimit := uint64(5_000_000)
 	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, gasLimit, uint256.NewInt(0))
+
+	return ret, gasLimit - gasLeft, err
+}
+
+// ExecuteWithCallState runs an EVM call on a CallState overlay.
+// Uses CallerContract for JUMPDEST sharing across calls.
+func (ctx *CachedContext) ExecuteWithCallState(cs *CallState, from, to common.Address, data []byte) ([]byte, uint64, error) {
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: ctx.gasPrice,
+	}
+
+	precompiles := vm.ActivePrecompiles(ctx.rules)
+	cs.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
+
+	evm := vm.NewEVM(ctx.blockCtx, txCtx, cs, ctx.chainCfg, vm.Config{})
+
+	gasLimit := uint64(5_000_000)
+	// Use CallerContract instead of AccountRef — shares JUMPDEST analysis
+	ret, gasLeft, err := evm.Call(ctx.callerContract, to, data, gasLimit, uint256.NewInt(0))
 
 	return ret, gasLimit - gasLeft, err
 }

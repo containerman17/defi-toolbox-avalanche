@@ -335,6 +335,12 @@ func readUint256Word(data []byte, offset int) uint64 {
 
 // IsInvalid returns true if a pool is known to not work with formulas (FoT, broken).
 // The BFS can skip EVM calls for these pools entirely.
+// GetFormulaID returns the formula ID for a pool, and whether it's known.
+func (r *Registry) GetFormulaID(pool common.Address) (int, bool) {
+	id, ok := r.pools[pool]
+	return id, ok
+}
+
 func (r *Registry) IsInvalid(pool common.Address) bool {
 	id, known := r.pools[pool]
 	return known && id < 0

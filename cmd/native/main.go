@@ -601,8 +601,11 @@ func main() {
 				missesBefore = fetcher.cacheMisses
 			}
 
-			// Apply overrides once — EVM calls get thin scratch overlays on top
+			// Apply overrides once — EVM calls use CallState overlay on top
 			baseWithOverrides := applyParsedOverrides(state, parsed)
+
+			evmCtx := statedb.GetCachedContext(cfg)
+			cs := statedb.NewCallState(baseWithOverrides)
 
 			results := make([]batchCallResult, len(params.Calls))
 			for i, call := range params.Calls {
@@ -625,11 +628,11 @@ func main() {
 					}
 				}
 
-				// EVM path — thin scratch overlay on pre-overridden base
+				// EVM path — thin CallState overlay with JUMPDEST sharing
 				from := common.HexToAddress(call.From)
 				to := common.HexToAddress(call.To)
-				execState := baseWithOverrides.NewOverlay()
-				ret, gasUsed, evmErr := statedb.ExecuteCall(execState, cfg, from, to, data)
+				cs.Reset()
+				ret, gasUsed, evmErr := evmCtx.ExecuteWithCallState(cs, from, to, data)
 				results[i] = batchCallResult{
 					ReturnData: "0x" + hex.EncodeToString(ret),
 					GasUsed:    gasUsed,

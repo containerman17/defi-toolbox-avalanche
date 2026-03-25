@@ -80,10 +80,11 @@ func FindBestRoute(
 
 	var stats RouteStats
 
-	// Create the overridden state once — all EVM calls read through this.
-	baseWithOverrides := ApplyOverrides(state, overrides)
-	// Reusable scratch overlay — Reset() between calls instead of NewOverlay()
-	scratch := baseWithOverrides.NewReusableOverlay()
+	// Create the overridden state once — flat clone, no overlay indirection
+	baseWithOverrides := ApplyOverridesFlat(state, overrides)
+	// CallState: thin overlay with journal snapshots, JUMPDEST sharing
+	evmCtx := statedb.GetCachedContext(cfg)
+	cs := statedb.NewCallState(baseWithOverrides)
 
 	nodes := []layerNode{{
 		steps:   nil,
@@ -162,9 +163,8 @@ func FindBestRoute(
 			if amountOut == nil {
 				et0 := time.Now()
 				stats.EVMQuotes++
-				scratch.Reset()
-				execState := scratch
-				ret, _, evmErr := statedb.ExecuteCall(execState, cfg, DUMMY_SENDER, ROUTER, calldata)
+				cs.Reset()
+				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 				stats.EVMMs += float64(time.Since(et0).Microseconds()) / 1000.0
 				if evmErr == nil && len(ret) >= 32 {
 					var out uint256.Int
@@ -255,6 +255,33 @@ func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.
 		}
 	}
 	return overlay
+}
+
+// ApplyOverridesFlat creates a flat clone of base with overrides baked in.
+// No overlay indirection — CallState reads directly from one layer.
+// Uses COW for storage maps so the original base state is not modified.
+func ApplyOverridesFlat(base *statedb.StateDB, overrides []ParsedOverride) *statedb.StateDB {
+	if len(overrides) == 0 {
+		return base
+	}
+	flat := base.CloneFlat()
+
+	// Track which accounts are shared with original to do COW
+	shared := make(map[common.Address]bool, len(overrides))
+	for _, po := range overrides {
+		shared[po.Addr] = true
+	}
+
+	for _, po := range overrides {
+		if po.Code != nil {
+			flat.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
+			delete(shared, po.Addr) // SetAccount creates fresh account, no longer shared
+		}
+		for _, s := range po.Slots {
+			flat.SetStorageSlotCOW(po.Addr, s.Slot, s.Value, shared)
+		}
+	}
+	return flat
 }
 
 // helper for debug

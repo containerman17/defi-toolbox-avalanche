@@ -289,6 +289,10 @@ func main() {
 	registry := formulas.LoadEmbeddedRegistry()
 	fmt.Fprintf(os.Stderr, "[discover] %d pools loaded\n", len(pools))
 
+	// Load token amounts (amount equal to ~1 AVAX per token)
+	tokenAmounts := loadTokenAmounts()
+	fmt.Fprintf(os.Stderr, "[discover] %d token amounts loaded\n", len(tokenAmounts))
+
 	// Register V4 pools from ExtraData
 	v4Count := 0
 	for _, p := range pools {
@@ -443,29 +447,19 @@ func main() {
 
 	for _, p := range eligible {
 		formulaID := formulaMap[p.PoolType]
-		amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
-		// Only test pools that contain a starter token.
-		// Pools without a starter token can't be validated (no known-good balance override).
-		hasStarter := false
-		for _, t := range p.Tokens {
-			if starterTokens[t] {
-				hasStarter = true
-				break
-			}
-		}
-		if !hasStarter {
-			continue // skip — not testable
-		}
-
-		// Quote with starter token as input
+		// Try each direction — use token-specific amount if known, otherwise 1e18
 		valid := false
 		for _, dir := range [][2]int{{0, 1}, {1, 0}} {
 			tokenIn := p.Tokens[dir[0]]
-			if !starterTokens[tokenIn] {
-				continue
-			}
 			tokenOut := p.Tokens[dir[1]]
+
+			// Get amount for this token — need override for tokenIn
+			amountIn, hasAmount := tokenAmounts[tokenIn]
+			if !hasAmount {
+				continue // can't test without known amount/override
+			}
+
 			calldata := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, tokenIn, tokenOut, amountIn)
 			cs.Reset()
 			ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
@@ -608,4 +602,31 @@ func main() {
 	} else {
 		fmt.Fprintf(os.Stderr, "\nDry run — pass --write to merge (%d new results)\n", len(results))
 	}
+}
+
+// loadTokenAmounts reads formulas/data/token_amounts.txt and returns
+// a map of token address → amount (as *uint256.Int) equal to ~1 AVAX.
+func loadTokenAmounts() map[common.Address]*uint256.Int {
+	data, err := os.ReadFile("formulas/data/token_amounts.txt")
+	if err != nil {
+		return map[common.Address]*uint256.Int{}
+	}
+	result := make(map[common.Address]*uint256.Int)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		addr := common.HexToAddress(parts[0])
+		amt := new(uint256.Int)
+		amt.SetFromHex(parts[1])
+		if !amt.IsZero() {
+			result[addr] = amt
+		}
+	}
+	return result
 }

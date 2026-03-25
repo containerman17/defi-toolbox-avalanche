@@ -32,3 +32,4 @@ time=2026-03-25_10:01 git=f96b90e result=0.333 pools=4000 formulas=4236 evm=3731
 time=2026-03-25_11:10 git=2c7222c result=0.273 pools=4000 formulas=5512 evm=2433 ok=5735
 time=2026-03-25_11:36 git=a5d20a3 result=0.290 pools=4000 formulas=7111 evm=808 ok=7436
 time=2026-03-25_11:49 git=c0f552f result=0.246 pools=4000 formulas=7358 evm=560 ok=7446
+time=2026-03-25_11:54 git=32e14d5 result=0.224 pools=4000 formulas=7390 evm=528 ok=7457

@@ -67,6 +67,20 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 
 	poolAddr := [20]byte(addr)
 
+	// Read dynamic fee from storage if the layout supports it (e.g. RamsesV3/PharaohV2).
+	// This overrides the hardcoded registry value which may be stale due to setFee().
+	if layout.hasFeeSlot {
+		data, feeErr := bytesReader(poolAddr, layout.feeSlot)
+		if feeErr == nil {
+			var feeVal uint256.Int
+			feeVal.SetBytes32(data[:])
+			storageFee := uint32(feeVal.Uint64() & 0xFFFFFF)
+			if storageFee > 0 {
+				fee = storageFee
+			}
+		}
+	}
+
 	sqrtPriceX96, tick, err := v3ReadSlot0Bytes(bytesReader, poolAddr, layout.slot0)
 	if err != nil {
 		return nil
@@ -77,9 +91,14 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		return nil
 	}
 
-	// Pre-load ALL bitmap words (±200 range)
+	// Pre-load bitmap words centered on current tick (±200 words from current position)
+	compressed := tick / tickSpacing
+	if tick < 0 && tick%tickSpacing != 0 {
+		compressed-- // round towards negative infinity
+	}
+	centerWord := int16(compressed >> 8)
 	bitmapWords := make(map[int16]uint256.Int)
-	for wordPos := int16(-200); wordPos <= 200; wordPos++ {
+	for wordPos := centerWord - 200; wordPos <= centerWord+200; wordPos++ {
 		word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
 		if err != nil {
 			continue

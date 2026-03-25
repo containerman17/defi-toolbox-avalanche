@@ -192,6 +192,30 @@ func fetchDODOStateDSP(reader StateReader, poolAddress string, slot5, slot8 [32]
 	mask64 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1))
 	lpFeeRate := new(big.Int).And(new(big.Int).Rsh(slot8Val, 160), mask64)
 
+	// Read mtFeeRate from the fee rate model contract.
+	// The _MT_FEE_RATE_MODEL_ address is in the lower 160 bits of slot 8.
+	// Its slot 2 holds feeRateImpl. If feeRateImpl == address(0), mtFeeRate = 0.
+	mask160 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1))
+	mtFeeModelAddr := new(big.Int).And(slot8Val, mask160)
+	var mtFeeRate *big.Int
+	if mtFeeModelAddr.Sign() == 0 {
+		mtFeeRate = big.NewInt(0)
+	} else {
+		modelHex := strings.ToLower(fmt.Sprintf("0x%040x", mtFeeModelAddr))
+		feeImplSlot, err := reader(modelHex, big.NewInt(2))
+		if err != nil {
+			mtFeeRate = big.NewInt(0)
+		} else {
+			feeImpl := new(big.Int).SetBytes(feeImplSlot[12:32])
+			if feeImpl.Sign() == 0 {
+				mtFeeRate = big.NewInt(0)
+			} else {
+				// Non-zero feeRateImpl: use the hardcoded 25% formula as fallback
+				mtFeeRate = new(big.Int).Div(new(big.Int).Mul(lpFeeRate, big.NewInt(25)), big.NewInt(100))
+			}
+		}
+	}
+
 	// slot 9: packed(_K_ uint64 | _I_ uint128)
 	// K at bits 0-63, I at bits 64-191
 	slot9, err := reader(poolAddress, big.NewInt(9))
@@ -212,7 +236,7 @@ func fetchDODOStateDSP(reader StateReader, poolAddress string, slot5, slot8 [32]
 		Q0:        Q0,
 		R:         R,
 		LpFeeRate: lpFeeRate,
-		MtFeeRate: new(big.Int).Div(new(big.Int).Mul(lpFeeRate, big.NewInt(25)), big.NewInt(100)),
+		MtFeeRate: mtFeeRate,
 		BaseToken: baseToken,
 	}
 
@@ -365,15 +389,17 @@ func QuoteDODO(state *DODOState, amountIn *big.Int, sellBase bool) *big.Int {
 		receiveAmount = dodoSellQuoteToken(state, amountIn)
 	}
 
-	// Apply LP fee: receiveAmount -= receiveAmount * lpFeeRate / 1e18
+	// Apply fees on original receiveAmount (parallel, matching Solidity).
+	// Solidity: lpFee = receiveAmount * lpFeeRate / 1e18
+	//           mtFee = receiveAmount * mtFeeRate / 1e18
+	//           receiveAmount -= (lpFee + mtFee)
 	lpFee := dodoMulFloor(receiveAmount, state.LpFeeRate)
-	receiveAmount = new(big.Int).Sub(receiveAmount, lpFee)
-
-	// Apply MT fee: receiveAmount -= receiveAmount * mtFeeRate / 1e18
+	totalFee := new(big.Int).Set(lpFee)
 	if state.MtFeeRate != nil && state.MtFeeRate.Sign() > 0 {
 		mtFee := dodoMulFloor(receiveAmount, state.MtFeeRate)
-		receiveAmount = new(big.Int).Sub(receiveAmount, mtFee)
+		totalFee.Add(totalFee, mtFee)
 	}
+	receiveAmount = new(big.Int).Sub(receiveAmount, totalFee)
 
 	return receiveAmount
 }

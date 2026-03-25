@@ -248,6 +248,12 @@ func v3ReadSlot0(read StateReader, poolAddress string, slot *big.Int) (*big.Int,
 	if sqrtPriceX96.Sign() == 0 {
 		return nil, 0, fmt.Errorf("zero sqrtPrice in storage")
 	}
+	// Validate sqrtPrice is in the valid V3 range [MIN_SQRT_RATIO, MAX_SQRT_RATIO].
+	// This prevents false-positive layout detection when random storage data at the
+	// wrong ERC-7201 offset happens to have non-zero lower 160 bits.
+	if sqrtPriceX96.Cmp(algebraMinSqrtRatio) < 0 || sqrtPriceX96.Cmp(algebraMaxSqrtRatio) > 0 {
+		return nil, 0, fmt.Errorf("sqrtPrice %s out of valid range", sqrtPriceX96)
+	}
 	highBits := new(big.Int).Rsh(slot0Val, 160)
 	if highBits.Sign() == 0 {
 		return nil, 0, fmt.Errorf("slot0 looks like address (no tick/obs data)")
@@ -256,6 +262,10 @@ func v3ReadSlot0(read StateReader, poolAddress string, slot *big.Int) (*big.Int,
 	tick := int32(tickRaw.Int64())
 	if tick >= 1<<23 {
 		tick -= 1 << 24
+	}
+	// Validate tick is in valid range
+	if tick < algebraMinTick || tick > algebraMaxTick {
+		return nil, 0, fmt.Errorf("tick %d out of valid range [%d, %d]", tick, algebraMinTick, algebraMaxTick)
 	}
 	return sqrtPriceX96, tick, nil
 }

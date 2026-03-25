@@ -13,10 +13,12 @@ import (
 
 // v3LayoutBytes holds storage slot offsets as [32]byte for BytesStateReader.
 type v3LayoutBytes struct {
-	slot0     [32]byte
-	liquidity [32]byte
-	ticks     [32]byte
-	bitmap    [32]byte
+	slot0      [32]byte
+	liquidity  [32]byte
+	ticks      [32]byte
+	bitmap     [32]byte
+	feeSlot    [32]byte // zero if pool has immutable fees
+	hasFeeSlot bool     // true when fee should be read from storage
 }
 
 var (
@@ -36,6 +38,10 @@ func v3GetLayoutBytes(read StateReader, poolAddress string) (*v3LayoutBytes, err
 		liquidity: bigIntTo32(layout.liquidity),
 		ticks:     bigIntTo32(layout.ticks),
 		bitmap:    bigIntTo32(layout.bitmap),
+	}
+	if layout.feeSlot != nil {
+		lb.feeSlot = bigIntTo32(layout.feeSlot)
+		lb.hasFeeSlot = true
 	}
 	v3LayoutBytesCache[poolAddress] = lb
 	return lb, nil
@@ -58,6 +64,19 @@ func QuoteV3U256(read StateReader, readBytes BytesStateReader, poolAddr [20]byte
 	layout, err := v3GetLayoutBytes(read, poolAddress)
 	if err != nil {
 		return uint256.Int{}, err
+	}
+
+	// Read dynamic fee from storage if the layout supports it (e.g. RamsesV3/PharaohV2).
+	if layout.hasFeeSlot {
+		data, feeErr := readBytes(poolAddr, layout.feeSlot)
+		if feeErr == nil {
+			var feeVal uint256.Int
+			feeVal.SetBytes32(data[:])
+			storageFee := uint32(feeVal.Uint64() & 0xFFFFFF)
+			if storageFee > 0 {
+				fee = storageFee
+			}
+		}
 	}
 
 	sqrtPriceX96, tick, err := v3ReadSlot0Bytes(readBytes, poolAddr, layout.slot0)

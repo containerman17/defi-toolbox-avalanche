@@ -248,6 +248,15 @@ func FetchPharaohV1StateStorage(reader StateReader, poolAddress string) (*Pharao
 		val := new(big.Int).SetBytes(data[:])
 		state.Reserve0 = new(big.Int).And(val, mask112)
 		state.Reserve1 = new(big.Int).And(new(big.Int).Rsh(val, 112), mask112)
+
+		// Fee is mutable on-chain; read it from slot 16 (per-million) and convert to bps
+		feeData, err := reader(poolAddress, big.NewInt(16))
+		if err == nil {
+			feePerMillion := new(big.Int).SetBytes(feeData[:])
+			if feePerMillion.Sign() > 0 {
+				state.FeeBps = int(feePerMillion.Int64() / 100)
+			}
+		}
 	} else {
 		// Separate reserve slots
 		r0data, err := reader(poolAddress, big.NewInt(int64(cfg.Reserve0Slot)))

@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-03-25 — Formula correctness fixes (agent-investigated)
+
+### Correctness: 112 → 79 mismatches (98.2% → 98.7%)
+
+Dispatched multiple background agents to investigate individual pool mismatches.
+Each agent was given a single pool and asked to find the root cause.
+
+#### Pharaoh V1: read fee from storage at runtime (−19 mismatches)
+- Pharaoh V1 fees are mutable on-chain via factory `pairFee()` override
+- Registry had stale fees (e.g., 150 bps when on-chain was 100 bps)
+- Fix: for pools with `PackedSlot >= 0`, read fee from storage slot 16 and convert from per-million to bps
+
+#### V3 bitmap: center pre-loading around current tick (−12 mismatches)
+- Bitmap pre-loading used hardcoded range `[-200, 200]` around word position 0
+- Pools with ticks far from 0 (e.g., tick 319316 → wordPos 249) had missing bitmap coverage
+- Fix: center the ±200 word range on `compressed >> 8` of the current tick
+
+#### V3 layout: sqrtPrice/tick range validation in v3ReadSlot0
+- PharaohV2 pool (0xC047e6cd) was falsely detected as PharaohV1 layout
+- Random storage data at PharaohV1 slot0 offset passed the weak non-zero check
+- Fix: validate sqrtPrice in [MIN_SQRT_RATIO, MAX_SQRT_RATIO] and tick in [-887272, 887272]
+
+#### V3 fee: read fee from storage for PharaohV2 (Ramses V3) pools
+- Ramses V3 has `setFee()` — fees change dynamically, static registry goes stale
+- Fix: read `$.fee` from `POOL_STORAGE_LOCATION + 2` when layout has `feeSlot`
+- Applied to both QuoteV3/QuoteV3U256 and V3Pool struct constructor
+
+#### DODO: fix mtFeeRate and fee deduction order (−2 mismatches)
+- Bug A: mtFeeRate hardcoded as `lpFeeRate * 25 / 100` for all pools. On-chain, DSP/DPPAdvanced pools return mtFeeRate=0 when `feeRateImpl == address(0)`. Fix: read fee model contract's slot 2 to check feeRateImpl.
+- Bug B: sequential fee deduction (lpFee on original, mtFee on reduced). Solidity deducts both on original. Fix: compute both fees on original receiveAmount, then subtract total.
+
+#### Latent bug noted: mulDivRoundingUpU256 overflow
+- When `a * b > 2^256`, remainder wraps and rounding check gives wrong answer
+- Does NOT trigger for current Avalanche pools but could for extreme liquidity
+- In shared_u256.go — needs MulModOverflow or 512-bit remainder computation
+
 ## 2026-03-25 — Pool quoter structs + EVM optimization
 
 ### Session results summary

@@ -460,6 +460,11 @@ var FotExemptPools = map[string]bool{
 	// Any other pool is not JoeV2Pair, so no fee is charged.
 	"0x97fe71c72037d307d69694e41f20d97868c848ec": true, // BigRed/USDC uniswap_v3
 	"0x9514c20a3c020ba4bc21f565e92aa2aa2875e6be": true, // BigRed/WAVAX uniswap_v2
+	"0xab043e1b1cb3ac3a97485b71b77e586b6d4422aa": true, // BigRed/AMI lfj_v1
+	"0x95375153743540a3a443b6cddece480e99576c32": true, // BigRed/COOP lfj_v1
+	"0xb562931b866369770e8d2ae72782f9186e9f561f": true, // BigRed/NICK lfj_v1
+	"0x8f2b16e2386000caefb9211c70fc631dcd2327bb": true, // KIMBO/BigRed lfj_v1
+	"0x65659f44053eaf634ef924edb6427014b6f00b60": true, // BigRed/WAVAX lfj_v2
 
 	// HERESY (BulletCollection, 0x432d...): only charges fee on registered AMM pairs.
 	// Pharaoh V1/V3 pairs are not registered in the swapManager.

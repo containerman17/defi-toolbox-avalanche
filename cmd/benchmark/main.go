@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +77,14 @@ func connectStateServer(url string) (*wsFetcher, *statedb.StateDB, statedb.EVMCo
 	storageCount := 0
 	accountData := make(map[string]map[string]string)
 
+	// TEMPORARY: skip initial_dump loading to test without cache
+	skipDump := false
+	for _, arg := range os.Args {
+		if arg == "--no-dump" { skipDump = true }
+	}
+
 	for _, entry := range dump.Entries {
+		if skipDump { break }
 		key, value := entry[0], entry[1]
 		if strings.HasPrefix(key, "s:") {
 			parts := strings.SplitN(key, ":", 3)
@@ -207,8 +215,27 @@ func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
 	return val
 }
 
-func (f *wsFetcher) FetchNonce(addr common.Address) uint64 { return 0 }
-func (f *wsFetcher) FetchCode(addr common.Address) []byte { return nil }
+func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
+	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
+	result, err := f.call("state_getNonce", params)
+	if err != nil { return 0 }
+	var vr valueResult
+	if json.Unmarshal(result, &vr) != nil { return 0 }
+	n, _ := strconv.ParseUint(strings.TrimPrefix(vr.Value, "0x"), 16, 64)
+	return n
+}
+
+func (f *wsFetcher) FetchCode(addr common.Address) []byte {
+	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
+	result, err := f.call("state_getCode", params)
+	if err != nil { return nil }
+	var vr valueResult
+	if json.Unmarshal(result, &vr) != nil { return nil }
+	if vr.Value == "" || vr.Value == "0x" { return nil }
+	code, _ := hex.DecodeString(strings.TrimPrefix(vr.Value, "0x"))
+	return code
+}
+
 func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash { return common.Hash{} }
 
 // ─── Main ──────────────────────────────────────────────────────────

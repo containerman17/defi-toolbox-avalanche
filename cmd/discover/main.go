@@ -171,8 +171,8 @@ func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.H
 	return common.Hash{}
 }
 func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int { return uint256.NewInt(0) }
-func (f *wsFetcher) FetchNonce(addr common.Address) uint64        { return 0 }
-func (f *wsFetcher) FetchCode(addr common.Address) []byte         { return nil }
+func (f *wsFetcher) FetchNonce(addr common.Address) uint64 { return 0 }
+func (f *wsFetcher) FetchCode(addr common.Address) []byte  { return nil }
 func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash        { return common.Hash{} }
 
 func main() {

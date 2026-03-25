@@ -10,6 +10,7 @@ import (
 // Pool represents a DEX pool from pools.txt.
 type Pool struct {
 	Address   common.Address
+	Dex       string // DEX provider name (e.g. "pangolin_v2", "sushiswap_v2")
 	PoolType  int
 	Tokens    []common.Address
 	ExtraData string
@@ -69,6 +70,7 @@ func ParsePools(content string, limit int) []Pool {
 
 		pools = append(pools, Pool{
 			Address:   addr,
+			Dex:       parts[1],
 			PoolType:  poolType,
 			Tokens:    tokens,
 			ExtraData: extraData,

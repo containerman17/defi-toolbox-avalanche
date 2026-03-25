@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-25 — V3 formula: 0 EVM calls (was 60 calls / 322ms)
+
+### Problem
+47 V3 pools had no formula quoter (pm.Get() returned nil), causing 60 EVM calls.
+
+### Root causes and fixes
+| Cause | Pools | Fix |
+|-------|-------|-----|
+| registry.txt marks pool as -1 (invalid) | 30 | Override -1 for pools in v3PoolFees (same as LFJ V2 fallback) |
+| FotFormulaIssueTokens blocks V3 pool | 10 | Skip FotFormulaIssueTokens check for V3 (issue is in other pool types, not V3) |
+| FotRebasingTokens blocks V3 pool | 7 | Skip FotRebasingTokens check for V3 (V3 uses sqrtPrice/ticks, not balances) |
+| Zero sqrtPrice (uninitialized Pharaoh V3) | 4 | Return empty V3Pool (Quote returns nil,false) instead of nil |
+
+### Files changed
+- `formulas/pool_quoter.go`: V3 fallback from -1 registry, skip FoT checks for V3
+- `formulas/pool_v3.go`: Return empty V3Pool for uninitialized pools, early-exit Quote() on zero sqrtPrice
+
+### Results
+- V3: 0 EVM calls (was 60), 618 formula quotes (309 pools x 2 dirs)
+- Total EVM: ~400 calls / ~113ms
+
 ## 2026-03-25 — Formula coverage sprint: EVM 548ms → 104ms (target <150ms achieved)
 
 ### Final results

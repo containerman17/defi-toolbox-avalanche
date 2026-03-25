@@ -82,3 +82,7 @@ time=2026-03-25_14:26 git=1f03b53 result=0.126 pools=4000 formulas=7501 evm=384 
 time=2026-03-25_14:26 git=1f03b53 result=0.116 pools=4000 formulas=7501 evm=384 ok=7523
 time=2026-03-25_14:27 git=1f03b53 result=0.113 pools=4000 formulas=7501 evm=384 ok=7523
 time=2026-03-25_14:27 git=1f03b53 result=0.131 pools=4000 formulas=7501 evm=384 ok=7523
+time=2026-03-25_14:28 git=7d9b991 result=0.160 pools=4000 formulas=7493 evm=400 ok=7515
+time=2026-03-25_14:28 git=7d9b991 result=0.131 pools=4000 formulas=7493 evm=400 ok=7515
+time=2026-03-25_14:29 git=7d9b991 result=0.119 pools=4000 formulas=7493 evm=400 ok=7515
+time=2026-03-25_14:30 git=7d9b991 result=0.110 pools=4000 formulas=7493 evm=400 ok=7515

@@ -292,7 +292,7 @@ func main() {
 			if len(pools[i].Tokens) >= 2 {
 				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 			}
-			pm.SetPoolType(pools[i].Address, pools[i].PoolType)
+			pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 		}
 
 		// Warm pass
@@ -395,7 +395,7 @@ func main() {
 		if len(pools[i].Tokens) >= 2 {
 			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 		}
-		warmPM.SetPoolType(pools[i].Address, pools[i].PoolType)
+		warmPM.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
 
 	// Warm passes before the hot (timed) pass.
@@ -484,7 +484,7 @@ func main() {
 		if len(pools[i].Tokens) >= 2 {
 			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
 		}
-		pm.SetPoolType(pools[i].Address, pools[i].PoolType)
+		pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
 
 	for i := range pools {
@@ -551,7 +551,27 @@ func main() {
 
 			// DEBUG: log pharaoh_v1 EVM fallback pools
 			if pool.PoolType == 7 && zeroForOne {
-				fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s\n", strings.ToLower(pool.Address.Hex()))
+				poolHex := strings.ToLower(pool.Address.Hex())
+				// Check what specifically fails
+				quoter := pm.Get(pool.Address)
+				if quoter == nil {
+					// Try to read reserves directly
+					r0 := state.GetState(pool.Address, common.BigToHash(big.NewInt(9)))
+					r1 := state.GetState(pool.Address, common.BigToHash(big.NewInt(10)))
+					r0p := state.GetState(pool.Address, common.BigToHash(big.NewInt(11)))
+					r016 := state.GetState(pool.Address, common.BigToHash(big.NewInt(16)))
+					r017 := state.GetState(pool.Address, common.BigToHash(big.NewInt(17)))
+					t0Hex := ""
+					t1Hex := ""
+					if len(pool.Tokens) >= 2 {
+						t0Hex = strings.ToLower(pool.Tokens[0].Hex())
+						t1Hex = strings.ToLower(pool.Tokens[1].Hex())
+					}
+					fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s t0=%s t1=%s s9=%x s10=%x s11=%x s16=%x s17=%x\n",
+						poolHex, t0Hex, t1Hex, r0[:4], r1[:4], r0p[:4], r016[:4], r017[:4])
+				} else {
+					fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s quoter exists but Quote returned false\n", poolHex)
+				}
 			}
 
 			// EVM fallback — skip if profiling formulas only

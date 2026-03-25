@@ -24,6 +24,7 @@ type PoolManager struct {
 	reader      StorageReader
 	poolTokens  map[common.Address][2]common.Address // pool → [token0, token1]
 	poolTypes   map[common.Address]int               // pool → poolType from pools.txt
+	poolDex     map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
 	tokenModels *TokenModelRegistry
 }
 
@@ -35,15 +36,35 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		reader:      reader,
 		poolTokens:  make(map[common.Address][2]common.Address),
 		poolTypes:   make(map[common.Address]int),
+		poolDex:     make(map[common.Address]string),
 		tokenModels: NewTokenModelRegistry(),
 	}
 }
 
-// SetPoolType registers the pool type for a pool (from pools.txt).
+// SetPoolType registers the pool type and DEX provider for a pool (from pools.txt).
 // This allows Get() to try V2 formula for pools marked -1 in registry.txt
 // when the pool type indicates a V2-family DEX.
-func (pm *PoolManager) SetPoolType(pool common.Address, poolType int) {
+func (pm *PoolManager) SetPoolType(pool common.Address, poolType int, dex string) {
 	pm.poolTypes[pool] = poolType
+	pm.poolDex[pool] = dex
+}
+
+// v2NonStandardDex lists V2-family DEX providers that have non-standard storage layout
+// or AMM math, and cannot use the standard V2 constant product formula.
+var v2NonStandardDex = map[string]bool{
+	"hurricane": true, // reserves at slot 11 (not 8), variable fee (0.3% or 0.5%)
+	"fraxswap":  true, // TWAMM: time-weighted AMM, different math from constant product
+}
+
+// isV2Retryable returns true if a pool with formulaID -1 should be retried with V2 formula.
+// Only applies to poolType 8 (V2 family) DEXes with standard Uniswap V2 storage layout.
+func (pm *PoolManager) isV2Retryable(pool common.Address) bool {
+	pt, hasPT := pm.poolTypes[pool]
+	if !hasPT || pt != 8 {
+		return false
+	}
+	dex := pm.poolDex[pool]
+	return !v2NonStandardDex[dex]
 }
 
 // SetPoolTokens registers the token pair for a pool, enabling FoT adjustment.
@@ -85,17 +106,18 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			// Excludes non-standard V2 forks (hurricane, fraxswap) that have different
 			// storage layout or AMM math.
 			formulaID = FormulaV2_30bps
+		} else if _, inPharaoh := pharaohV1Registry[poolHexLower]; inPharaoh {
+			// Pharaoh V1 pools marked -1: retry with Pharaoh V1 formula. The -1
+			// was set by formula discovery which tested function-based quoting.
+			// Common causes: FoT tokens (now handled by fotPoolQuoter wrapper),
+			// or transient state during discovery.
+			formulaID = FormulaPharaohV1
 		} else {
 			// known but formulaID < 0, and not in lfjV2Registry or v3PoolFees
 			return nil
 		}
 	}
 
-	// FoT: check if pool tokens require rebasing/formula-issue fallback.
-	// Skip for V2 constant product — the formula is simple enough that it always
-	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2
-	// are handled by the fotPoolQuoter wrapper via fotCalculators.
-	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	// FoT: check if pool tokens require rebasing/formula-issue fallback.
 	// Skip for V2 constant product — the formula is simple enough that it always
 	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2

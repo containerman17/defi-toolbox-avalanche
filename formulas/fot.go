@@ -120,9 +120,12 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	"0x78aed06eb93351aae6886d9c012888f87b64c918": fotBps(51),
 
 	// Double-division tokens: fee = amount * rate / 100 / 100 (GRANULARITY=100)
-	// 0xaaec: 3 separate fees totalling 400 bps via amount*rate/100/100 pattern
-	// Source: fee = amount * 400 / 100 / 100 (three separate fees with GRANULARITY=100)
-	// DEX pair exemption possible (_isExcluded[recipient] or FeeAddress)
+	// 0xaaec (DICK): RFI reflection token (CoinToken), TAX=1%+BURN=1%+CHARITY=2% = 400 bps total.
+	// Formula fee = amount * 400 / 100 / 100. However, due to RFI reflection excess
+	// (same mechanism as Good Bridging): EVM measured amount > tTransferAmount by ~0.13 PPM
+	// (tFee * tTransfer / tTotal), causing formula < evm beyond 0.01 PPM tolerance.
+	// Pool 0x655082c9276d0a7363c3a0e944a9cebdff717c91 (lfj_v1, MIM/DICK) is marked -1 in
+	// registry.txt to fall back to EVM. The FoT entry here is kept for other potential pools.
 	"0xaaec4017381a1d1e564cb88600c001d05b21571d": func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(400))
 		fee.Div(fee, big.NewInt(100))
@@ -571,6 +574,22 @@ var FotFormulaIssueTokens = map[string]bool{
 	// Cannot be corrected without reading _rTotal from the GB token contract.
 	// Pool: 0x0a1041feb651b1daa2f23eba7dab3898d6b9a4fe (pangolin_v2, GB/WAVAX), dir=1.
 	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": true,
+
+	// DICK (0xaaec4017...): CoinToken RFI reflection token, TAX=1%+BURN=1%+CHARITY=2% = 400 bps.
+	// Same RFI drift mechanism as GB and SPORE: formula gives tTransferAmount, EVM measures
+	// rTransferAmount/newRate > tTransferAmount. Excess ≈ tFee * tTransfer / tTotal ≈ 0.129 PPM.
+	// Pool: 0x655082c9276d0a7363c3a0e944a9cebdff717c91 (lfj_v1, MIM/DICK), dir=0.
+	// Also marked -1 in registry.txt as belt-and-suspenders.
+	"0xaaec4017381a1d1e564cb88600c001d05b21571d": true,
+
+	// SPORE (0x6e7f5c0b...): pure RFI reflection token, 6% tFee = tAmount.div(100).mul(6).
+	// Same mechanism as GB/DICK: formula gives tTransferAmount = raw - tFee, but the EVM
+	// measures rTransferAmount / newRate (where newRate < oldRate because _reflectFee shrinks
+	// _rTotal). The buyer's actual received amount = net_received * rTotal / (rTotal - rFee),
+	// which is net_received * (1 + tFee/tTotal) approximately. Residual excess ≈ 0.575 PPM
+	// (tFee * net_received / tTotal), well above the 0.01 PPM tolerance.
+	// Pool: 0x0a63179a8838b5729e79d239940d7e29e40a0116 (pangolin_v2, SPORE/WAVAX), dir=1.
+	"0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985": true,
 
 	// LFJ V2 pools with 0% at size 0 but negative diff at size 2:
 	// These are formula precision issues in LFJ V2, not transfer taxes.

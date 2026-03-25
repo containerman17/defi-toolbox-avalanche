@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-03-25 — Balancer V3 WITH_RATE token rate providers: 0x304e19e302 (balancer_v3, eweETH-1/waAvaWETH), dir=0
+
+### Investigation
+Pool `0x304e19e3029a6dbfde0d70d9e32ad9cc694a9b68` (balancer_v3, stable, amp=500000).
+Mismatch: formula=68755173650828024, evm=68754295058579419 (formula 0.001278% MORE).
+- Token0: eweETH-1 (`0x51b47b3013863c52ca28d603de3c2d7a5fef50b9`) — Euler wrapped weETH (BeaconProxy). `convertToAssets(1e18) = 1e18` → rate = 1.0.
+- Token1: waAvaWETH (`0xdfd2b2437a94108323045c282ff1916de5ac6af7`) — Aave wrapped WETH. `convertToAssets(1e18) = 1055091091524518804` → rate ≈ 1.0551.
+
+### Root cause
+`pool_balancer_v3.go` hardcoded rate=1 for all tokens (STANDARD assumption).
+For waAvaWETH (TokenType=WITH_RATE), the actual rate ≈ 1.0551:
+- `liveBalanceOut` computed as `rawBal * scalingFactor` (missing ×1.0551) → pool math uses wrong reserves
+- `amountOutRaw` computed as `amountOutScaled18 / scalingFactor` (missing ÷1.0551)
+The two errors partially cancel in a near-parity stable pool, giving 0.001278% net error.
+The formula was always too high (formula > evm) because the missing rate on output de-scaling dominates
+for small amounts relative to the balance.
+
+### Fix
+The code already had the infrastructure for per-token rate providers but was not wired up:
+- `BalancerV3PoolInfo.TokenTypes` and `RateProviders` — populated by `balV3ReadTokenInfo()` during registration
+- `EVMCaller` interface + `SetEVMCaller()` — already called in all three PoolManager creation paths
+- `newBalancerV3Pool()` calls `rateProvider.getRate()` via `EVMCaller` for each WITH_RATE token
+- `Quote()` applies rates: `amountInScaled18 *= rateIn / 1e18`, `liveBalance = rawBal * scalingFactor * rate / 1e18`, `amountOutRaw = amountOutScaled18 * 1e18 / (scalingFactor * rateOut)`
+
+The keccak256 selector for `getRate()` is `0x679aefce` (Ethereum keccak, not NIST SHA3).
+The vault's `_poolTokenInfo[pool][token]` at storage slot 4 packs: `{uint8 tokenType, address rateProvider, bool paysYieldFees}` in a single slot (LSB-first).
+
+All three PoolManager instances (correctness, warmPM, hot pm) already call `SetEVMCaller()` so the rate provider calls happen on every pool construction.
+
+## 2026-03-25 — SPORE (0x6e7f5c0b) RFI reflection drift: 0x0a63179a88 (pangolin_v2, SPORE/WAVAX), dir=1
+
+### Investigation
+Pool `0x0a63179a8838b5729e79d239940d7e29e40a0116` (pangolin_v2, type=8/V2), dir=1 (WAVAX in, SPORE out).
+Mismatch: formula=901546175706220381332, evm=901546694505778670014 (diff=518,799,558,288,682, ~0.575 PPM).
+- Token0: SPORE (`0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985`) — pure RFI reflection token, 6% tFee.
+- Token1: WAVAX — no FoT.
+
+### Root cause
+Same RFI reflection excess pattern as Good Bridging (GB) and DICK. For dir=1 (WAVAX→SPORE):
+- Formula applies SPORE FoT: raw_amm = 959091676283213171628, tFee = floor(raw/100)*6 = 57545500576992790296.
+- Formula result = raw_amm - tFee = 901546175706220381332.
+- EVM router measures `SPORE.balanceOf(router) - balBefore`, which goes through reflection accounting:
+  - rTransferAmount = net_received * rate = net * rTotal/tTotal
+  - After `_reflectFee(rFee)` reduces `_rTotal` to `rTotal - rFee`, newRate = rTotal_new/tTotal
+  - Measured = rTransferAmount * tTotal / rTotal_new = net * rTotal / (rTotal - rFee)
+  - This is net * (1 + tFee/tTotal) ≈ net + tFee*net/tTotal
+- Excess = tFee * net_received / tTotal = 518,799,558,288,682 (exact match confirmed).
+- Exceeds 0.01 PPM threshold (0.575 PPM, ~58x over threshold).
+- Cannot be corrected without reading `_rTotal` at quote time (stateful).
+
+The pool_quoter.go previously skipped `FotFormulaIssueTokens` for V2 pools ("formula always matches
+for V2"), which was wrong for RFI reflection tokens where the measurement captures redistribution.
+
+### Fix
+1. Added SPORE (`0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985`) to `FotFormulaIssueTokens` in `formulas/fot.go`.
+2. Fixed `pool_quoter.go` to apply `FotFormulaIssueTokens` check to ALL formula types including V2.
+   Separated `FotRebasingTokens` (V2-skipped) from `FotFormulaIssueTokens` (all types).
+   This also retroactively fixes GB (pangolin_v2) and DICK (lfj_v1) V2 paths.
+
+## 2026-03-25 — DICK token (0xaaec) RFI reflection drift: 0x655082c927 (lfj_v1, MIM/DICK), dir=0
+
+### Investigation
+Pool `0x655082c9276d0a7363c3a0e944a9cebdff717c91` (lfj_v1, formula=0/V2), dir=0.
+Mismatch: formula=3094195337862, evm=3094195737214 (diff=399,352, ~0.129 PPM).
+- Token0: MIM (`0x130966628846bfd36ff31a822705796e8cb8c18d`) — in `FotFormulaIssueTokens` but V2 pools skip that check.
+- Token1: DICK (`0xaaec4017381a1d1e564cb88600c001d05b21571d`) — CoinToken RFI reflection token, 400bps total (TAX=1%+BURN=1%+CHARITY=2%).
+
+### Root cause
+Same RFI reflection excess pattern as Good Bridging. For dir=0 (MIM→DICK):
+- Formula applies 400bps double-div FoT to raw V2 output → tTransferAmount.
+- EVM measures balanceOf(router) after transfer → rTransferAmount / newRate.
+- After `_reflectFee(rFee, rBurn)` reduces `_rTotal`, newRate < oldRate, so measured amount > tTransferAmount.
+- Theoretical excess ≈ tFee * tTransfer / tTotal = 399,352 (tFee = TAX portion only, 1% of amountOut).
+  Matches actual excess 399,353 exactly (off by 1 due to integer division).
+- Exceeds 0.01 PPM threshold (0.129 PPM, ~13x over threshold).
+- Cannot be corrected without reading `_rTotal` at quote time (stateful).
+
+### Fix
+Added `0xaaec4017381a1d1e564cb88600c001d05b21571d` (DICK) to `FotFormulaIssueTokens` in `formulas/fot.go`.
+Pool uses formula_id=0 (V2/constant-product), so `pool_quoter.go` — updated by the SPORE investigation
+to apply `FotFormulaIssueTokens` for all formula types — correctly makes this a `deadPoolQuoter`
+(falls back to EVM, evmOnly, not counted in match% denominator).
+Also marked pool -1 in both `formulas/registry.txt` and `evm-quoter/go/formulas/registry.txt` as
+belt-and-suspenders.
+Updated DICK comment in `fotCalculators` to document the RFI drift mechanism.
+
 ## 2026-03-25 — GB (Good Bridging) reflection drift: 0xd1ef5be30873 (lfj_v1, GB/USDT.e)
 
 ### Investigation

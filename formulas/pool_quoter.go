@@ -17,11 +17,16 @@ type PoolQuoter interface {
 	Address() common.Address
 }
 
+// EVMCaller executes a view call against the current EVM state.
+// Returns (result, true) on success, (nil, false) on revert or error.
+type EVMCaller func(to common.Address, data []byte) ([]byte, bool)
+
 // PoolManager holds pool structs and handles lazy construction + invalidation.
 type PoolManager struct {
 	pools          map[common.Address]PoolQuoter
 	registry       *Registry
 	reader         StorageReader
+	evmCaller      EVMCaller // optional; used for rate provider calls (Balancer V3 WITH_RATE tokens)
 	poolTokens     map[common.Address][2]common.Address // pool → [token0, token1]
 	poolTypes      map[common.Address]int               // pool → poolType from pools.txt
 	poolDex        map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
@@ -40,6 +45,12 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		poolDex:     make(map[common.Address]string),
 		tokenModels: NewTokenModelRegistry(),
 	}
+}
+
+// SetEVMCaller provides an EVM execution function used for calling rate providers
+// in Balancer V3 WITH_RATE token pools. Must be called before Get() for those pools.
+func (pm *PoolManager) SetEVMCaller(fn EVMCaller) {
+	pm.evmCaller = fn
 }
 
 // SetBlockTimestamp sets the block timestamp used for LFJ V2 volatility reference
@@ -141,9 +152,12 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	// FoT: check if pool tokens require rebasing/formula-issue fallback.
-	// Skip for V2 constant product — the formula is simple enough that it always
-	// matches EVM output (both read the same slot 8 reserves). FoT taxes for V2
-	// are handled by the fotPoolQuoter wrapper via fotCalculators.
+	// FotFormulaIssueTokens IS checked for V2 pools: pure RFI reflection tokens (SPORE, GB,
+	// DICK) produce a measurable excess even in V2 because the EVM router measures
+	// balanceOf(router) change, which captures reflection redistribution making the
+	// received amount slightly larger than tTransferAmount = raw - tFee.
+	// FotRebasingTokens are NOT checked for V2 (rebasing affects balances over time,
+	// not per-transfer; V2 slot-8 reserves already reflect current balances).
 	// Skip for V3 — the swap formula uses sqrtPrice/liquidity/ticks from storage,
 	// not token balances. Rebasing and formula-issue tokens don't affect V3 math.
 	// Skip for LFJ V2 — discrete bin math uses bin reserves/parameters from storage,
@@ -152,15 +166,23 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	// FoT taxes are handled by the fotPoolQuoter wrapper.
 	// Fraxswap TWAMM pools are marked -1 in registry.txt so they never reach here.
 	tokens, hasTokens := pm.poolTokens[pool]
-	if hasTokens && formulaID != FormulaV2_30bps && formulaID != FormulaV3 &&
-		formulaID != FormulaLFJV2 && formulaID != FormulaPharaohV1 {
+	if hasTokens {
 		t0Hex := strings.ToLower(tokens[0].Hex())
 		t1Hex := strings.ToLower(tokens[1].Hex())
-		if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] ||
-			FotFormulaIssueTokens[t0Hex] || FotFormulaIssueTokens[t1Hex] {
+		// FotFormulaIssueTokens applies to all formula types including V2.
+		if FotFormulaIssueTokens[t0Hex] || FotFormulaIssueTokens[t1Hex] {
 			dead := &deadPoolQuoter{addr: pool}
 			pm.pools[pool] = dead
 			return dead
+		}
+		// FotRebasingTokens only applies to non-V2, non-V3, non-LFJ V2, non-Pharaoh V1.
+		if formulaID != FormulaV2_30bps && formulaID != FormulaV3 &&
+			formulaID != FormulaLFJV2 && formulaID != FormulaPharaohV1 {
+			if FotRebasingTokens[t0Hex] || FotRebasingTokens[t1Hex] {
+				dead := &deadPoolQuoter{addr: pool}
+				pm.pools[pool] = dead
+				return dead
+			}
 		}
 	}
 
@@ -231,7 +253,7 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	case FormulaV4:
 		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV3:
-		if p := newBalancerV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		if p := newBalancerV3Pool(pool, pm.reader, pm.evmCaller); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV2:
 		if p := newBalancerV2Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}

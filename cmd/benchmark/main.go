@@ -20,6 +20,7 @@ import (
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/gorilla/websocket"
 	"github.com/holiman/uint256"
 )
@@ -318,6 +319,10 @@ func main() {
 		poolReader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
 		pm := formulas.NewPoolManager(registry, poolReader)
 		pm.SetBlockTimestamp(cfg.Timestamp)
+		pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+			result, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, to, data)
+			return result, err == nil
+		})
 		for i := range pools {
 			if len(pools[i].Tokens) >= 2 {
 				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
@@ -431,6 +436,10 @@ func main() {
 	}
 	warmPM := formulas.NewPoolManager(registry, warmReader)
 	warmPM.SetBlockTimestamp(cfg.Timestamp)
+	warmPM.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		result, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, to, data)
+		return result, err == nil
+	})
 	for i := range pools {
 		if len(pools[i].Tokens) >= 2 {
 			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
@@ -521,6 +530,10 @@ func main() {
 	}
 	pm := formulas.NewPoolManager(registry, poolReader)
 	pm.SetBlockTimestamp(cfg.Timestamp)
+	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		result, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, to, data)
+		return result, err == nil
+	})
 	for i := range pools {
 		if len(pools[i].Tokens) >= 2 {
 			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
@@ -810,6 +823,36 @@ func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.R
 	}
 }
 
+// balV3VaultAddr is the Balancer V3 vault on Avalanche C-Chain.
+var balV3VaultAddr = common.HexToAddress("0xba1333333333a1ba1108e8412f11850a5c319ba9")
+
+// balV3ReadTokenInfo reads TokenInfo for a token from vault storage.
+// TokenInfo is packed as: byte0=tokenType, bytes1-20=rateProvider, byte21=paysYieldFees.
+// Stored in _poolTokenInfo[pool][token] at vault slot 4.
+func balV3ReadTokenInfo(state *statedb.StateDB, pool, token common.Address) (tokenType uint8, rateProvider common.Address) {
+	// outer slot: keccak256(pool ++ 4)
+	outerKey := make([]byte, 64)
+	copy(outerKey[12:32], pool.Bytes())
+	outerKey[63] = 4
+	outerSlot := crypto.Keccak256Hash(outerKey)
+
+	// inner slot: keccak256(token ++ outerSlot)
+	innerKey := make([]byte, 64)
+	copy(innerKey[12:32], token.Bytes())
+	copy(innerKey[32:64], outerSlot.Bytes())
+	innerSlot := crypto.Keccak256Hash(innerKey)
+
+	packed := state.GetState(balV3VaultAddr, innerSlot)
+	val := new(big.Int).SetBytes(packed[:])
+
+	// byte 0 (LSB): tokenType
+	tokenType = uint8(val.Uint64() & 0xff)
+	// bytes 1-20: rateProvider address
+	rpInt := new(big.Int).And(new(big.Int).Rsh(val, 8), new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1)))
+	rateProvider = common.BigToAddress(rpInt)
+	return
+}
+
 // registerBalancerV3Pools discovers and registers Balancer V3 pool parameters via EVM calls.
 func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry) {
 	count := 0
@@ -824,6 +867,15 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 
 		poolAddr := strings.ToLower(p.Address.Hex())
 
+		// Read per-token types and rate providers from vault storage.
+		tokenTypes := make([]formulas.BalV3TokenType, len(p.Tokens))
+		rateProviders := make([]common.Address, len(p.Tokens))
+		for i, tok := range p.Tokens {
+			tt, rp := balV3ReadTokenInfo(state, p.Address, tok)
+			tokenTypes[i] = formulas.BalV3TokenType(tt)
+			rateProviders[i] = rp
+		}
+
 		// Try getAmplificationParameter() → selector 0x6daccffa
 		ampSelector := common.FromHex("0x6daccffa")
 		ampResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, ampSelector)
@@ -831,10 +883,12 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 			ampVal := new(big.Int).SetBytes(ampResult[0:32])
 			if ampVal.Sign() > 0 {
 				info := &formulas.BalancerV3PoolInfo{
-					PoolType:  formulas.BalV3Stable,
-					NumTokens: len(p.Tokens),
-					Tokens:    p.Tokens,
-					Amp:       ampVal,
+					PoolType:      formulas.BalV3Stable,
+					NumTokens:     len(p.Tokens),
+					Tokens:        p.Tokens,
+					Amp:           ampVal,
+					TokenTypes:    tokenTypes,
+					RateProviders: rateProviders,
 				}
 				formulas.RegisterBalancerV3Pool(poolAddr, info)
 				registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)
@@ -862,10 +916,12 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 					}
 					if allValid {
 						info := &formulas.BalancerV3PoolInfo{
-							PoolType:  formulas.BalV3Weighted,
-							NumTokens: len(p.Tokens),
-							Tokens:    p.Tokens,
-							Weights:   weights,
+							PoolType:      formulas.BalV3Weighted,
+							NumTokens:     len(p.Tokens),
+							Tokens:        p.Tokens,
+							Weights:       weights,
+							TokenTypes:    tokenTypes,
+							RateProviders: rateProviders,
 						}
 						formulas.RegisterBalancerV3Pool(poolAddr, info)
 						registry.SetFormulaID(p.Address, formulas.FormulaBalancerV3)

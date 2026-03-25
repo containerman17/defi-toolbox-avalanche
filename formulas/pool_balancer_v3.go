@@ -54,6 +54,16 @@ const (
 	BalV3Stable
 )
 
+// BalV3TokenType mirrors the Balancer V3 TokenType enum.
+// STANDARD = 0, WITH_RATE = 1, ERC4626 = 2.
+type BalV3TokenType uint8
+
+const (
+	balV3TokenStandard BalV3TokenType = 0
+	balV3TokenWithRate BalV3TokenType = 1
+	balV3TokenERC4626  BalV3TokenType = 2
+)
+
 // BalancerV3PoolInfo holds per-pool configuration registered at startup.
 type BalancerV3PoolInfo struct {
 	PoolType  BalancerV3PoolType
@@ -66,6 +76,12 @@ type BalancerV3PoolInfo struct {
 
 	// Stable pool: amplification parameter (already * AMP_PRECISION = 1000)
 	Amp *big.Int
+
+	// Per-token type and rate provider (read from vault _poolTokenInfo storage).
+	// TokenTypes[i] == balV3TokenWithRate or balV3TokenERC4626 → rate provider applies.
+	// Nil/empty slices mean all tokens are STANDARD (rate=1e18).
+	TokenTypes    []BalV3TokenType
+	RateProviders []common.Address
 }
 
 // balV3PoolInfos maps pool address (lowercase hex) to its info.
@@ -87,11 +103,18 @@ type BalancerV3Pool struct {
 
 	// Raw balances (in native token decimals), read from _poolTokenBalances
 	balancesRaw []*big.Int
-	// Live scaled18 balances = rawBalance * decimalScalingFactor (no rate provider for simplicity)
+	// Live scaled18 balances = rawBalance * decimalScalingFactor * tokenRate / 1e18
 	balancesLiveScaled18 []*big.Int
+
+	// Token rates (18-decimal FP). 1e18 for STANDARD tokens, getRate() for WITH_RATE/ERC4626.
+	// Used for amountIn scaling and amountOut unscaling in Quote().
+	tokenRates []*big.Int
 }
 
-func newBalancerV3Pool(addr common.Address, reader StorageReader) *BalancerV3Pool {
+// balV3GetRateSelector is the 4-byte selector for getRate() → bytes4(keccak256("getRate()"))
+var balV3GetRateSelector = [4]byte{0x67, 0x9a, 0xef, 0xce}
+
+func newBalancerV3Pool(addr common.Address, reader StorageReader, caller EVMCaller) *BalancerV3Pool {
 	poolHex := poolHex(addr)
 	info, ok := balV3PoolInfos[poolHex]
 	if !ok {
@@ -118,14 +141,38 @@ func newBalancerV3Pool(addr common.Address, reader StorageReader) *BalancerV3Poo
 		decimalScalingFactors[i] = new(big.Int).Exp(big.NewInt(10), diff, nil)
 	}
 
-	// 2. Read raw balances from _poolTokenBalances[pool][tokenIndex]
+	// 2. Fetch token rates. STANDARD tokens have rate = 1e18.
+	//    WITH_RATE and ERC4626 tokens have a rate provider whose getRate() must be called.
+	//    If no caller is available, we fall back to rate=1e18 (less accurate for yield tokens).
+	tokenRates := make([]*big.Int, info.NumTokens)
+	for i := 0; i < info.NumTokens; i++ {
+		tokenRates[i] = new(big.Int).Set(fpONE) // default: 1e18
+
+		if len(info.TokenTypes) > i && len(info.RateProviders) > i {
+			tt := info.TokenTypes[i]
+			rp := info.RateProviders[i]
+			needsRate := (tt == balV3TokenWithRate || tt == balV3TokenERC4626) &&
+				rp != (common.Address{}) && caller != nil
+			if needsRate {
+				result, ok := caller(rp, balV3GetRateSelector[:])
+				if ok && len(result) >= 32 {
+					rate := new(big.Int).SetBytes(result[:32])
+					if rate.Sign() > 0 {
+						tokenRates[i] = rate
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Read raw balances from _poolTokenBalances[pool][tokenIndex]
 	//    Each entry is PackedTokenBalance: lower 128 bits = rawBalance, upper 128 bits = derivedBalance
 	balancesRaw := make([]*big.Int, info.NumTokens)
 	balancesLiveScaled18 := make([]*big.Int, info.NumTokens)
 	mask128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 
 	// First compute the base slot for this pool's token balances:
-	// keccak256(leftPad32(pool) + leftPad32(8))
+	// keccak256(leftPad32(pool) + leftPad32(5))
 	poolBalBaseSlot := balV3MappingSlot(addr, balV3SlotPoolTokenBalances)
 
 	for i := 0; i < info.NumTokens; i++ {
@@ -145,9 +192,11 @@ func newBalancerV3Pool(addr common.Address, reader StorageReader) *BalancerV3Poo
 		}
 
 		// Live balance = raw * scalingFactor * tokenRate / 1e18
-		// For STANDARD tokens (no rate provider), tokenRate = 1e18, so:
-		// liveBalance = raw * scalingFactor
-		balancesLiveScaled18[i] = new(big.Int).Mul(rawBal, decimalScalingFactors[i])
+		liveBalance := new(big.Int).Mul(rawBal, decimalScalingFactors[i])
+		if tokenRates[i].Cmp(fpONE) != 0 {
+			liveBalance = new(big.Int).Div(new(big.Int).Mul(liveBalance, tokenRates[i]), fpONE)
+		}
+		balancesLiveScaled18[i] = liveBalance
 	}
 
 	return &BalancerV3Pool{
@@ -157,6 +206,7 @@ func newBalancerV3Pool(addr common.Address, reader StorageReader) *BalancerV3Poo
 		decimalScalingFactors: decimalScalingFactors,
 		balancesRaw:           balancesRaw,
 		balancesLiveScaled18:  balancesLiveScaled18,
+		tokenRates:            tokenRates,
 	}
 }
 
@@ -203,13 +253,14 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 		return nil, false
 	}
 
-	// Scale amountIn to 18 decimals
+	// Scale amountIn to 18 decimals: toScaled18ApplyRateRoundDown
+	// = amountIn * scalingFactor * tokenRate / 1e18
 	amountInBig := amountIn.ToBig()
 	amountInScaled18 := new(big.Int).Mul(amountInBig, p.decimalScalingFactors[indexIn])
-	// For STANDARD tokens, tokenRate = 1e18, so:
-	// toScaled18ApplyRateRoundDown = amount * scalingFactor * rate / 1e18
-	// = amount * scalingFactor (since rate = 1e18)
-	// Already done above for standard tokens.
+	rateIn := p.tokenRates[indexIn]
+	if rateIn.Cmp(fpONE) != 0 {
+		amountInScaled18 = new(big.Int).Div(new(big.Int).Mul(amountInScaled18, rateIn), fpONE)
+	}
 
 	// Deduct swap fee: feeAmount = amountInScaled18 * swapFee / 1e18 (round up)
 	feeAmount := fpMulUp(amountInScaled18, p.swapFeePercentage)
@@ -253,18 +304,21 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 		return nil, false
 	}
 
-	// Scale back to raw: amountOutRaw = amountOutScaled18 * 1e18 / (scalingFactor * tokenRate)
-	// For STANDARD tokens (rate = 1e18): amountOutRaw = amountOutScaled18 / scalingFactor
-	// Using divDown (round down since this is amountOut)
+	// Scale back to raw: toRawUndoRateRoundDown
+	// = FixedPoint.divDown(amountOutScaled18, scalingFactor * tokenRate)
+	// = amountOutScaled18 * 1e18 / (scalingFactor * tokenRate)
+	// For STANDARD tokens (rate = 1e18): = amountOutScaled18 / scalingFactor
 	scalingOut := p.decimalScalingFactors[indexOut]
-	// toRawUndoRateRoundDown = divDown(amount, scalingFactor * tokenRate)
-	// For rate = 1e18: divDown(amount, scalingFactor * 1e18)
-	// But actually scalingFactor is NOT an FP18 value, it's a raw multiplier (e.g., 1e12 for 6-decimal tokens).
-	// In ScalingHelpers: toRawUndoRateRoundDown = FixedPoint.divDown(amount, scalingFactor * tokenRate)
-	// where scalingFactor * tokenRate is treated as a single FP18 divisor.
-	// So for STANDARD tokens: scalingFactor * 1e18 is the combined divisor.
-	// FixedPoint.divDown(amount, divisor) = amount * 1e18 / divisor = amount * 1e18 / (scalingFactor * 1e18) = amount / scalingFactor
-	amountOutRaw := new(big.Int).Div(amountOutScaled18, scalingOut)
+	rateOut := p.tokenRates[indexOut]
+	var amountOutRaw *big.Int
+	if rateOut.Cmp(fpONE) != 0 {
+		// divisor = scalingFactor * rate (both are in 1e18 terms together)
+		// divDown(a, divisor) = a * 1e18 / divisor
+		divisor := new(big.Int).Mul(scalingOut, rateOut)
+		amountOutRaw = new(big.Int).Div(new(big.Int).Mul(amountOutScaled18, fpONE), divisor)
+	} else {
+		amountOutRaw = new(big.Int).Div(amountOutScaled18, scalingOut)
+	}
 
 	if amountOutRaw.Sign() <= 0 {
 		return nil, false

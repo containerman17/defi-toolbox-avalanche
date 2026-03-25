@@ -118,13 +118,98 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 - Total: 0.911 → 0.307 ms/pool (2.97x faster from baseline)
 - Formula coverage: 4736 validated, 606 invalid
 
+### CallState + CallerContract optimization (EVM execution)
+Inspired by experiments/10_local_hayabusa architecture. Two changes:
+
+1. **CallState** — thin overlay replacing StateDB-backed-by-StateDB overlay.
+   - Only stores storage + balance overrides (maps), delegates code/codeHash/nonce to base
+   - Journal-based Snapshot/RevertToSnapshot — O(mutations) not O(all accounts) deep copy
+   - No per-call keccak256 for codeHash — base has it cached from SetAccount
+   - No per-call account struct allocation — just map writes for overrides
+
+2. **CallerContract** — `*vm.Contract` caller instead of `AccountRef` for `evm.Call()`.
+   - EVM's NewContract checks if caller is *Contract → shares JUMPDEST bitvector
+   - All calls within a CachedContext share JUMPDEST analysis (~15% CPU savings from experiments)
+   - JUMPDEST analysis for router/pool/token contracts computed once, reused across calls
+
+**Benchmark results (4000 pools, warm+hot, single-threaded):**
+
+| Metric | Before (StateDB overlay) | After (CallState) | Change |
+|--------|--------------------------|-------------------|--------|
+| EVM-only total | 5019ms | 3180ms | **1.58x faster** |
+| EVM ms/quote | 627µs | 396µs | **37% faster** |
+| With formulas total | 2089ms | 1351ms | **1.55x faster** |
+| Overall ms/quote | 0.261 | 0.169 | **35% faster** |
+| Warm pass (EVM-only) | 10936ms | 3445ms | **3.2x faster** |
+| Warm pass (formulas) | 47442ms | 1582ms | **30x faster** |
+
+Per-type highlights:
+- v2 (simple): 924ms → 371ms (2.5x) — biggest win, most overhead was in overlay
+- lfj_v1: 1045ms → 424ms (2.5x)
+- uniswap_v4: 108ms → 22ms (5x)
+- uniswap_v3: 1926ms → 1693ms (14%) — dominated by actual tick-walking EVM cost
+
 ### Current state summary
 | Metric | Baseline | Current | Change |
 |--------|----------|---------|--------|
 | IPC batch speed | 0.911 ms/pool | 0.307 ms/pool | **2.97x faster** |
+| EVM-only (hot, 4000 pools) | — | 396µs/quote | — |
+| With formulas (hot) | — | 157µs/quote | — |
 | find_route (500 pools) | ~4500ms (JS BFS) | ~756ms (Go BFS) | **5.9x faster** |
 | Formula coverage | 0 pools | 4736 pools | — |
 | Correctness | 100% | 100% | unchanged |
+
+### CPU profiling of hot path (pprof)
+- EVMInterpreter.Run is 98% of CPU time — genuine bytecode execution
+- Stack operations (push/pop/swap/dup): 30% — libevm internals
+- Opcode dispatch + PUSH data: 15% — interpreter loop
+- Nested calls (opCall/DelegateCall/StaticCall): 48% — sub-contract invocations
+- **Our StateDB/CallState overhead: <5%** — essentially eliminated
+- SLOAD (GetState): 4.6%, GetCodeHash: 1.5%, map lookups: 2.8%
+- SHA3 opcode (in-contract keccak): 3.1%
+- Memory allocation: 182MB per hot pass (EVM Memory.Resize)
+- Access list maps: 52MB per hot pass
+- **Conclusion: ~400µs/call is the floor for this EVM interpreter (libevm)**
+- Further gains need: more formulas, parallelism, or JIT EVM (evmone/revm)
+
+### Formula performance deep dive + Go vs Rust comparison
+- Instrumented formulas to separate state reads from math
+- **V3 formula (60 reads, 32µs/call): 63% is uint256 division, 21% bitmap scan, 7% keccak, 7% map lookup**
+- Simple formulas (V2/LFJ_V1): 1-3µs — pure x*y/z math, ~400x faster than EVM
+- V3 formula: 32µs — only 1.3x faster than EVM, dominated by mulDiv (512-bit intermediate division)
+- Created isolated benchmark: `experiments/formula-speed/` with fixture JSON + Go `testing.B` + Rust comparison
+- **Go vs Rust on full V3 formula (same algorithm, same state):**
+  - Pool with 4 reads: Go 2,735ns vs Rust 3,292ns — **Go 1.2x faster**
+  - Pool with 60 reads: Go 31,912ns vs Rust 78,390ns — **Go 2.5x faster**
+  - Go's `holiman/uint256` is competitive with Rust's `ruint` for mulDiv operations
+  - **Conclusion: rewriting formulas in Rust won't help. Go uint256 is already near-optimal.**
+- Pools with >100 reads are doing tick-walking through sparse bitmap regions — inherent to the algorithm
+
+### Pure Go benchmark replaces JS IPC benchmark
+- Old benchmark: JS bench.mjs → spawns Go native harness → IPC stdin/stdout JSON → measures wall time including serialization
+- New benchmark: `go run ./cmd/benchmark/ --state-server ws://localhost:7449` — pure Go, no JS, no IPC
+- Default 2 warm passes (JUMPDEST + CPU cache), then timed hot pass
+- Auto-logs to `benchmark_results/evm_speed.log` (skipped when --skip-formulas or --profile-mode set)
+- Log format: `time=... git=... result=<ms/pool> pools=... formulas=... evm=... ok=...`
+- Result: 0.307-0.323 ms/pool — matches old IPC benchmark numbers, now apples-to-apples
+
+### V3 tick index optimization
+- Root cause of slow V3 formulas: linear bitmap scanning copied from Solidity's one-SLOAD-at-a-time approach
+- Median V3 pool has 6 initialized ticks but scanned 425 bitmap words (mostly zeros) to find them
+- Fix: pre-scan all bitmap words once per pool, build sorted array of initialized tick positions
+- Quote-time: binary search O(log n) instead of linear scan O(distance/256)
+- **V3 formula: 152ms → 10ms (14.8x faster)**
+- **Total formulas: 240ms → 53ms (4.5x faster)**
+- Reads per V3 quote: 425 → 10
+- 82 V3 pools have 2,621 total initialized ticks — trivial to pre-compute
+- First-pass cost: ~52s (401 bitmap words × 246 pools × keccak + state read)
+- Per-block rebuild: only ~5-10 touched pools, ~1ms
+- Memory: 2,621 ticks × ~128 bytes ≈ 330KB
+
+### Multi-pass warm analysis
+- Pass 1→5 improvement: ~10% (3779ms → 3449ms) — JUMPDEST already cached via CallerContract
+- Remaining improvement is CPU cache warming, not JUMPDEST
+- CallerContract's jumpdests map accumulates across all calls within a CachedContext
 
 ### Pharaoh V3 deep dive
 - 3024µs/pool — 8.3x slower than uniswap_v3 (366µs/pool)
@@ -158,10 +243,10 @@ Key finding: pharaoh_v3 formula (ERC-7201 layout) is 8.3x slower than uniswap_v3
 - Reusable overlay (Reset instead of NewOverlay): 2% improvement — negligible
 - EVM per-call setup (NewEVM + blockCtx + big.Int): 5902ns, 54 allocs
 - Cached block context: saved ~100us per call, 14 fewer allocs
-- Real EVM execution: ~700us per call — this is the libevm engine, not our code
+- **Root cause from experiments**: per-overlay keccak256 recomputation + deep copy snapshots + no JUMPDEST sharing
+- **Fix: CallState + CallerContract**: 627µs → 396µs per EVM call (37% faster)
 - Target from experiments (192-core): ~192us per call per core
-- Our single-core: ~700us — 3.6x gap likely from cache effects and state access patterns
-- With formulas: 5.7x overall speedup (1206ms vs 6865ms for 1000 pools)
+- Our single-core: ~396us — 2x gap, likely remaining from libevm interpreter overhead
 
 ### Open questions
 - Discovery coverage gap: test ALL pools, not just starter-token pairs

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"defi-toolbox/formulas"
 	"defi-toolbox/pathfinder"
 	poolcollector "defi-toolbox/pool-collector"
 	"defi-toolbox/router"
@@ -286,11 +287,39 @@ func main() {
 			}
 			byFormula[formulaID].ok++
 		} else {
-			results = append(results, poolResult{p.Address, -1, false})
-			if byFormula[-1] == nil {
-				byFormula[-1] = &stats{}
+			// Check if pool has a known FoT token — if so, the formula can handle it
+			// with FoT adjustment instead of marking as -1.
+			fotRecoverable := false
+			for _, t := range p.Tokens {
+				tHex := strings.ToLower(t.Hex())
+				// Skip rebasing and formula-issue tokens — they must stay -1
+				if formulas.FotRebasingTokens[tHex] || formulas.FotFormulaIssueTokens[tHex] {
+					fotRecoverable = false
+					break
+				}
+				if formulas.IsFotToken(tHex) {
+					fotRecoverable = true
+				}
 			}
-			byFormula[-1].fail++
+			// Also check if pool is FoT-exempt (fee doesn't apply, so EVM failure is real)
+			poolHexStr := strings.ToLower(p.Address.Hex())
+			if formulas.IsFotExemptPool(poolHexStr) {
+				fotRecoverable = false
+			}
+
+			if fotRecoverable {
+				results = append(results, poolResult{p.Address, formulaID, true})
+				if byFormula[formulaID] == nil {
+					byFormula[formulaID] = &stats{}
+				}
+				byFormula[formulaID].ok++
+			} else {
+				results = append(results, poolResult{p.Address, -1, false})
+				if byFormula[-1] == nil {
+					byFormula[-1] = &stats{}
+				}
+				byFormula[-1].fail++
+			}
 		}
 	}
 

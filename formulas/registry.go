@@ -86,6 +86,8 @@ func (r *Registry) TryQuoteDirect(readStorage StorageReader, pool common.Address
 		return nil, false
 	}
 
+	// FoT adjustment is handled by PoolManager wrapper, not here.
+	// TryQuoteDirect is a legacy path used by function-based formulas (LFJ V2, Algebra).
 	ret, ok := r.dispatchFormula(readStorage, formulaID, pool, tokenIn, tokenOut, amountIn)
 	if !ok {
 		return nil, false
@@ -96,6 +98,7 @@ func (r *Registry) TryQuoteDirect(readStorage StorageReader, pool common.Address
 	if out.IsZero() {
 		return nil, false
 	}
+
 	return &out, true
 }
 
@@ -123,6 +126,8 @@ func (r *Registry) TryQuote(readStorage StorageReader, data []byte) ([]byte, boo
 		return nil, false
 	}
 
+	// FoT adjustment is handled by PoolManager wrapper, not here.
+	// TryQuote is a legacy path used by function-based formulas (LFJ V2, Algebra).
 	return r.dispatchFormula(readStorage, formulaID, pool, tokenIn, tokenOut, amountIn)
 }
 

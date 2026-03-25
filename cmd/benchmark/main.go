@@ -255,6 +255,11 @@ func main() {
 		cs := statedb.NewCallState(baseWithOverrides)
 		poolReader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
 		pm := formulas.NewPoolManager(registry, poolReader)
+		for i := range pools {
+			if len(pools[i].Tokens) >= 2 {
+				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
+			}
+		}
 
 		// Warm pass
 		for i := range pools {
@@ -352,6 +357,11 @@ func main() {
 		return state.GetState(addr, key)
 	}
 	warmPM := formulas.NewPoolManager(registry, warmReader)
+	for i := range pools {
+		if len(pools[i].Tokens) >= 2 {
+			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
+		}
+	}
 
 	// Warm passes before the hot (timed) pass.
 	// Default 2: first builds pool structs + JUMPDEST caches, second warms CPU caches.
@@ -435,6 +445,11 @@ func main() {
 		return state.GetState(addr, key)
 	}
 	pm := formulas.NewPoolManager(registry, poolReader)
+	for i := range pools {
+		if len(pools[i].Tokens) >= 2 {
+			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
+		}
+	}
 
 	for i := range pools {
 		pool := &pools[i]

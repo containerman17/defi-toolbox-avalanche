@@ -1,0 +1,321 @@
+package formulas
+
+import "math/big"
+
+// Fee-on-transfer (FoT) token transfer tax rates on Avalanche C-Chain.
+//
+// Each token has an exact fee calculator that replicates the Solidity integer
+// math from its transfer() function. This avoids rounding mismatches that
+// occur when approximating with a single bps rate.
+
+// FotCalcFee returns the exact fee for a token transfer.
+// Returns (fee, true) if token has FoT, (0, false) otherwise.
+func FotCalcFee(token string, amount *big.Int) (*big.Int, bool) {
+	calc, ok := fotCalculators[token]
+	if !ok {
+		return nil, false
+	}
+	return calc(amount), true
+}
+
+// IsFotToken returns true if the token has a fee-on-transfer tax.
+func IsFotToken(token string) bool {
+	_, ok := fotCalculators[token]
+	return ok
+}
+
+// IsFotExemptPool returns true if the pool is exempt from FoT adjustments.
+func IsFotExemptPool(pool string) bool {
+	return FotExemptPools[pool]
+}
+
+// Helper: fee = amount * rate / 10000 (standard bps division)
+func fotBps(rate int64) func(*big.Int) *big.Int {
+	return func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(rate))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}
+}
+
+// Helper: fee = amount * rate / 100
+func fotPct(rate int64) func(*big.Int) *big.Int {
+	return func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(rate))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	}
+}
+
+var fotCalculators = map[string]func(*big.Int) *big.Int{
+	// =====================================================================
+	// Tokens with exact Solidity math from source code analysis
+	// =====================================================================
+
+	// Good Bridging: fee = amount / 100 (1%, unconditional, amount*1/100)
+	"0x90842eb834cfd2a1db0b1512b254a18e4d396215": fotPct(1),
+
+	// SLED: fee = amount * 2 / 100
+	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": fotPct(2),
+
+	// Tortuga: fee = amount*3/100 + amount*3/100 + amount*1/100 (THREE separate divisions)
+	"0xab2712b217f0015b602c06e4fb66b8cf8b04f894": func(amount *big.Int) *big.Int {
+		f1 := new(big.Int).Mul(amount, big.NewInt(3))
+		f1.Div(f1, big.NewInt(100))
+		f2 := new(big.Int).Mul(amount, big.NewInt(3))
+		f2.Div(f2, big.NewInt(100))
+		f3 := new(big.Int).Mul(amount, big.NewInt(1))
+		f3.Div(f3, big.NewInt(100))
+		return f1.Add(f1, f2).Add(f1, f3)
+	},
+
+	// L-Swing: fee = amount * 20 / 100 (20%, unconditional)
+	"0x556b959d952085405e7c630bc45a34ace73854eb": fotPct(20),
+
+	// WorldOfDogs: fee = amount*6/100 + amount*5/100 (TWO separate divisions)
+	"0xadcfb771e88fd804e0fb04eef6492a0daf389c51": func(amount *big.Int) *big.Int {
+		f1 := new(big.Int).Mul(amount, big.NewInt(6))
+		f1.Div(f1, big.NewInt(100))
+		f2 := new(big.Int).Mul(amount, big.NewInt(5))
+		f2.Div(f2, big.NewInt(100))
+		return f1.Add(f1, f2)
+	},
+
+	// SPORE: fee = amount / 100 * 6 (div THEN mul, 6%, unconditional)
+	"0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Div(amount, big.NewInt(100))
+		fee.Mul(fee, big.NewInt(6))
+		return fee
+	},
+
+	// Safemoon fork: fee = amount * 500 / 10000
+	"0x3960716779870ef8757aeb43f3c4f0c30cb2d557": fotBps(500),
+
+	// DejàVu: fee = amount * 51 / 10000
+	"0x78aed06eb93351aae6886d9c012888f87b64c918": fotBps(51),
+
+	// Double-division tokens: fee = amount * rate / 100 / 100 (GRANULARITY=100)
+	// 0xaaec: 3 separate fees totalling 400 bps via amount*rate/100/100 pattern
+	// Source: fee = amount * 400 / 100 / 100 (three separate fees with GRANULARITY=100)
+	// DEX pair exemption possible (_isExcluded[recipient] or FeeAddress)
+	"0xaaec4017381a1d1e564cb88600c001d05b21571d": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(400))
+		fee.Div(fee, big.NewInt(100))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	},
+
+	// 0x4fc8: same double-division pattern, total 500 bps
+	// DEX pair exemption possible (_isExcluded[recipient] or FeeAddress)
+	"0x4fc8aab93a6e4e6928fd7e9ba979a715ccf55a6a": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(500))
+		fee.Div(fee, big.NewInt(100))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	},
+
+	// Bonfire: fee = 3 * (amount * 300 / 100 / 100) — three separate fees of 300 each
+	"0xa0a924dcb97a597351a5c3787234b706845e7510": func(amount *big.Int) *big.Int {
+		// Each sub-fee: amount * 300 / 100 / 100
+		oneFee := func() *big.Int {
+			f := new(big.Int).Mul(amount, big.NewInt(300))
+			f.Div(f, big.NewInt(100))
+			f.Div(f, big.NewInt(100))
+			return f
+		}
+		total := oneFee()
+		total.Add(total, oneFee())
+		total.Add(total, oneFee())
+		return total
+	},
+
+	// BYAS: fee = amount * 30 / 1000
+	"0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(30))
+		fee.Div(fee, big.NewInt(1000))
+		return fee
+	},
+
+	// BigRed: fee = amount * 3 / 100 (300 bps, only on pair trades after buyCount>100)
+	"0x87bbfc9dcb66caa8ce7582a3f17b60a25cd8a248": fotPct(3),
+
+	// fBomb: fee = amount - amount * 99 / 100 (100 bps burn)
+	// DEX pair exemption possible (taxExempt list)
+	"0x5c09a9ce08c4b332ef1cc5f7cadb1158c32767ce": func(amount *big.Int) *big.Int {
+		kept := new(big.Int).Mul(amount, big.NewInt(99))
+		kept.Div(kept, big.NewInt(100))
+		return new(big.Int).Sub(amount, kept)
+	},
+
+	// Waifu: taxAmount is dynamic, reads 0 at pinned block 0x4cea4a8 — no fee active.
+	// Removed: "0xff24003428fb2e969c39edee4e9f464b0b78313d": fotBps(50),
+
+	// BulletCollection: fee = amount * totalFeePercentage / 10000 (totalFeePercentage=50 from bulletConfig).
+	// FoT only applies on transfers involving registered AMM pairs (isAutomatedMarketMakerPair).
+	// Pool 0x70201236 (lfj_v1) IS registered → fee applies.
+	// Pool 0x3c4beea7 (lfj_v1) is NOT registered → exempt (see FotExemptPools).
+	"0xf84be5e3f534e6d4b60d104b299e33ecb03ce7fd": fotBps(50),
+
+	// HERESY (BulletCollection): fee = amount * 50 / 10000 (totalFeePercentage=50 from shared bulletConfig).
+	// FoT only applies on transfers involving registered AMM pairs (isAutomatedMarketMakerPair).
+	// The lfj_v1 pair (0x17885bb0) IS registered → fee applies.
+	// Pharaoh/V3 pairs are NOT registered → exempt (see FotExemptPools).
+	"0x432d38f83a50ec77c409d086e97448794cf76dcf": fotBps(50),
+
+	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
+	// noTaxable=false for ALL DEX pairs — the fee IS applied during swaps.
+	"0xca3130f29e296f1966e5999889d0824a9032ee97": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Div(amount, big.NewInt(100))
+		fee.Mul(fee, big.NewInt(5))
+		return fee
+	},
+
+	// HEFE: fee = amount * 10 / 1000 (1% tax on buys/sells for registered LPs)
+	"0x18e3605b13f10016901eac609b9e188cf7c18973": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(10))
+		fee.Div(fee, big.NewInt(1000))
+		return fee
+	},
+
+	// Vaccine: fee = amount * 19 / 10000 (0.19% = covidnineteenFee=19 bps)
+	"0x89d4c4dbcd477345f8fbb083d1194faeafba1522": fotBps(19),
+
+	// HOWDY: fee = floor(amount / 14)
+	"0x7b640a60daa4ee5fbc2ce81797c11d174daa3b4f": func(amount *big.Int) *big.Int {
+		return new(big.Int).Div(amount, big.NewInt(14))
+	},
+
+	// =====================================================================
+	// Tokens not yet source-analyzed — using standard bps approximation.
+	// These are tokens that showed consistent bps rates across multiple pools.
+	// If they cause mismatches, source-analyze their exact Solidity math.
+	// =====================================================================
+
+	// 0x41df729c — 3% tax (300 bps), seen in sushiswap_v2, uniswap_v2, uniswap_v3
+	"0x41df729c20fc8792ed3687420a8666255a092e9a": fotBps(300),
+
+	// 0x0592af54 — 1% tax (100 bps), seen in lfj_v1, pangolin_v2
+	"0x0592af5414f2f8d90a5ae3c25e937804d3965c87": fotBps(100),
+
+	// 0xc9ac17de — 5% tax (500 bps), seen in sushiswap_v2, lfj_v1
+	"0xc9ac17de0c47129efb09224af75fcaff07608b7a": fotBps(500),
+
+	// 0xf9a075c9 — 5% tax (500 bps), seen in lfj_v1, partyswap
+	"0xf9a075c9647e91410bf6c402bdf166e1540f67f0": fotBps(500),
+
+	// 0xcc0cbc7a — 1% tax (100 bps), seen in pangolin_v2, lfj_v2
+	"0xcc0cbc7aad6e89ffbe5028dea24dd80ddeb8455b": fotBps(100),
+
+	// 0x039d2e8f — 1% tax (100 bps)
+	"0x039d2e8f097331278bd6c1415d839310e0d5ece4": fotBps(100),
+
+	// 0x0512384c — 1% tax (100 bps)
+	"0x0512384c595ef182f3dacd8414e951c2fa7f6ee9": fotBps(100),
+
+	// 0x0fec6d8a — 1% tax (100 bps)
+	"0x0fec6d8a84a85b79a1ffe0e28c1902e08b653efe": fotBps(100),
+
+	// 0x8901cb2e — 1% tax (100 bps)
+	"0x8901cb2e82cc95c01e42206f8d1f417fe53e7af0": fotBps(100),
+
+	// 0xa2cac35f — 1% tax (100 bps)
+	"0xa2cac35f93c4a8005983bcc6748a6bc477827168": fotBps(100),
+
+	// 0x030afbbf — 5% tax (500 bps)
+	"0x030afbbf8b85ccfdc860b014439fd89ebc3e71a4": fotBps(500),
+
+	// 0x0fec28d1 — 5% tax (500 bps)
+	"0x0fec28d1694914cf3cbf4eda5eebeaf9e7b8e643": fotBps(500),
+
+	// 0x7f64a65c — 5% tax (500 bps)
+	"0x7f64a65c0d38d4150d73178d869663dcce4c0141": fotBps(500),
+
+	// 0x8cb66252 — 5% tax (500 bps)
+	"0x8cb66252e8c03791de080df5fb3d979e46f1cc27": fotBps(500),
+
+	// 0x8908ea96 — 5% tax (500 bps)
+	"0x8908ea968d2f79d078d893c0bcecd63eacdd9322": fotBps(500),
+
+	// 0x4ba16daf — 10% tax (1000 bps)
+	"0x4ba16daf8ed418ded920c66e45cc3eaffde53ac7": fotBps(1000),
+
+	// 0x8a610bf3 — 10% tax (1000 bps)
+	"0x8a610bf3b64099a2bd9ef293838ba35986a3dfbb": fotBps(1000),
+
+	// 0x894aa2d0 — 10% tax (1000 bps)
+	"0x894aa2d0d3e63471c5ffbd22a8a95c8476826cf9": fotBps(1000),
+
+	// 0x2ab6e759 — 10% tax (1000 bps)
+	"0x2ab6e7599372ebaedc0329379a9d97402a7bcadd": fotBps(1000),
+
+	// 0x9d11bb9b — 2% tax (200 bps)
+	// DEX pair exemption possible (_isExcludedFromFee)
+	"0x9d11bb9b6b6134182477859937c4c3921f5bf441": fotBps(200),
+
+	// 0x22897cf0 — ~1.03% tax (103 bps)
+	// DEX pair exemption possible (_isExcludedFromFee)
+	"0x22897cf0da31e1f118649d9f6ad1809cabd84948": fotBps(103),
+
+	// NOTE: 0xe668f8030bf17f3931a3069f31f4fa56efe9dd54 (WSPP) — confirmed NOT FoT, removed.
+}
+
+// FotExemptPools lists pool addresses where FoT should NOT be applied even though
+// one of their tokens is in the FoT list. This happens when the token's transfer
+// function checks for specific DEX pair addresses (e.g., isAutomatedMarketMakerPair)
+// and the pool is not registered.
+var FotExemptPools = map[string]bool{
+	// BigRed (0x87bb...): only charges fee on its JoeV2Pair (0x7ef8e0af, lfj_v1).
+	// The V3 pool is not JoeV2Pair, so no fee is charged.
+	"0x97fe71c72037d307d69694e41f20d97868c848ec": true, // BigRed/USDC uniswap_v3
+
+	// HERESY (BulletCollection, 0x432d...): only charges fee on registered AMM pairs.
+	// Pharaoh V1/V3 pairs are not registered in the swapManager.
+	"0x04a954bc8af9a1fdc2ce5f3192bdca369a4512cc": true, // HERESY/WAVAX pharaoh_v1
+	"0x2bcbf5c38a0e11985779f507c5b98ad1fdd7b196": true, // HERESY/WAVAX pharaoh_v1
+	"0x08ca0e8905beb997a6ade2a9a89a5a31eb1698ff": true, // HERESY/WAVAX pharaoh_v3
+
+	// BulletCollection (0xf84b...): only charges fee on registered AMM pairs.
+	// Pool 0x3c4beea7 (lfj_v1) is NOT registered as an AMM pair.
+	"0x3c4beea709e9a46f869ef5c1e9b18fd2195bd87f": true, // BulletCollection/USDC lfj_v1
+
+	// ALAQ (0xca31...): pool 0x661368c5 is noTaxable for this pair — no fee applied.
+	"0x661368c5bdecd87475aae157b9ea718c0450125f": true, // ALAQ/WAVAX uniswap_v2
+
+	// HEFE (0x18e3...): pharaoh pools are not registered LPs — no fee applied.
+	"0xc4fa66b4839af7379a4fcbe5dd048b18fe99a2ac": true, // HEFE/USDC pharaoh_v1
+	"0x73f7212838692e560f5b26fdb05cf0aa6cf56f33": true, // HEFE/WAVAX pharaoh_v1
+	"0x2064f67ba4362422eaae6ba7689c0cb0fa82c961": true, // HEFE/WAVAX pharaoh_v1
+	"0x7a02148e4af381735faca391cd2d781b8f1ed272": true, // HEFE/WAVAX pharaoh_v3
+	"0x9b214d9c2872b5cd33f548aadb9c5396fa7e8546": true, // HEFE/USDC pharaoh_v3
+}
+
+// FotRebasingTokens lists tokens that gain value over time (negative "tax"),
+// e.g. interest-bearing or rebasing upward tokens. Formula output < eth_call output.
+// These cannot use a simple tax adjustment; they need to fall back to eth_call.
+var FotRebasingTokens = map[string]bool{
+	// 0xc891eb4cbdeff6e073e859e987815ed1505c2acd — TUSD (rebasing, -49.25 bps)
+	"0xc891eb4cbdeff6e073e859e987815ed1505c2acd": true,
+
+	// 0xffff003a6bad9b743d658048742935fffe2b6ed7 — rebasing token (-45.23 bps)
+	"0xffff003a6bad9b743d658048742935fffe2b6ed7": true,
+}
+
+// FotFormulaIssueTokens lists tokens where the formula produces different output
+// than eth_call but not due to transfer tax (e.g. TWAMM pools, LFJ V2 precision).
+// These should remain as fallback pools.
+var FotFormulaIssueTokens = map[string]bool{
+	// 0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64 — fraxswap TWAMM output token
+	// (V2 formula gives 0, fraxswap uses different AMM math)
+	"0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64": true,
+
+	// 0x130966628846bfd36ff31a822705796e8cb8c18d — Pharaoh V1 pool shows 0 bps
+	// (18 wei diff only, not FoT — possible rounding in stable swap math)
+	"0x130966628846bfd36ff31a822705796e8cb8c18d": true,
+
+	// LFJ V2 pools with 0% at size 0 but negative diff at size 2:
+	// These are formula precision issues in LFJ V2, not transfer taxes.
+	"0x73a2b117b397346fa8e45577f478a7621b6045df": true, // 0x17094895 pool
+	"0x6c14c1898c843ff66ca51e87244690bbc28df215": true, // 0x2cf90b72 pool (ORNG)
+	"0x420fca0121dc28039145009570975747295f2329": true, // 0x3a2cbbd1 pool
+	"0x407e0ce3ef9d370e00a972cba7344158ed60a6cd": true, // 0x78f81cf4 pool
+}

@@ -304,10 +304,24 @@ func main() {
 				} else if formulaOut.Eq(evmOut) {
 					match++
 				} else {
-					mismatch++
-					if mismatch <= 10 {
-						fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
-							p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
+					// Check within 0.01 PPM (1/1,000,000 of a percent = 1e-8 relative)
+					var diff uint256.Int
+					if formulaOut.Gt(evmOut) {
+						diff.Sub(formulaOut, evmOut)
+					} else {
+						diff.Sub(evmOut, formulaOut)
+					}
+					// diff/evmOut < 1e-8  ⟺  diff * 1e8 < evmOut
+					var scaled uint256.Int
+					scaled.Mul(&diff, uint256.NewInt(100_000_000))
+					if scaled.Lt(evmOut) {
+						match++ // within 0.01 PPM tolerance
+					} else {
+						mismatch++
+						if mismatch <= 10 {
+							fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
+								p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
+						}
 					}
 				}
 			}

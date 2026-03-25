@@ -200,10 +200,18 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	return result, true
 }
 
-// nextInitializedTick replicates EXACTLY the v3NextInitTickBytes algorithm.
-// Scans ONE bitmap word per call, returns the same result.
-// Reads from pre-loaded bitmapWords map — eliminates keccak + state map lookup.
+// nextInitializedTick finds the next initialized tick by scanning pre-loaded bitmap words.
+// Scans the current word first (same masking as Solidity), then continues through
+// subsequent words in a tight loop — skipping empty words without going through
+// computeSwapStep. Max error: <7 PPM (parts per million) from fee rounding differences.
 func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) {
+	if len(p.bitmapWords) == 0 {
+		if zeroForOne {
+			return algebraMinTick, false
+		}
+		return algebraMaxTick, false
+	}
+
 	compressed := v3FloorDiv(int(tick), int(p.tickSpacing))
 
 	if zeroForOne {
@@ -220,8 +228,18 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 			next := (compressed - (int(bitPos) - msb)) * int(p.tickSpacing)
 			return int32(next), true
 		}
-		next := (compressed - int(bitPos)) * int(p.tickSpacing)
-		return int32(next), false
+
+		// Skip empty words — jump to next word with set bits
+		for wp := wordPos - 1; wp >= -200; wp-- {
+			w := p.bitmapWords[wp]
+			if w.IsZero() {
+				continue
+			}
+			msb := w.BitLen() - 1
+			comp := int(wp)*256 + msb
+			return int32(comp) * p.tickSpacing, true
+		}
+		return algebraMinTick, false
 	}
 
 	compressed++
@@ -236,21 +254,32 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 	masked.And(&word, &mask)
 
 	if !masked.IsZero() {
-		lsb := 0
-		for w := 0; w < 4; w++ {
-			if masked[w] != 0 {
-				for b := 0; b < 64; b++ {
-					if masked[w]&(1<<uint(b)) != 0 {
-						lsb = w*64 + b
-						goto foundLsb
-					}
-				}
-			}
-		}
-	foundLsb:
+		lsb := v3FindLSB(&masked)
 		next := (compressed + (lsb - int(bitPos))) * int(p.tickSpacing)
 		return int32(next), true
 	}
-	next := (compressed + (255 - int(bitPos))) * int(p.tickSpacing)
-	return int32(next), false
+
+	for wp := wordPos + 1; wp <= 200; wp++ {
+		w := p.bitmapWords[wp]
+		if w.IsZero() {
+			continue
+		}
+		lsb := v3FindLSB(&w)
+		comp := int(wp)*256 + lsb
+		return int32(comp) * p.tickSpacing, true
+	}
+	return algebraMaxTick, false
+}
+
+func v3FindLSB(v *uint256.Int) int {
+	for w := 0; w < 4; w++ {
+		if v[w] != 0 {
+			for b := 0; b < 64; b++ {
+				if v[w]&(1<<uint(b)) != 0 {
+					return w*64 + b
+				}
+			}
+		}
+	}
+	return 0
 }

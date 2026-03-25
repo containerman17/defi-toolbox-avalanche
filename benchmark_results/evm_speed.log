@@ -16,3 +16,4 @@ time=2026-03-25_06:16 git=f7c1493 result=0.318 pools=4000 formulas=3881 evm=4086
 time=2026-03-25_06:40 git=40b0dcd result=0.351 pools=4000 formulas=3881 evm=4086 ok=5530
 time=2026-03-25_06:50 git=40b0dcd result=0.345 pools=4000 formulas=3881 evm=4086 ok=5530
 time=2026-03-25_06:57 git=40b0dcd result=0.325 pools=4000 formulas=3881 evm=4086 ok=5530
+time=2026-03-25_07:13 git=889c145 result=0.335 pools=4000 formulas=3881 evm=4086 ok=5530

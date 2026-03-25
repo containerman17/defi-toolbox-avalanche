@@ -3,3 +3,11 @@ time=2026-03-24_13:25 git=816e91d result=100
 time=2026-03-24_15:45 git=edfea40 result=100
 time=2026-03-24_15:53 git=2c648bd result=100
 time=2026-03-24_16:23 git=e40af90 result=100
+time=2026-03-25_06:21 git=40b0dcd result=96 match=3356 mismatch=153 formula_only=198 evm_only=1777
+time=2026-03-25_06:36 git=40b0dcd result=100 match=3498 mismatch=11 formula_only=198 evm_only=1777
+time=2026-03-25_06:36 git=40b0dcd result=100 match=3498 mismatch=11 formula_only=198 evm_only=1777
+time=2026-03-25_06:48 git=40b0dcd result=96 match=3356 mismatch=153 formula_only=198 evm_only=1777
+time=2026-03-25_06:49 git=40b0dcd result=100 match=3498 mismatch=11 formula_only=198 evm_only=1777
+time=2026-03-25_06:56 git=40b0dcd result=96 match=3356 mismatch=153 formula_only=198 evm_only=1777
+time=2026-03-25_06:57 git=40b0dcd result=100 match=3498 mismatch=11 formula_only=198 evm_only=1777
+time=2026-03-25_07:13 git=889c145 result=99 match=3477 mismatch=32 formula_only=198 evm_only=1777

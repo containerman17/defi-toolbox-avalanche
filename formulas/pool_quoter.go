@@ -78,6 +78,9 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		} else if !known {
 			if _, inV3 := v3PoolFees[poolHexLower]; inV3 {
 				formulaID = FormulaV3
+			} else if _, inV4 := v4PoolIds[poolHexLower]; inV4 {
+				// V4 pool registered via RegisterV4Pool but not yet in registry.txt
+				formulaID = FormulaV4
 			} else {
 				return nil
 			}
@@ -86,6 +89,10 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			// they were likely invalidated for reasons that don't apply to the
 			// struct-based V3 quoter (e.g. dynamic fees now read from storage).
 			formulaID = FormulaV3
+		} else if _, inV4 := v4PoolIds[poolHexLower]; inV4 {
+			// V4 pools marked -1 in registry.txt: retry with V4 formula.
+			// Empty pools return (nil, false) without EVM fallback.
+			formulaID = FormulaV4
 		} else if pm.isV2Family(pool) {
 			// V2-family pools marked -1: retry with V2 formula. The -1 was set by
 			// formula discovery which compared function-based output to EVM. Common
@@ -189,6 +196,8 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV3:
 		if p := newBalancerV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+	case FormulaBalancerV2:
+		if p := newBalancerV2Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}
 	// Pool has a formula type but construction failed (empty/uninitialized).
 	// Cache a dead quoter so we don't retry construction or fall through to EVM.

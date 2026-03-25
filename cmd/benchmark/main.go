@@ -275,6 +275,9 @@ func main() {
 	// Register Balancer V3 pools from state
 	registerBalancerV3Pools(pools, state, cfg, registry)
 
+	// Register Balancer V2 pools from state
+	registerBalancerV2Pools(pools, state, cfg, registry)
+
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
 
@@ -549,30 +552,6 @@ func main() {
 
 			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
 
-			// DEBUG: log pharaoh_v1 EVM fallback pools
-			if pool.PoolType == 7 && zeroForOne {
-				poolHex := strings.ToLower(pool.Address.Hex())
-				// Check what specifically fails
-				quoter := pm.Get(pool.Address)
-				if quoter == nil {
-					// Try to read reserves directly
-					r0 := state.GetState(pool.Address, common.BigToHash(big.NewInt(9)))
-					r1 := state.GetState(pool.Address, common.BigToHash(big.NewInt(10)))
-					r0p := state.GetState(pool.Address, common.BigToHash(big.NewInt(11)))
-					r016 := state.GetState(pool.Address, common.BigToHash(big.NewInt(16)))
-					r017 := state.GetState(pool.Address, common.BigToHash(big.NewInt(17)))
-					t0Hex := ""
-					t1Hex := ""
-					if len(pool.Tokens) >= 2 {
-						t0Hex = strings.ToLower(pool.Tokens[0].Hex())
-						t1Hex = strings.ToLower(pool.Tokens[1].Hex())
-					}
-					fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s t0=%s t1=%s s9=%x s10=%x s11=%x s16=%x s17=%x\n",
-						poolHex, t0Hex, t1Hex, r0[:4], r1[:4], r0p[:4], r016[:4], r017[:4])
-				} else {
-					fmt.Fprintf(os.Stderr, "EVM-FALLBACK pharaoh_v1: %s quoter exists but Quote returned false\n", poolHex)
-				}
-			}
 
 			// EVM fallback — skip if profiling formulas only
 			if profileMode == "formulas-only" {
@@ -861,6 +840,126 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 	}
 	if count > 0 {
 		fmt.Fprintf(os.Stderr, "[benchmark] registered %d Balancer V3 pools\n", count)
+	}
+}
+
+// registerBalancerV2Pools discovers and registers Balancer V2 weighted pool parameters via EVM calls.
+// It uses getNormalizedWeights() and getSwapFeePercentage() on each pool contract.
+// Balances are read from Vault storage at quote time (not cached here).
+func registerBalancerV2Pools(pools []pathfinder.Pool, state *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry) {
+	count := 0
+	for _, p := range pools {
+		if p.PoolType != 16 || len(p.Tokens) < 2 {
+			continue
+		}
+		// Parse poolId from ExtraData (@poolId=0x...)
+		var poolIdHex string
+		for _, kv := range strings.Split(p.ExtraData, ",") {
+			parts := strings.SplitN(kv, "=", 2)
+			if len(parts) == 2 && parts[0] == "poolId" {
+				poolIdHex = parts[1]
+			}
+		}
+		if poolIdHex == "" {
+			continue
+		}
+		poolIdBytes := common.FromHex(poolIdHex)
+		if len(poolIdBytes) != 32 {
+			continue
+		}
+		var poolId [32]byte
+		copy(poolId[:], poolIdBytes)
+
+		poolAddr := strings.ToLower(p.Address.Hex())
+		numTokens := len(p.Tokens)
+
+		// Only handle 2-token pools: >2 tokens requires knowing which token pair
+		// is being swapped, which the PoolQuoter interface doesn't expose.
+		if numTokens != 2 {
+			continue
+		}
+
+		// Determine specialization from poolId bytes 20-21 (big-endian).
+		spec := (int(poolId[20]) << 8) | int(poolId[21])
+		if spec != 1 && spec != 2 {
+			// Only MinimalSwapInfo (1) and TwoToken (2) supported.
+			continue
+		}
+
+		// Fetch normalized weights: getNormalizedWeights() selector = 0xf89f27ed
+		weightsSelector := common.FromHex("0xf89f27ed")
+		weightsResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, weightsSelector)
+		if err != nil || len(weightsResult) < 96 {
+			continue
+		}
+		// ABI decode: uint256[] — offset(32) + length(32) + data(32*n)
+		numWeights := new(big.Int).SetBytes(weightsResult[32:64]).Int64()
+		if numWeights != int64(numTokens) || len(weightsResult) < 64+int(numWeights)*32 {
+			continue
+		}
+		weights := make([]*big.Int, numWeights)
+		allValid := true
+		for i := int64(0); i < numWeights; i++ {
+			off := 64 + i*32
+			weights[i] = new(big.Int).SetBytes(weightsResult[off : off+32])
+			if weights[i].Sign() <= 0 {
+				allValid = false
+				break
+			}
+		}
+		if !allValid {
+			continue
+		}
+
+		// Fetch swap fee: getSwapFeePercentage() selector = 0x55c67628
+		feeSelector := common.FromHex("0x55c67628")
+		feeResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, p.Address, feeSelector)
+		if err != nil || len(feeResult) < 32 {
+			continue
+		}
+		swapFee := new(big.Int).SetBytes(feeResult[0:32])
+		if swapFee.Sign() <= 0 {
+			continue
+		}
+
+		// Build per-token scaling factors from token decimal counts.
+		// scalingFactor = 10^(18 - decimals).  We fetch decimals() from each token.
+		scalingFactors := make([]*big.Int, numTokens)
+		decimalsSelector := common.FromHex("0x313ce567") // decimals()
+		sfValid := true
+		for i, tok := range p.Tokens {
+			decResult, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, tok, decimalsSelector)
+			if err != nil || len(decResult) < 32 {
+				sfValid = false
+				break
+			}
+			dec := new(big.Int).SetBytes(decResult[24:32]).Int64() // last byte is sufficient
+			if dec < 0 || dec > 18 {
+				sfValid = false
+				break
+			}
+			exp := int64(18) - dec
+			scalingFactors[i] = new(big.Int).Exp(big.NewInt(10), big.NewInt(exp), nil)
+		}
+		if !sfValid {
+			continue
+		}
+
+		info := &formulas.BalancerV2PoolInfo{
+			PoolId:            poolId,
+			Specialization:    spec,
+			NumTokens:         numTokens,
+			Tokens:            p.Tokens,
+			Weights:           weights,
+			SwapFeePercentage: swapFee,
+			ScalingFactors:    scalingFactors,
+		}
+		formulas.RegisterBalancerV2Pool(poolAddr, info)
+		registry.SetFormulaID(p.Address, formulas.FormulaBalancerV2)
+		count++
+	}
+	if count > 0 {
+		fmt.Fprintf(os.Stderr, "[benchmark] registered %d Balancer V2 pools\n", count)
 	}
 }
 

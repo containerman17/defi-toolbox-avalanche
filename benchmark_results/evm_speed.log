@@ -86,3 +86,12 @@ time=2026-03-25_14:28 git=7d9b991 result=0.160 pools=4000 formulas=7493 evm=400 
 time=2026-03-25_14:28 git=7d9b991 result=0.131 pools=4000 formulas=7493 evm=400 ok=7515
 time=2026-03-25_14:29 git=7d9b991 result=0.119 pools=4000 formulas=7493 evm=400 ok=7515
 time=2026-03-25_14:30 git=7d9b991 result=0.110 pools=4000 formulas=7493 evm=400 ok=7515
+time=2026-03-25_14:33 git=2380a17 result=0.123 pools=4000 formulas=7526 evm=378 ok=7543
+time=2026-03-25_14:34 git=2380a17 result=0.108 pools=4000 formulas=7415 evm=343 ok=7430
+time=2026-03-25_14:34 git=2380a17 result=0.103 pools=4000 formulas=7415 evm=343 ok=7430
+time=2026-03-25_14:35 git=2380a17 result=0.102 pools=4000 formulas=7415 evm=343 ok=7430
+time=2026-03-25_14:37 git=2b32fe8 result=0.131 pools=4000 formulas=7564 evm=135 ok=7579
+time=2026-03-25_14:37 git=2b32fe8 result=0.128 pools=4000 formulas=7564 evm=117 ok=7579
+time=2026-03-25_14:38 git=2b32fe8 result=0.152 pools=4000 formulas=7564 evm=117 ok=7579
+time=2026-03-25_14:38 git=2b32fe8 result=0.120 pools=4000 formulas=7564 evm=117 ok=7579
+time=2026-03-25_14:38 git=2b32fe8 result=0.123 pools=4000 formulas=7564 evm=117 ok=7579

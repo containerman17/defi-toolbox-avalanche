@@ -48,7 +48,17 @@ func newV4Pool(addr common.Address, reader StorageReader) *V4Pool {
 
 	state, err := FetchV4StateFromBytes(bytesReader, info.poolId, info.tickSpacing, hookFeePpm)
 	if err != nil || state.SqrtPriceX96.Sign() == 0 {
-		return nil
+		// Pool is uninitialized (zero sqrtPrice) or fetch failed.
+		// Return an empty V4Pool whose Quote() returns (nil, false), preventing
+		// EVM fallback for pools that are simply empty — EVM would also return zero.
+		return &V4Pool{
+			addr:             addr,
+			poolId:           info.poolId,
+			tickSpacing:      info.tickSpacing,
+			hookFeePpm:       hookFeePpm,
+			bitmapWords:      make(map[int16]uint256.Int),
+			tickLiquidityNet: make(map[int32]uint256.Int),
+		}
 	}
 
 	stateSlot := v4GetPoolStateSlot(info.poolId)
@@ -120,7 +130,7 @@ func (p *V4Pool) Address() common.Address {
 }
 
 func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
-	if amountIn.IsZero() {
+	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
 		return nil, false
 	}
 

@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-03-25 — V4 formula: 226 EVM calls eliminated (uninitialized pool handling)
+
+### Problem
+185 V4 pools × 2 directions = 370 quote attempts. 145 formula quotes succeeded, but 226 EVM calls remained.
+
+### Root causes and fixes
+| Cause | Fix |
+|-------|-----|
+| `newV4Pool` returned `nil` for pools with zero `sqrtPriceX96` (uninitialized), causing EVM fallback | Return an empty `V4Pool` struct instead of nil; `Quote()` now returns `(nil, false)` early when `sqrtPriceX96` is zero |
+| V4 pools missing from `registry.txt` or marked `-1` had no formula fallback path | Added V4 fallback in `PoolManager.Get()`: if pool is in `v4PoolIds` (registered via `RegisterV4Pool`), use `FormulaV4` regardless of registry status |
+
+### Key insight
+Same pattern as V3: an empty pool should have a formula quoter that returns `(nil, false)`, not fall through to EVM. EVM also returns zero for empty pools — the call is wasted time.
+
+### Files changed
+- `formulas/pool_v4.go`: Return empty `V4Pool` for zero sqrtPrice / fetch error; early-exit `Quote()` on zero `sqrtPriceX96`
+- `formulas/pool_quoter.go`: V4 fallback in `Get()` — pools in `v4PoolIds` use `FormulaV4` even if not in registry or marked `-1`
+
 ## 2026-03-25 — V3 formula: 0 EVM calls (was 60 calls / 322ms)
 
 ### Problem

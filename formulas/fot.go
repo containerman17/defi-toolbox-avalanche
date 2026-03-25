@@ -303,10 +303,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 	// SHIBX (SHIBAVAX): fee = tAmount.mul(10).div(100) (10% reflection tax, hardcoded)
 	// _getTValues: tFee = tAmount * 10 / 100 — unconditional, no DEX pair exemption.
 	// Pool is NOT in _isExcluded (confirmed on-chain); tradeLimit=0 (no cap).
-	// Residual PPM-level drift on dir=1 from _reflectFee reducing _rTotal between
-	// formula eval and EVM execution — inherent SafeMoon reflection redistribution,
-	// cannot be fixed with a static fee.
-	// Pool: 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
+	// Reflection drift on dir=1: after _reflectFee(rFee) reduces _rTotal, the new rate
+	// makes rTransferAmount/newRate slightly > tTransferAmount (formula < evm).
+	// Drift ≈ tFee/tTotal * tTransfer; at pool 0x3f7e7ca0 reserves (~5.6M SHIBX/~2.3 WAVAX),
+	// 1 WAVAX in produces ~1.7M SHIBX out → drift ≈ 17 PPM. Inherent to SafeMoon
+	// reflection redistribution; cannot be corrected with a static fee.
+	// Pools: 0x82ab53e405fa94448597afcc0ba86143b1ab2628 (pangolin_v2, SHIBX/WAVAX), dir=1.
+	//        0x3f7e7ca0046c0e8b4f83114d06df56861f3e3cd4 (partyswap, SHIBX/WAVAX), dir=1.
 	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
 
 	// Raini Studios Token (RST): fee = (amount * transferFeeBasisPoints) / 10000
@@ -404,7 +407,13 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 
 	// KIOO (Reflectx): fees = amount*3/100 + amount*1/100 (TWO separate divisions, 4% total)
 	// _getTransferAmounts: fees=(amount*FEES_PERCENT)/100; burn=(amount*BURN_PERCENT)/100
-	// FEES_PERCENT=3, BURN_PERCENT=1 (constants, immutable)
+	// FEES_PERCENT=3, BURN_PERCENT=1 (constants, immutable). No DEX pair exemption.
+	// Reflection token: _reflectSupply decreases on every transfer, redistributing
+	// to all holders. Residual PPM-level drift on dir=1 (formula slightly > EVM) is
+	// unavoidable — the recipient's actual balance = (amount-fees-burn)*(T-burn)/(T-fees-burn),
+	// which deviates infinitesimally from (amount-fees-burn) as T >> amount. Cannot be
+	// fixed with a static fee.
+	// Pool: 0x6ccf639b551d5cc7d335360863c6555e44bde885 (lfj_v1, KIOO/USDT.e), dir=1 USDT.e→KIOO.
 	"0x45cdaf3fd17bd31d9830fa977159162dd2431683": func(amount *big.Int) *big.Int {
 		fees := new(big.Int).Mul(amount, big.NewInt(3))
 		fees.Div(fees, big.NewInt(100))

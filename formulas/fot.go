@@ -198,6 +198,15 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return fee
 	},
 
+	// AtlantisUniverse (AUA): fee = (amount / 100) * 2 (integer div first, then mul — 2% reflection tax)
+	// _getTValues: tFee = tAmount.div(100).mul(2) — unconditional, no DEX pair exemption.
+	// Pool: 0xd755a2083b8a85048705b72e6d176ea25a71dad8 (lfj_v1, WAVAX/AUA), dir=0.
+	"0xb8edc9145e21a7c3345b848ca73300fa35150b0f": func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Div(amount, big.NewInt(100))
+		fee.Mul(fee, big.NewInt(2))
+		return fee
+	},
+
 	// ALAQ: fee = (amount / 100) * 5 (integer div first, then mul — 5% tax)
 	// noTaxable=false for ALL DEX pairs — the fee IS applied during swaps.
 	"0xca3130f29e296f1966e5999889d0824a9032ee97": func(amount *big.Int) *big.Int {
@@ -251,6 +260,12 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 
 	// SHIBX: fee = tAmount * 10 / 100 (10% reflection tax, hardcoded)
 	"0x440abbf18c54b2782a4917b80a1746d3a2c2cce1": fotPct(10),
+
+	// Raini Studios Token (RST): fee = (amount * transferFeeBasisPoints) / 10000
+	// transferFeeBasisPoints=100 (1%, confirmed on-chain; MAX_FEE=200, mutable).
+	// Fee applies only when `to` has FEE_TO_ROLE; pool 0x648c2151d7 has FEE_TO_ROLE confirmed.
+	// `from` must not have NO_FEE_FROM_ROLE (pool is recipient, sender is router — not exempt).
+	"0x23675ba5d0a8075da5ba18756554e7633cea2c85": fotBps(100),
 
 	// Mistel Finance (reflection): fee = amount*3/100 + amount*8/100 (~11%)
 	"0xf3f8772f92028bfb6d641c28bbcf1dbded424767": func(amount *big.Int) *big.Int {

@@ -216,7 +216,10 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		if p := newDODOPool(pool, pm.reader, token0); p != nil { return wrapAndCache(p) }
 	case FormulaLFJV2:
 		if hasTokens {
-			if p := newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1]); p != nil { return wrapAndCache(p) }
+			// newLFJV2Pool always returns a non-nil PoolQuoter (nullLFJV2Pool for
+			// pools that cannot be formula-quoted), preventing EVM fallback for all
+			// LFJ V2 pools regardless of whether they are in lfjV2Registry or not.
+			return wrapAndCache(newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1]))
 		}
 	case FormulaV4:
 		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }

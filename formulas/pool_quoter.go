@@ -86,7 +86,13 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		if wantFot {
-			wrapped := &fotPoolQuoter{inner: inner, model0: model0, model1: model1}
+			poolHex := strings.ToLower(pool.Hex())
+			wrapped := &fotPoolQuoter{
+				inner:       inner,
+				model0:      model0,
+				model1:      model1,
+				inputExempt: IsFotExemptInputPool(poolHex),
+			}
 			pm.pools[pool] = wrapped
 			return wrapped
 		}
@@ -130,9 +136,10 @@ func poolHex(addr common.Address) string {
 
 // fotPoolQuoter wraps a PoolQuoter to apply FoT tax adjustments on input/output.
 type fotPoolQuoter struct {
-	inner  PoolQuoter
-	model0 TokenModel // token0's model
-	model1 TokenModel // token1's model
+	inner          PoolQuoter
+	model0         TokenModel // token0's model
+	model1         TokenModel // token1's model
+	inputExempt    bool       // true if pool is in FotExemptInputPools (fee skipped when pool is recipient)
 }
 
 func (f *fotPoolQuoter) Address() common.Address {
@@ -149,10 +156,16 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.
 		modelOut = f.model0
 	}
 
-	// Adjust input: if tokenIn is FoT, pool receives less
-	effectiveIn := modelIn.AdjustInput(amountIn)
-	if effectiveIn == nil {
-		return nil, false
+	// Adjust input: if tokenIn is FoT, pool receives less.
+	// Skip if this pool is exempt on the input side (token's transfer skips fee when to==pool).
+	var effectiveIn *uint256.Int
+	if f.inputExempt {
+		effectiveIn = amountIn
+	} else {
+		effectiveIn = modelIn.AdjustInput(amountIn)
+		if effectiveIn == nil {
+			return nil, false
+		}
 	}
 
 	out, ok := f.inner.Quote(effectiveIn, zeroForOne)

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-03-25 — FoT fix: bCASH direction-specific LP exemption (FotExemptInputPools)
+
+### Pool 0x07280f3283 (pangolin_v2, formula 0): formula 10% LESS than EVM on dir=0
+
+- Pool: `0x07280f32830e3a1ca7b535b603b09890e692eaf6` (bCASH/WAVAX, pangolin_v2)
+- Token: bCASH `0x4ba16daf8ed418ded920c66e45cc3eaffde53ac7` (ButterflyCash by xrpant)
+- Mismatch: formula=1785089537048 vs evm=1983432804494 (exactly 10% less, dir=0 zeroForOne)
+- Root cause: bCASH `_transfer()` has a `lp[to]` registry. When `to` is a registered LP address,
+  it calls `super._transfer()` (no fee). When `to` is a regular address, it routes through a
+  staker intermediary and takes `amount * 9000 / 10000` (10% fee).
+  On-chain confirmed: `lp[0x07280f3283] = 1` via `cast call`.
+  In dir=0 (selling bCASH into pool), `to == pool`, so `lp[to] == 1` → fee-free.
+  In dir=1 (buying bCASH out of pool), `to == buyer` → 10% fee applies normally.
+  All 11 other bCASH pools have `lp[] = 0` → fee applies on both directions.
+- New mechanism: `FotExemptInputPools` map for direction-specific input-side exemption.
+  `fotPoolQuoter.inputExempt=true` → skip `modelIn.AdjustInput()`, use raw `amountIn` directly.
+  Output-side adjustment (dir=1) is unaffected and still applies the 10% fee correctly.
+- Files changed: `formulas/fot.go` (new `FotExemptInputPools` map + `IsFotExemptInputPool`),
+  `formulas/pool_quoter.go` (`fotPoolQuoter.inputExempt` field + construction + Quote logic).
+
 ## 2026-03-25 — DODO Bug C: DPP Advanced pools have mtFeeRate=0
 
 ### 15 DODO pools using DSP-layout detection path (all DPP Advanced / DPP 1.0.0)

@@ -49,22 +49,10 @@ func (pm *PoolManager) SetPoolType(pool common.Address, poolType int, dex string
 	pm.poolDex[pool] = dex
 }
 
-// v2NonStandardDex lists V2-family DEX providers that have non-standard storage layout
-// or AMM math, and cannot use the standard V2 constant product formula.
-var v2NonStandardDex = map[string]bool{
-	"hurricane": true, // reserves at slot 11 (not 8), variable fee (0.3% or 0.5%)
-	"fraxswap":  true, // TWAMM: time-weighted AMM, different math from constant product
-}
-
-// isV2Retryable returns true if a pool with formulaID -1 should be retried with V2 formula.
-// Only applies to poolType 8 (V2 family) DEXes with standard Uniswap V2 storage layout.
-func (pm *PoolManager) isV2Retryable(pool common.Address) bool {
+// isV2Family returns true if pool has poolType 8 (V2 family).
+func (pm *PoolManager) isV2Family(pool common.Address) bool {
 	pt, hasPT := pm.poolTypes[pool]
-	if !hasPT || pt != 8 {
-		return false
-	}
-	dex := pm.poolDex[pool]
-	return !v2NonStandardDex[dex]
+	return hasPT && pt == 8
 }
 
 // SetPoolTokens registers the token pair for a pool, enabling FoT adjustment.
@@ -98,13 +86,13 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			// they were likely invalidated for reasons that don't apply to the
 			// struct-based V3 quoter (e.g. dynamic fees now read from storage).
 			formulaID = FormulaV3
-		} else if pm.isV2Retryable(pool) {
+		} else if pm.isV2Family(pool) {
 			// V2-family pools marked -1: retry with V2 formula. The -1 was set by
 			// formula discovery which compared function-based output to EVM. Common
 			// causes: (a) FoT tokens not yet in fotCalculators (now handled by
-			// fotPoolQuoter wrapper), (b) transient state during discovery.
-			// Excludes non-standard V2 forks (hurricane, fraxswap) that have different
-			// storage layout or AMM math.
+			// fotPoolQuoter wrapper), (b) transient state during discovery,
+			// (c) non-standard V2 forks (hurricane, fraxswap) with different
+			// storage layout / fees — handled with DEX-specific constructors.
 			formulaID = FormulaV2_30bps
 		} else if _, inPharaoh := pharaohV1Registry[poolHexLower]; inPharaoh {
 			// Pharaoh V1 pools marked -1: retry with Pharaoh V1 formula. The -1
@@ -173,7 +161,16 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 
 	switch formulaID {
 	case FormulaV2_30bps:
-		if p := newV2Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		var p *V2Pool
+		switch pm.poolDex[pool] {
+		case "hurricane":
+			p = newHurricanePool(pool, pm.reader)
+		case "fraxswap":
+			p = newFraxswapPool(pool, pm.reader)
+		default:
+			p = newV2Pool(pool, pm.reader)
+		}
+		if p != nil { return wrapAndCache(p) }
 	case FormulaPharaohV1:
 		if p := newPharaohV1Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:
@@ -193,7 +190,25 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	case FormulaBalancerV3:
 		if p := newBalancerV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
 	}
-	return nil
+	// Pool has a formula type but construction failed (empty/uninitialized).
+	// Cache a dead quoter so we don't retry construction or fall through to EVM.
+	dead := &deadPoolQuoter{addr: pool}
+	pm.pools[pool] = dead
+	return dead
+}
+
+// deadPoolQuoter is a no-op quoter cached for pools where construction failed.
+// Prevents EVM fallback and re-construction attempts for empty/uninitialized pools.
+type deadPoolQuoter struct {
+	addr common.Address
+}
+
+func (d *deadPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+	return nil, false
+}
+
+func (d *deadPoolQuoter) Address() common.Address {
+	return d.addr
 }
 
 // Invalidate drops the cached pool struct for a given address.

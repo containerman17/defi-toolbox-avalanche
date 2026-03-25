@@ -9,33 +9,42 @@
 - Implemented: V2Pool, V3Pool (with pre-scanned tick index), PharaohV1Pool, DODOPool
 - Not yet structs: LFJ V2, Algebra — still use function-based formula path
 
-### V3Pool pre-scanned tick index
-- Old approach: linear bitmap scan copied from Solidity (one SLOAD at a time)
-- Median V3 pool: 6 initialized ticks but scanned 425 bitmap words (mostly zeros)
-- V3Pool constructor: scans all bitmap words once, reads liquidityNet for each initialized tick
-- Quote: binary search O(log n) on sorted tick array instead of linear scan
-- 82 V3 pools total, 2,621 initialized ticks across all of them, ~330KB memory
+### V3Pool skip-empty bitmap words
+- Root cause: Solidity can only SLOAD one slot at a time, so V3 scans bitmap words one by one
+- Our Go formula copied this, calling computeSwapStep (~5µs) for each empty word
+- Pools with 6 ticks spread far apart scanned 3000+ empty words = 15ms of wasted mulDiv math
+- Fix: pre-load all bitmap words at construction, then scan in a tight loop
+- `w.IsZero()` on pre-loaded uint256 = ~2ns vs computeSwapStep = ~5000ns = **2500x cheaper per word**
+- A pool scanning 3000 empty words: 15ms → 6µs
+- Accuracy: <7 PPM max error from fee rounding at word boundaries (fee is computed once instead of per-word)
+- Correctness benchmark uses 0.01 PPM tolerance — 99.1% pass (32 failures are pre-existing registry bugs)
+
+### V3Pool pre-loaded state
+- Constructor scans all bitmap words (±200), reads liquidityNet for each initialized tick
+- 82 V3 pools total, 2,621 initialized ticks, ~330KB memory
+- Quote reads from pre-loaded `bitmapWords` map and `tickLiquidityNet` map
+- Zero keccak, zero state access at quote time
 
 ### Per-type formula results (struct vs original function-based)
 
 | Type | Pools | Original formula (ms) | Struct formula (ms) | Speedup |
 |------|-------|-----------------------|---------------------|---------|
-| V3 (uniswap_v3) | 317 | 274 | **5.7** | **48x** |
+| V3 (uniswap_v3) | 317 | 274 | **6.6** | **41x** |
 | V2 | 1229 | 2.5 | **0.3** | **8x** |
 | LFJ V1 | 1758 | 2.3 | **0.3** | **8x** |
 | Pharaoh V1 | 286 | 2.5 | **1.4** | **2x** |
 | LFJ V2 (no struct) | 111 | 22 | 22 | 1x |
 | Algebra (no struct) | 58 | 16 | 16 | 1x |
-| **Total formula** | | **331** | **44** | **7.5x** |
+| **Total formula** | | **331** | **48** | **6.9x** |
 
 ### Combined benchmark results (formula + EVM, 4000 pools)
 
 | Metric | Baseline (session start) | Current | Improvement |
 |--------|--------------------------|---------|-------------|
-| Overall ms/pool | 0.375 | **0.318** | **15% faster** |
-| Formula time | 331ms | **44ms** | **7.5x faster** |
-| EVM time | ~1200ms | ~1160ms | ~3% (noise) |
-| V3 formula µs/quote | 553 | **11.5** | **48x faster** |
+| Overall ms/pool | 0.375 | **0.335** | **11% faster** |
+| Formula time | 331ms | **48ms** | **6.9x faster** |
+| EVM time | ~1200ms | ~1200ms | same |
+| V3 formula µs/quote | 553 | **13.3** | **41x faster** |
 | V2 formula µs/quote | 1.7 | **0.2** | **8x faster** |
 
 ### Full session optimization stack (from original baseline)
@@ -46,8 +55,8 @@
 | + Formula engine | 627 | 331 | 0.375 |
 | + CallState (thin overlay) | 396 | 331 | 0.351 |
 | + CallerContract (JUMPDEST) | 396 | 331 | 0.351 |
-| + Pool quoter structs | 396 | **44** | **0.318** |
-| **Total improvement** | **1.6x** | **7.5x** | **2.5x** |
+| + Pool quoter structs | 396 | **48** | **0.335** |
+| **Total improvement** | **1.6x** | **6.9x** | **2.4x** |
 
 ### Profiling insights
 - **EVM**: 98% of CPU in EVMInterpreter.Run (opcode dispatch, stack ops). Our StateDB <5%. ~400µs/call is the libevm interpreter floor.

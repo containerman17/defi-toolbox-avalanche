@@ -19,13 +19,14 @@ type PoolQuoter interface {
 
 // PoolManager holds pool structs and handles lazy construction + invalidation.
 type PoolManager struct {
-	pools       map[common.Address]PoolQuoter
-	registry    *Registry
-	reader      StorageReader
-	poolTokens  map[common.Address][2]common.Address // pool → [token0, token1]
-	poolTypes   map[common.Address]int               // pool → poolType from pools.txt
-	poolDex     map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
-	tokenModels *TokenModelRegistry
+	pools          map[common.Address]PoolQuoter
+	registry       *Registry
+	reader         StorageReader
+	poolTokens     map[common.Address][2]common.Address // pool → [token0, token1]
+	poolTypes      map[common.Address]int               // pool → poolType from pools.txt
+	poolDex        map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
+	tokenModels    *TokenModelRegistry
+	blockTimestamp uint64 // block.timestamp for volatility reference updates (LFJ V2)
 }
 
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
@@ -39,6 +40,12 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		poolDex:     make(map[common.Address]string),
 		tokenModels: NewTokenModelRegistry(),
 	}
+}
+
+// SetBlockTimestamp sets the block timestamp used for LFJ V2 volatility reference
+// updates. Must be called before Get() to ensure correct fee calculation.
+func (pm *PoolManager) SetBlockTimestamp(ts uint64) {
+	pm.blockTimestamp = ts
 }
 
 // SetPoolType registers the pool type and DEX provider for a pool (from pools.txt).
@@ -219,7 +226,7 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 			// newLFJV2Pool always returns a non-nil PoolQuoter (nullLFJV2Pool for
 			// pools that cannot be formula-quoted), preventing EVM fallback for all
 			// LFJ V2 pools regardless of whether they are in lfjV2Registry or not.
-			return wrapAndCache(newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1]))
+			return wrapAndCache(newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1], pm.blockTimestamp))
 		}
 	case FormulaV4:
 		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }

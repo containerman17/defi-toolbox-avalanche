@@ -317,6 +317,7 @@ func main() {
 		cs := statedb.NewCallState(baseWithOverrides)
 		poolReader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
 		pm := formulas.NewPoolManager(registry, poolReader)
+		pm.SetBlockTimestamp(cfg.Timestamp)
 		for i := range pools {
 			if len(pools[i].Tokens) >= 2 {
 				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
@@ -420,6 +421,7 @@ func main() {
 		return state.GetState(addr, key)
 	}
 	warmPM := formulas.NewPoolManager(registry, warmReader)
+	warmPM.SetBlockTimestamp(cfg.Timestamp)
 	for i := range pools {
 		if len(pools[i].Tokens) >= 2 {
 			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
@@ -509,6 +511,7 @@ func main() {
 		return state.GetState(addr, key)
 	}
 	pm := formulas.NewPoolManager(registry, poolReader)
+	pm.SetBlockTimestamp(cfg.Timestamp)
 	for i := range pools {
 		if len(pools[i].Tokens) >= 2 {
 			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])

@@ -85,6 +85,11 @@ var fotCalculators = map[string]func(*big.Int) *big.Int{
 		return f1.Add(f1, f2).Add(f1, f3)
 	},
 
+	// GoodToken (GOOD): fee = (amount * 2) / 100 (2% tax, only when sender==lp || recipient==lp)
+	// Pool: 0x21013fe86ad9646c41cd1f9d57e69e933524dcd5 (lfj_v1, GOOD/0x420f)
+	// setLiquidity(pool) makes the pool the registered LP; fee applies both directions.
+	"0x169e8f8773072ce4b87fb7e7a47eed31b481a31f": fotPct(2),
+
 	// L-Swing: fee = amount * 20 / 100 (20%, unconditional)
 	"0x556b959d952085405e7c630bc45a34ace73854eb": fotPct(20),
 
@@ -458,6 +463,11 @@ var FotExemptOutputPools = map[string]bool{
 	// Fee still applies when user sends ALAQ into the pool (dir=1, input side).
 	// sushiswap pools 0x4e29f0aa and 0xb6eda80d are NOT in noTaxable → not exempt.
 	"0x661368c5bdecd87475aae157b9ea718c0450125f": true, // ALAQ/WAVAX uniswap_v2
+
+	// RST (RainiStudiosToken, 0x23675ba5): fee = amount * transferFeeBasisPoints / 10000.
+	// Fee gate: hasRole(FEE_TO_ROLE, to) — fee only when recipient has FEE_TO_ROLE.
+	// Pool has FEE_TO_ROLE (input fee works), but swap buyer doesn't → no output fee.
+	"0x648c2151d7e6f43849c4d3abace0b12474814dc5": true, // RST/WAVAX lfj_v1
 }
 
 // FotExemptPools lists pool addresses where FoT should NOT be applied even though
@@ -503,6 +513,16 @@ var FotExemptPools = map[string]bool{
 	// HEFE (0x18e3...): lfj_v1 HEFE/CANS pool not registered in isLiquidityPool — no fee applied.
 	// Only one LP (0xe11e871d) is registered; isLiquidityPool(this pool) = false confirmed on-chain.
 	"0xb9509de4034e1c7d23c07f5da785472eb4ef53e4": true, // HEFE/CANS lfj_v1
+
+	// HEFE (0x18e3...): lfj_v1 HEFE/0x7a84 pool not registered in isLiquidityPool — no fee.
+	"0x357233526bb85746829e67b076490462e49bdaa6": true, // HEFE/0x7a84 lfj_v1
+
+	// GoodToken (GOOD, 0x169e8f): fee only applies for the ONE registered lp address
+	// (set via setLiquidity). Only pool 0x21013fe86a is the registered lp.
+	// All other GOOD pools are exempt.
+	"0x24208ef8e891db2b327a20eaefccf22206783e9a": true, // GOOD/WAVAX lfj_v1
+	"0x4d30d49735dc3cf20c39eb97ddcfa2b3258134ea": true, // GOOD/0x234b lfj_v1
+	"0x874d7fe773b3a73d6b26032ec543cf79ece89701": true, // GOOD/WAVAX lfj_v2
 }
 
 // FotRebasingTokens lists tokens that gain value over time (negative "tax"),

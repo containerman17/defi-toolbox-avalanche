@@ -16,7 +16,8 @@ type LFJV2Pool struct {
 	state          *LFJV2State
 	layout         *lfjV2LayoutFast
 	reader         StateReader
-	tokenXIsToken0 bool // true if tokenX is the lower-address token (token0)
+	tokenXIsToken0 bool   // true if tokenX is the lower-address token (token0)
+	blockTimestamp uint64 // block.timestamp for volatility reference updates
 }
 
 // nullLFJV2Pool is a stub quoter for LFJ V2 pools that cannot be quoted by formula
@@ -37,7 +38,7 @@ func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) (*uint256.Int, bool) {
 // newLFJV2Pool builds a PoolQuoter for an LFJ V2 pool.
 // Returns a nullLFJV2Pool (not nil) for pools that cannot be quoted by formula,
 // ensuring the caller never falls back to EVM for LFJ V2 pools.
-func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address) PoolQuoter {
+func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address, blockTimestamp uint64) PoolQuoter {
 	poolAddress := strings.ToLower(addr.Hex())
 
 	// Check if pool is in lfjV2Registry (has immutable data: binStep + tokenX ordering).
@@ -74,6 +75,7 @@ func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 comm
 		layout:         layout,
 		reader:         stateReader,
 		tokenXIsToken0: imm.TokenXIsToken0,
+		blockTimestamp: blockTimestamp,
 	}
 }
 
@@ -106,7 +108,7 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 	}
 
 	amtIn := amountIn.ToBig()
-	out := QuoteLFJV2Fast(p.reader, p.state, p.layout, amtIn, swapForY, 0)
+	out := QuoteLFJV2Fast(p.reader, p.state, p.layout, amtIn, swapForY, p.blockTimestamp)
 	if out == nil || out.Sign() <= 0 {
 		return nil, false
 	}

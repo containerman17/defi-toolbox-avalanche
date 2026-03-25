@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-25 — Fix V2 FoT mismatches: GoodToken, RST, HEFE exemptions
+
+### Problem
+27 correctness mismatches (68 → 41) caused by missing/incorrect FoT handling in V2 pools:
+1. **GoodToken (GOOD, 0x169e8f)**: 2% fee on transfers involving the registered LP, but token
+   was not in fotCalculators. Pool 0x21013fe86a had 2.04% mismatch (formula > EVM).
+2. **GoodToken exemptions**: Other GOOD pools (0x24208ef8, 0x4d30d497, 0x874d7fe7) are NOT the
+   registered LP — fee doesn't apply. Added to FotExemptPools.
+3. **RST (RainiStudiosToken, 0x23675ba5)**: fee only when `to` has FEE_TO_ROLE. Pool 0x648c2151d7
+   has the role (input fee correct), but swap buyer doesn't (output fee wrongly applied). Added
+   pool to FotExemptOutputPools. 1% mismatch on dir=1.
+4. **HEFE (0x18e3605b)**: fee only for pools registered in isLiquidityPool. Pool 0x357233526b is
+   not registered — added to FotExemptPools. 1% mismatch both directions.
+
+### Fix
+- Added GoodToken to `fotCalculators` with `fotPct(2)`
+- Added 3 non-LP GOOD pools to `FotExemptPools`
+- Added RST/WAVAX pool to `FotExemptOutputPools`
+- Added HEFE/0x7a84 pool to `FotExemptPools`
+
+### Result
+Correctness: 99.0% (6754/6822) → 99.4% (6781/6822), 27 mismatches eliminated.
+Remaining 41 mismatches: FoT reflection drift (<0.01%, known), Balancer V3, BYAS reflection (0.31%).
+
+### Investigation: Hurricane and Fraxswap
+No hurricane or fraxswap pools appear in the mismatch output. Their DEX-specific constructors
+(slot 11 reserves, crossPair fee for hurricane; slot 28 reserves, slot 24 fee for fraxswap)
+are working correctly — all 20 hurricane and 2 fraxswap pools in the benchmark set match EVM.
+
 ## 2026-03-25 — Eliminate EVM fallback for GyroECLP and no-impl pool types
 
 ### Problem

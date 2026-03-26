@@ -365,9 +365,12 @@ func (r *Registry) GetFormulaID(pool common.Address) (int, bool) {
 	return id, ok
 }
 
-// SetFormulaID sets or updates the formula ID for a pool.
+// SetFormulaID sets the formula ID for a pool only if not already in the registry.
+// Existing entries (including -1) are never overwritten — the registry is authoritative.
 func (r *Registry) SetFormulaID(pool common.Address, id int) {
-	r.pools[pool] = id
+	if _, exists := r.pools[pool]; !exists {
+		r.pools[pool] = id
+	}
 }
 
 func (r *Registry) IsInvalid(pool common.Address) bool {

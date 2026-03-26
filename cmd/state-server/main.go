@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,7 +57,7 @@ func init() {
 	listenPort = envIntOrDefault("STATE_SERVER_PORT", 7449)
 	upstreamWsURL = envOrDefault("UPSTREAM_RPC_WS_URL", "ws://127.0.0.1:9650/ext/bc/C/ws")
 	upstreamHTTP = envOrDefault("UPSTREAM_RPC_HTTP_URL", "http://127.0.0.1:9650/ext/bc/C/rpc")
-	poolSize = envIntOrDefault("UPSTREAM_POOL_SIZE", 4)
+	poolSize = envIntOrDefault("UPSTREAM_POOL_SIZE", runtime.NumCPU())
 	blockPollMs = envIntOrDefault("BLOCK_POLL_MS", 500)
 }
 
@@ -129,14 +130,14 @@ type rpcResult struct {
 }
 
 type rpcSocket struct {
-	url      string
-	name     string
-	conn     *websocket.Conn
-	mu       sync.Mutex
-	nextID   int64
-	pending  map[string]*pendingRequest
-	inFlight atomic.Int64
-	ready    chan struct{}
+	url    string
+	name   string
+	conn   *websocket.Conn
+	mu     sync.Mutex
+	nextID int64
+	pending map[string]*pendingRequest
+	ready   chan struct{}
+	sem     chan struct{} // capacity 1: only one request at a time
 }
 
 func newRpcSocket(url, name string) *rpcSocket {
@@ -145,7 +146,9 @@ func newRpcSocket(url, name string) *rpcSocket {
 		name:    name,
 		pending: make(map[string]*pendingRequest),
 		ready:   make(chan struct{}),
+		sem:     make(chan struct{}, 1),
 	}
+	s.sem <- struct{}{} // start with one token
 	go s.connect()
 	return s
 }
@@ -224,6 +227,10 @@ func (s *rpcSocket) failAllLocked(err error) {
 }
 
 func (s *rpcSocket) send(method string, params interface{}) (json.RawMessage, error) {
+	// Block until this worker is free (one request at a time)
+	<-s.sem
+	defer func() { s.sem <- struct{}{} }()
+
 	<-s.ready
 
 	s.mu.Lock()
@@ -236,7 +243,6 @@ func (s *rpcSocket) send(method string, params interface{}) (json.RawMessage, er
 	s.nextID++
 	ch := make(chan rpcResult, 1)
 	s.pending[id] = &pendingRequest{ch: ch}
-	s.inFlight.Add(1)
 	s.mu.Unlock()
 
 	req := jsonRPCRequest{
@@ -250,17 +256,16 @@ func (s *rpcSocket) send(method string, params interface{}) (json.RawMessage, er
 		s.mu.Lock()
 		delete(s.pending, id)
 		s.mu.Unlock()
-		s.inFlight.Add(-1)
 		return nil, err
 	}
 
 	res := <-ch
-	s.inFlight.Add(-1)
 	return res.result, res.err
 }
 
 type rpcPool struct {
 	sockets []*rpcSocket
+	next    atomic.Int64
 }
 
 func newRpcPool(url string, size int) *rpcPool {
@@ -271,18 +276,13 @@ func newRpcPool(url string, size int) *rpcPool {
 	return p
 }
 
-func (p *rpcPool) pick() *rpcSocket {
-	best := p.sockets[0]
-	for _, s := range p.sockets {
-		if s.inFlight.Load() < best.inFlight.Load() {
-			best = s
-		}
-	}
-	return best
-}
-
 func (p *rpcPool) call(method string, params interface{}) (json.RawMessage, error) {
-	return p.pick().send(method, params)
+	// Workers pattern: each socket's semaphore ensures one-at-a-time.
+	// Round-robin is fine — if a socket is busy, send() blocks on its sem.
+	// Use atomic counter for simple distribution.
+	idx := p.next.Add(1) - 1
+	s := p.sockets[int(idx)%len(p.sockets)]
+	return s.send(method, params)
 }
 
 func (p *rpcPool) callString(method string, params interface{}) (string, error) {
@@ -617,17 +617,19 @@ func fetchFromNode(pool *rpcPool, req *clientRequest) (string, error) {
 
 type clientManager struct {
 	mu      sync.RWMutex
-	clients map[*websocket.Conn]struct{}
+	clients map[*websocket.Conn]*sync.Mutex
 }
 
 func newClientManager() *clientManager {
-	return &clientManager{clients: make(map[*websocket.Conn]struct{})}
+	return &clientManager{clients: make(map[*websocket.Conn]*sync.Mutex)}
 }
 
-func (m *clientManager) add(c *websocket.Conn) {
+func (m *clientManager) add(c *websocket.Conn) *sync.Mutex {
+	wmu := &sync.Mutex{}
 	m.mu.Lock()
-	m.clients[c] = struct{}{}
+	m.clients[c] = wmu
 	m.mu.Unlock()
+	return wmu
 }
 
 func (m *clientManager) remove(c *websocket.Conn) {
@@ -639,8 +641,10 @@ func (m *clientManager) remove(c *websocket.Conn) {
 func (m *clientManager) broadcast(msg []byte) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for c := range m.clients {
+	for c, wmu := range m.clients {
+		wmu.Lock()
 		_ = c.WriteMessage(websocket.TextMessage, msg)
+		wmu.Unlock()
 	}
 }
 
@@ -866,17 +870,9 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 		log.Printf("upgrade error: %v", err)
 		return
 	}
-	s.clients.add(conn)
-	defer func() {
-		s.clients.remove(conn)
-		conn.Close()
-	}()
+	defer conn.Close()
 
-	wsWrite := func(msg []byte) {
-		_ = conn.WriteMessage(websocket.TextMessage, msg)
-	}
-
-	// Send initial dump
+	// Send initial_dump BEFORE adding to clients, so no block_diff can race ahead
 	blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
 	dumpMsg, _ := json.Marshal(map[string]interface{}{
 		"type":        "initial_dump",
@@ -886,7 +882,16 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 		"gasLimit":    gasLimit,
 		"entries":     entries,
 	})
-	wsWrite(dumpMsg)
+	_ = conn.WriteMessage(websocket.TextMessage, dumpMsg)
+
+	wmu := s.clients.add(conn)
+	defer s.clients.remove(conn)
+
+	wsWrite := func(msg []byte) {
+		wmu.Lock()
+		_ = conn.WriteMessage(websocket.TextMessage, msg)
+		wmu.Unlock()
+	}
 	logJSON(map[string]interface{}{
 		"event": "client_connected", "path": r.URL.Path,
 		"dumpSize": len(entries), "block": blockNum,

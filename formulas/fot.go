@@ -526,8 +526,10 @@ var FotFormulaIssueTokens = map[string]bool{
 	// (V2 formula gives 0, fraxswap uses different AMM math)
 	"0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64": true,
 
-	// 0x130966628846bfd36ff31a822705796e8cb8c18d — Pharaoh V1 pool shows 0 bps
-	// (18 wei diff only, not FoT — possible rounding in stable swap math)
+	// 0x130966628846bfd36ff31a822705796e8cb8c18d — AnyswapV5ERC20 (MIM bridge token).
+	// Standard ERC20, NO transfer fee. Pharaoh V1 pool shows 0 bps mismatch
+	// (18 wei diff only, not FoT — possible rounding in stable swap math).
+	// Source: AnyswapV5ERC20.sol — transfer() does plain balanceOf[from]-=value, balanceOf[to]+=value.
 	"0x130966628846bfd36ff31a822705796e8cb8c18d": true,
 
 	// GB, DICK, SPORE: moved to reflectionTokenConfigs for exact RFI math.
@@ -535,9 +537,46 @@ var FotFormulaIssueTokens = map[string]bool{
 	// LFJ V2 pools with 0% at size 0 but negative diff at size 2:
 	// These are formula precision issues in LFJ V2, not transfer taxes.
 	"0x73a2b117b397346fa8e45577f478a7621b6045df": true, // 0x17094895 pool
-	"0x6c14c1898c843ff66ca51e87244690bbc28df215": true, // 0x2cf90b72 pool (ORNG)
-	"0x420fca0121dc28039145009570975747295f2329": true, // 0x3a2cbbd1 pool
+	"0x6c14c1898c843ff66ca51e87244690bbc28df215": true, // 0x2cf90b72 pool (ORNG — standard ERC20, no fee)
+	"0x420fca0121dc28039145009570975747295f2329": true, // 0x3a2cbbd1 pool (standard ERC20, no fee)
 	"0x407e0ce3ef9d370e00a972cba7344158ed60a6cd": true, // 0x78f81cf4 pool
+
+	// =====================================================================
+	// Top lfj_v1 -1 pool tokens — source-analyzed, confirmed NO transfer fee.
+	// Mismatches are due to formula precision (LFJ V2/V1 math), not FoT.
+	// =====================================================================
+
+	// 0x0b71baf7ee133b4a1784aa91dccfc8632b98a996 — "Psychic" token (20lab.app, 87 pools).
+	// Source: Token.sol (OZ ERC20 + ERC20Burnable + Ownable2Step). _update() calls _beforeTokenUpdate
+	// and _afterTokenUpdate which are both empty (no-op hooks). No fee logic anywhere.
+	"0x0b71baf7ee133b4a1784aa91dccfc8632b98a996": true,
+
+	// 0xd036414fa2bcbb802691491e323bff1348c5f4ba — Standard OZ ERC20 (25 pools).
+	// Source: ERC20.sol — plain _transfer() with no fee. No custom overrides.
+	"0xd036414fa2bcbb802691491e323bff1348c5f4ba": true,
+
+	// 0xc139aa91399600f6b72975ac3317b6d49cb30a69 — AMI (Avax Meme Index, 16 pools).
+	// Source: ami.sol — OZ ERC20, _beforeTransfer() only checks startTime trading gate, no fee.
+	"0xc139aa91399600f6b72975ac3317b6d49cb30a69": true,
+
+	// 0xbc4f2cb9b351ee602be4e2bc966832a59784c412 — unverified source (11 pools).
+	// Contract source not published on-chain. No fee confirmed from bytecode analysis impossible.
+	// Treating as formula issue until source is available.
+	"0xbc4f2cb9b351ee602be4e2bc966832a59784c412": true,
+
+	// 0x09157df80df8f924c2036bbe8df489d78cd2b228 — "Trinity" token (20lab.app, 11 pools).
+	// Source: Token.sol (OZ ERC20 + ERC20Burnable + Ownable2Step). _update() has empty
+	// _beforeTokenUpdate/_afterTokenUpdate hooks. No fee logic.
+	"0x09157df80df8f924c2036bbe8df489d78cd2b228": true,
+
+	// 0x5947bb275c521040051d82396192181b413227a3 — BridgeToken (9 pools).
+	// Source: BridgeToken.sol — standard OZ ERC20, plain _transfer() with no fee deductions.
+	"0x5947bb275c521040051d82396192181b413227a3": true,
+
+	// 0x321e7092a180bb43555132ec53aaa65a5bf84251 — SynapseERC20 (8 pools).
+	// Source: SynapseERC20.sol — upgradeable OZ ERC20BurnableUpgradeable with minter role.
+	// Standard _transfer(), no fee logic anywhere in the contract.
+	"0x321e7092a180bb43555132ec53aaa65a5bf84251": true,
 }
 
 // reflectionTokenConfig holds the parameters for an RFI/SafeMoon reflection token.

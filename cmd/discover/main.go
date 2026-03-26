@@ -417,9 +417,7 @@ func main() {
 			evmOut := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, baseAmount)
 
 			// Step 2: Formula probe with base amount
-			// Invalidate pool cache so we build fresh for each probe
-			pm.Invalidate(p.Address)
-			pq := pm.Get(p.Address)
+			pq := pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
 			formulaOut := formulaQuote(pq, baseAmount, zeroForOne)
 
 			// Step 3: Check if they match (including both being zero)
@@ -435,8 +433,7 @@ func main() {
 				evmResult := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, testAmount)
 
 				// Rebuild formula quoter for each test (clean state)
-				pm.Invalidate(p.Address)
-				pq = pm.Get(p.Address)
+				pq = pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
 				fResult := formulaQuote(pq, testAmount, zeroForOne)
 
 				if !amountsEqual(evmResult, fResult) {

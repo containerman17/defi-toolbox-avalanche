@@ -373,6 +373,7 @@ func (r *Registry) SetFormulaID(pool common.Address, id int) {
 	}
 }
 
+
 func (r *Registry) IsInvalid(pool common.Address) bool {
 	id, known := r.pools[pool]
 	return known && id < 0

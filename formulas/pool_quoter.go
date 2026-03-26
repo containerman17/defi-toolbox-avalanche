@@ -85,6 +85,18 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		return nil // not in registry or marked invalid → EVM fallback
 	}
 
+	return pm.buildQuoter(pool, formulaID)
+}
+
+// BuildQuoterForFormulaID builds a PoolQuoter for a pool using the given formula ID,
+// bypassing the registry. Used by discover to test candidate formulas before they
+// are registered. The quoter is NOT cached — each call builds a fresh quoter.
+func (pm *PoolManager) BuildQuoterForFormulaID(pool common.Address, formulaID int) PoolQuoter {
+	pm.Invalidate(pool) // clear any cached quoter
+	return pm.buildQuoter(pool, formulaID)
+}
+
+func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQuoter) {
 	tokens, hasTokens := pm.poolTokens[pool]
 
 	// Recover from panics during construction

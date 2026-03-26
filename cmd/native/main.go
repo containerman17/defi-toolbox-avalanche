@@ -484,7 +484,7 @@ func main() {
 	}
 
 	// Pre-compute pools, graph, and overrides for find_route
-	embeddedPools := poolcollector.EmbeddedPools(1000)
+	embeddedPools := poolcollector.EmbeddedPools(7500)
 	embeddedGraph := pf.BuildGraph(embeddedPools)
 	embeddedOverrides := router.BuildTokenOverrides(
 		router.DeployedRouter,

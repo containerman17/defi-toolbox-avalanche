@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-03-26 — Simple 2-hop pathfinder, state-server race fixes, registry cleanup
+
+### Replaced BFS pathfinder with simple 2-hop router
+- Deleted the old BFS pathfinder (layer-by-layer, 4-hop, visited maps, combinatorial).
+- New algorithm: Phase 1 (direct pools) + Phase 2 (2-hop via intermediates with connectivity pre-check).
+- Extracted `quotePool` helper (formula first, EVM fallback, uses `EncodeSwapSingleWithExtra` for V4).
+- Only keeps one result per intermediate token — no combinatorial explosion.
+- **EVM verification**: all route candidates sorted by formula amountOut, then EVM-verified top-down.
+  First candidate that passes EVM wins. Catches formula lies (garbage-in from wrong storage slots).
+- Both Go (`pathfinder/bfs.go`) and TypeScript (`pathfinder/index.ts`) rewritten.
+
+### State-server race conditions fixed
+- **Concurrent websocket write**: `broadcast()` (from blockLoop) and `handleStateWS` read loop both wrote
+  to the same `*websocket.Conn`. Added per-connection `sync.Mutex` to `clientManager`.
+- **initial_dump race**: `block_diff` broadcast could arrive before `initial_dump`. Fix: send initial_dump
+  BEFORE adding conn to clients list.
+- **Workers pattern**: `rpcSocket.send()` now uses a semaphore (capacity 1) — each upstream socket handles
+  exactly one request at a time. Round-robin dispatch via atomic counter.
+- **Pool size**: default to `runtime.NumCPU()` (24) instead of hardcoded 4.
+
+### Removed 1375 wrong LFJ v2.2 formula mappings
+- 1375 LFJ v2.2 pools (poolType 8, discrete bins) were mapped to formula 0 (V2 constant product).
+  The V2 formula reads reserves from storage slot 8 — garbage for LFJ pools.
+  This returned inflated fake outputs ($6000 regardless of input amount).
+- Removed all LFJ v2.2→formula 0 mappings from `registry.txt`.
+- Re-ran discover: recovered 4065 formula matches (128 LFJ V2, 3212 V2, 486 V4, etc.).
+- Registry: 3574 → 7942 entries (7052 validated, 890 invalid).
+
+### Pool count increased to 7500
+- `cmd/native/main.go`: `EmbeddedPools(1000)` → `EmbeddedPools(7500)`.
+- 100 AVAX → USDC improved from $58.94 to $943.12 (deeper liquidity pools discovered).
+
+---
+
 ## 2026-03-26 — Multi-endpoint state-server
 
 ### State-server refactored to multi-endpoint architecture

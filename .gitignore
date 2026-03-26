@@ -14,3 +14,5 @@ benchmark_results.yaml
 temp-scripts/
 /native
 /benchmark
+/state-server
+/out/

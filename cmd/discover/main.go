@@ -6,7 +6,7 @@
 // Existing registry entries are never overwritten (append-only).
 //
 // Usage:
-//   go run ./cmd/discover/ [--write] [--state-server ws://localhost:7449] [--limit 5000]
+//   go run ./cmd/discover/ [--write] [--state-server ws://localhost:7449/live] [--limit 5000]
 
 package main
 
@@ -58,7 +58,7 @@ var formulaNames = map[int]string{
 }
 
 var (
-	ROUTER       = common.HexToAddress("0x000000000000000000000000cafebabe00facade")
+	ROUTER       = router.DeployedRouter
 	DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 )
 
@@ -258,7 +258,7 @@ func (f *wsFetcher) FetchCode(addr common.Address) []byte {
 func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash { return common.Hash{} }
 
 func main() {
-	stateServerURL := "ws://localhost:7449"
+	stateServerURL := "ws://localhost:7449/live"
 	poolLimit := 5000
 	doWrite := false
 
@@ -322,7 +322,7 @@ func main() {
 	}
 
 	// Build overrides and apply
-	overrides := router.BuildOverrides(ROUTER, pools)
+	overrides := router.BuildTokenOverrides(ROUTER, pools)
 	base := pathfinder.ApplyOverridesFlat(state, overrides)
 
 	evmCtx := statedb.GetCachedContext(cfg)

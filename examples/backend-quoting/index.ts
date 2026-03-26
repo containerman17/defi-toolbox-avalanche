@@ -18,7 +18,7 @@ import { wsPool, closePool } from "../../rpc/ws-pool.ts";
 import { createPublicClient } from "viem";
 import { avalanche } from "viem/chains";
 
-const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449";
+const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449/live";
 const POOLS_PATH = process.env.POOLS_PATH || "pool-collector/data/pools.txt";
 
 const WAVAX = "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7";

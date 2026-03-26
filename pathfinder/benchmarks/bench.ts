@@ -12,7 +12,7 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 
-const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449";
+const STATE_SERVER_URL = process.env.STATE_SERVER_URL || "ws://localhost:7449/live";
 const REGISTRY_PATH = "evm-quoter/go/formulas/registry.txt";
 const HARNESS_PATH = "evm-quoter/bin/harness-native";
 

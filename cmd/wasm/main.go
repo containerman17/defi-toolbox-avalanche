@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"syscall/js"
 
+	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 	"defi-toolbox/formulas"
 
@@ -132,7 +133,7 @@ var (
 func main() {
 	state = statedb.NewStateDB(fetcher)
 	evmCfg = statedb.EVMConfig{
-		BlockNumber: 80_000_000,
+		BlockNumber: uint64(router.DeployedBlock),
 		Timestamp:   0,
 		ChainID:     43114,
 	}

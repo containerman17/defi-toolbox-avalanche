@@ -6,17 +6,18 @@
 //
 // Usage:
 //   const quoter = await createBrowserQuoter({
-//     stateServerUrl: "ws://localhost:7449",
+//     stateServerUrl: "ws://localhost:7449/live",
 //     wasmUrl: "/evm-quoter/bin/harness.wasm",
 //   });
 //   const results = await quoter.quotePoolBatch(pools, stateOverrides);
 //   quoter.close();
 
 import { encodeFunctionData } from "viem";
+import addressJson from "../router/contracts/address.json" with { type: "json" };
 
 // ── Constants ────────────────────────────────────────────────────────
 
-export const ROUTER = "0x000000000000000000000000cafebabe00facade";
+export const ROUTER = addressJson.address.toLowerCase();
 export const DUMMY_SENDER = "0x000000000000000000000000000000000000dEaD";
 
 // ── Swap ABI encoding ────────────────────────────────────────────────
@@ -79,7 +80,7 @@ async function createWasmBackend(opts: BrowserQuoterOpts) {
 
   // Connect to state server
   let stateWs: WebSocket | null = null;
-  let blockNumber = 80_000_000;
+  let blockNumber = addressJson.block;
   let timestamp = 0;
   let closed = false;
   let initialDumpPromise: Promise<any> | null = null;

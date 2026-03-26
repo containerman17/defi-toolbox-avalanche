@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -25,14 +24,12 @@ import (
 // ---------------------------------------------------------------------------
 
 var (
-	listenHost     string
-	listenPort     int
-	upstreamWsURL  string
-	upstreamHTTP   string
-	poolSize       int
-	blockPollMs    int
-	devMode        bool
-	devBlock       = 80_000_000
+	listenHost    string
+	listenPort    int
+	upstreamWsURL string
+	upstreamHTTP  string
+	poolSize      int
+	blockPollMs   int
 )
 
 func envOrDefault(key, fallback string) string {
@@ -55,9 +52,6 @@ func envIntOrDefault(key string, fallback int) int {
 }
 
 func init() {
-	flag.BoolVar(&devMode, "dev", false, "dev mode: freeze at block 80000000")
-	flag.Parse()
-
 	listenHost = envOrDefault("STATE_SERVER_HOST", "127.0.0.1")
 	listenPort = envIntOrDefault("STATE_SERVER_PORT", 7449)
 	upstreamWsURL = envOrDefault("UPSTREAM_RPC_WS_URL", "ws://127.0.0.1:9650/ext/bc/C/ws")
@@ -730,6 +724,68 @@ func proxyEthCall(callCache *ethCallCache, reqBody []byte, params json.RawMessag
 }
 
 // ---------------------------------------------------------------------------
+// State server: independent cache + client set per endpoint
+// ---------------------------------------------------------------------------
+
+type stateServer struct {
+	cache   *stateCache
+	clients *clientManager
+	ready   chan struct{} // closed when block info is initialized
+}
+
+var (
+	servers   = map[int]*stateServer{} // block 0 = live, block N = frozen at N
+	serversMu sync.Mutex
+)
+
+func getOrCreateServer(pool *rpcPool, block int) *stateServer {
+	serversMu.Lock()
+	defer serversMu.Unlock()
+	if s, ok := servers[block]; ok {
+		return s
+	}
+	s := &stateServer{
+		cache:   newStateCache(),
+		clients: newClientManager(),
+		ready:   make(chan struct{}),
+	}
+	servers[block] = s
+
+	if block == 0 {
+		go func() {
+			if err := blockLoop(pool, s); err != nil {
+				log.Fatalf("live block loop: %v", err)
+			}
+		}()
+	} else {
+		go initFrozen(pool, s, block)
+	}
+	return s
+}
+
+func initFrozen(pool *rpcPool, s *stateServer, block int) {
+	defer close(s.ready)
+	info, err := pool.ethGetBlockByNumber(block)
+	if err != nil {
+		logJSON(map[string]interface{}{
+			"event": "frozen_init_error", "block": block, "error": err.Error(),
+		})
+		return
+	}
+	s.cache.mu.Lock()
+	s.cache.blockNumber = block
+	s.cache.timestamp = int(info.Timestamp)
+	s.cache.baseFee = info.BaseFee
+	s.cache.gasLimit = info.GasLimit
+	s.cache.mu.Unlock()
+
+	logJSON(map[string]interface{}{
+		"event": "frozen_init", "block": block,
+		"timestamp": info.Timestamp, "baseFee": info.BaseFee, "gasLimit": info.GasLimit,
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -739,127 +795,54 @@ var upgrader = websocket.Upgrader{
 
 func main() {
 	pool := newRpcPool(upstreamWsURL, poolSize)
-	cache := newStateCache()
-	clients := newClientManager()
 	callCache := newEthCallCache()
 
-	// WebSocket handler
+	// GET / — info page
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			log.Printf("upgrade error: %v", err)
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
 			return
 		}
-		clients.add(conn)
-		defer func() {
-			clients.remove(conn)
-			conn.Close()
-		}()
-
-		// Write mutex for this connection (eth_call goroutines write concurrently)
-		var writeMu sync.Mutex
-		wsWrite := func(msg []byte) {
-			writeMu.Lock()
-			_ = conn.WriteMessage(websocket.TextMessage, msg)
-			writeMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		serversMu.Lock()
+		endpoints := make([]string, 0, len(servers))
+		for block := range servers {
+			if block == 0 {
+				endpoints = append(endpoints, "/live")
+			} else {
+				endpoints = append(endpoints, fmt.Sprintf("/debug/%d", block))
+			}
 		}
-
-		// Send initial dump
-		blockNum, ts, baseFee, gasLimit, entries := cache.dump()
-		dumpMsg, _ := json.Marshal(map[string]interface{}{
-			"type":        "initial_dump",
-			"blockNumber": blockNum,
-			"timestamp":   ts,
-			"baseFee":     baseFee,
-			"gasLimit":    gasLimit,
-			"entries":     entries,
+		serversMu.Unlock()
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"endpoints": endpoints,
+			"ethCall":   "/eth-call",
+			"upstream":  upstreamWsURL,
 		})
-		wsWrite(dumpMsg)
-		logJSON(map[string]interface{}{
-			"event": "client_connected", "dumpSize": len(entries), "block": blockNum,
-		})
-
-		// Read loop
-		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				break
-			}
-
-			// Peek at the method to route eth_call separately
-			var peek struct {
-				JSONRPC string          `json:"jsonrpc"`
-				ID      interface{}     `json:"id"`
-				Method  string          `json:"method"`
-				Params  json.RawMessage `json:"params"`
-			}
-			if json.Unmarshal(data, &peek) != nil {
-				continue
-			}
-
-			if peek.Method == "eth_call" {
-				// eth_call: cache-through proxy to upstream (completely separate path)
-				go func(rawReq []byte, params json.RawMessage, id interface{}) {
-					resp := proxyEthCall(callCache, rawReq, params, id)
-					wsWrite(resp)
-				}(data, peek.Params, peek.ID)
-				continue
-			}
-
-			// State requests (state_getStorageAt, etc.)
-			req, rpcErr := parseRequest(data)
-			if rpcErr != nil {
-				resp, _ := json.Marshal(jsonRPCResponse{
-					JSONRPC: "2.0", ID: nil, Error: rpcErr,
-				})
-				wsWrite(resp)
-				continue
-			}
-
-			key := cacheKeyForRequest(req)
-			isLatest := req.BlockNumber == cache.getBlockNumber()
-
-			// Cache hit (latest block only)
-			if isLatest {
-				if cached, ok := cache.get(key); ok {
-					resp, _ := json.Marshal(jsonRPCResponse{
-						JSONRPC: "2.0", ID: req.ID,
-						Result: map[string]string{"value": cached},
-					})
-					wsWrite(resp)
-					continue
-				}
-			}
-
-			// Fetch from upstream
-			value, err := fetchFromNode(pool, req)
-			if err != nil {
-				resp, _ := json.Marshal(jsonRPCResponse{
-					JSONRPC: "2.0", ID: req.ID,
-					Error: &rpcError{Code: -32603, Message: err.Error()},
-				})
-				wsWrite(resp)
-				continue
-			}
-
-			cache.track(key)
-			if req.BlockNumber == cache.getBlockNumber() {
-				cache.set(key, value)
-			}
-			resp, _ := json.Marshal(jsonRPCResponse{
-				JSONRPC: "2.0", ID: req.ID,
-				Result: map[string]string{"value": value},
-			})
-			wsWrite(resp)
-		}
 	})
 
-	// Block loop
-	go func() {
-		if err := blockLoop(pool, cache, clients); err != nil {
-			log.Fatalf("fatal: %v", err)
+	// /live — follows the chain
+	http.HandleFunc("/live", func(w http.ResponseWriter, r *http.Request) {
+		s := getOrCreateServer(pool, 0)
+		handleStateWS(pool, s, w, r)
+	})
+
+	// /debug/<block> — frozen at a specific block
+	http.HandleFunc("/debug/", func(w http.ResponseWriter, r *http.Request) {
+		blockStr := strings.TrimPrefix(r.URL.Path, "/debug/")
+		block, err := strconv.Atoi(blockStr)
+		if err != nil || block <= 0 {
+			http.Error(w, "invalid block number", http.StatusBadRequest)
+			return
 		}
-	}()
+		s := getOrCreateServer(pool, block)
+		handleStateWS(pool, s, w, r)
+	})
+
+	// /eth-call — independent eth_call caching proxy
+	http.HandleFunc("/eth-call", func(w http.ResponseWriter, r *http.Request) {
+		handleEthCallWS(callCache, w, r)
+	})
 
 	addr := fmt.Sprintf("%s:%d", listenHost, listenPort)
 	logJSON(map[string]interface{}{
@@ -870,48 +853,174 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-func blockLoop(pool *rpcPool, cache *stateCache, clients *clientManager) error {
-	if devMode {
-		cache.mu.Lock()
-		cache.blockNumber = devBlock
-		cache.mu.Unlock()
+// ---------------------------------------------------------------------------
+// State WebSocket handler (for /live and /debug/<block>)
+// ---------------------------------------------------------------------------
 
-		info, err := pool.ethGetBlockByNumber(devBlock)
-		if err != nil {
-			return fmt.Errorf("dev mode: get block info: %w", err)
-		}
-		cache.mu.Lock()
-		cache.timestamp = int(info.Timestamp)
-		cache.baseFee = info.BaseFee
-		cache.gasLimit = info.GasLimit
-		cache.mu.Unlock()
+func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http.Request) {
+	// Wait for server initialization (block info fetch)
+	<-s.ready
 
-		logJSON(map[string]interface{}{
-			"event": "dev_mode", "block": devBlock, "timestamp": info.Timestamp,
-			"baseFee": info.BaseFee, "gasLimit": info.GasLimit,
-		})
-		// No block following in dev mode — block forever
-		select {}
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("upgrade error: %v", err)
+		return
+	}
+	s.clients.add(conn)
+	defer func() {
+		s.clients.remove(conn)
+		conn.Close()
+	}()
+
+	wsWrite := func(msg []byte) {
+		_ = conn.WriteMessage(websocket.TextMessage, msg)
 	}
 
+	// Send initial dump
+	blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
+	dumpMsg, _ := json.Marshal(map[string]interface{}{
+		"type":        "initial_dump",
+		"blockNumber": blockNum,
+		"timestamp":   ts,
+		"baseFee":     baseFee,
+		"gasLimit":    gasLimit,
+		"entries":     entries,
+	})
+	wsWrite(dumpMsg)
+	logJSON(map[string]interface{}{
+		"event": "client_connected", "path": r.URL.Path,
+		"dumpSize": len(entries), "block": blockNum,
+	})
+
+	// Read loop
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+
+		req, rpcErr := parseRequest(data)
+		if rpcErr != nil {
+			resp, _ := json.Marshal(jsonRPCResponse{
+				JSONRPC: "2.0", ID: nil, Error: rpcErr,
+			})
+			wsWrite(resp)
+			continue
+		}
+
+		key := cacheKeyForRequest(req)
+		isLatest := req.BlockNumber == s.cache.getBlockNumber()
+
+		// Cache hit
+		if isLatest {
+			if cached, ok := s.cache.get(key); ok {
+				resp, _ := json.Marshal(jsonRPCResponse{
+					JSONRPC: "2.0", ID: req.ID,
+					Result: map[string]string{"value": cached},
+				})
+				wsWrite(resp)
+				continue
+			}
+		}
+
+		// Fetch from upstream
+		value, err := fetchFromNode(pool, req)
+		if err != nil {
+			resp, _ := json.Marshal(jsonRPCResponse{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &rpcError{Code: -32603, Message: err.Error()},
+			})
+			wsWrite(resp)
+			continue
+		}
+
+		s.cache.track(key)
+		if req.BlockNumber == s.cache.getBlockNumber() {
+			s.cache.set(key, value)
+		}
+		resp, _ := json.Marshal(jsonRPCResponse{
+			JSONRPC: "2.0", ID: req.ID,
+			Result: map[string]string{"value": value},
+		})
+		wsWrite(resp)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// eth_call WebSocket handler (independent endpoint)
+// ---------------------------------------------------------------------------
+
+func handleEthCallWS(callCache *ethCallCache, w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("eth-call upgrade error: %v", err)
+		return
+	}
+	defer conn.Close()
+
+	var writeMu sync.Mutex
+	wsWrite := func(msg []byte) {
+		writeMu.Lock()
+		_ = conn.WriteMessage(websocket.TextMessage, msg)
+		writeMu.Unlock()
+	}
+
+	for {
+		_, data, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+
+		var peek struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      interface{}     `json:"id"`
+			Method  string          `json:"method"`
+			Params  json.RawMessage `json:"params"`
+		}
+		if json.Unmarshal(data, &peek) != nil {
+			continue
+		}
+
+		if peek.Method != "eth_call" {
+			resp, _ := json.Marshal(jsonRPCResponse{
+				JSONRPC: "2.0", ID: peek.ID,
+				Error: &rpcError{Code: -32602, Message: "only eth_call supported on this endpoint"},
+			})
+			wsWrite(resp)
+			continue
+		}
+
+		go func(rawReq []byte, params json.RawMessage, id interface{}) {
+			resp := proxyEthCall(callCache, rawReq, params, id)
+			wsWrite(resp)
+		}(data, peek.Params, peek.ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Block loop (live server only)
+// ---------------------------------------------------------------------------
+
+func blockLoop(pool *rpcPool, s *stateServer) error {
 	bn, err := pool.ethBlockNumber()
 	if err != nil {
 		return fmt.Errorf("initial block number: %w", err)
 	}
-	cache.mu.Lock()
-	cache.blockNumber = bn
-	cache.mu.Unlock()
+	s.cache.mu.Lock()
+	s.cache.blockNumber = bn
+	s.cache.mu.Unlock()
 
 	info, err := pool.ethGetBlockByNumber(bn)
 	if err != nil {
 		return fmt.Errorf("initial block info: %w", err)
 	}
-	cache.mu.Lock()
-	cache.timestamp = int(info.Timestamp)
-	cache.baseFee = info.BaseFee
-	cache.gasLimit = info.GasLimit
-	cache.mu.Unlock()
+	s.cache.mu.Lock()
+	s.cache.timestamp = int(info.Timestamp)
+	s.cache.baseFee = info.BaseFee
+	s.cache.gasLimit = info.GasLimit
+	s.cache.mu.Unlock()
 
+	close(s.ready)
 	logJSON(map[string]interface{}{
 		"event": "block_loop_start", "block": bn, "timestamp": info.Timestamp,
 	})
@@ -932,7 +1041,7 @@ func blockLoop(pool *rpcPool, cache *stateCache, clients *clientManager) error {
 				logJSON(map[string]interface{}{"event": "block_error", "error": err.Error()})
 				return
 			}
-			currentBlock := cache.getBlockNumber()
+			currentBlock := s.cache.getBlockNumber()
 			if latest <= currentBlock {
 				return
 			}
@@ -940,7 +1049,6 @@ func blockLoop(pool *rpcPool, cache *stateCache, clients *clientManager) error {
 			for block := currentBlock + 1; block <= latest; block++ {
 				t0 := time.Now()
 
-				// Fetch diff and block info in parallel
 				type diffResult struct {
 					diff map[string]string
 					err  error
@@ -972,26 +1080,25 @@ func blockLoop(pool *rpcPool, cache *stateCache, clients *clientManager) error {
 					return
 				}
 
-				applied := cache.applyDiff(dr.diff)
-				cache.mu.Lock()
-				cache.blockNumber = block
-				cache.timestamp = int(ir.info.Timestamp)
-				cache.baseFee = ir.info.BaseFee
-				cache.gasLimit = ir.info.GasLimit
-				cache.mu.Unlock()
+				applied := s.cache.applyDiff(dr.diff)
+				s.cache.mu.Lock()
+				s.cache.blockNumber = block
+				s.cache.timestamp = int(ir.info.Timestamp)
+				s.cache.baseFee = ir.info.BaseFee
+				s.cache.gasLimit = ir.info.GasLimit
+				s.cache.mu.Unlock()
 
 				elapsed := time.Since(t0).Milliseconds()
 				logJSON(map[string]interface{}{
 					"event": "block", "block": block, "diffKeys": len(dr.diff),
-					"applied": applied, "cached": cache.size(), "tracked": cache.trackedSize(),
-					"ms": elapsed, "clients": clients.count(),
+					"applied": applied, "cached": s.cache.size(), "tracked": s.cache.trackedSize(),
+					"ms": elapsed, "clients": s.clients.count(),
 				})
 
-				// Push diff to connected clients
-				if applied > 0 && clients.count() > 0 {
+				if applied > 0 && s.clients.count() > 0 {
 					entries := make([][2]string, 0)
 					for k, v := range dr.diff {
-						if cache.isTracked(k) {
+						if s.cache.isTracked(k) {
 							entries = append(entries, [2]string{k, v})
 						}
 					}
@@ -1004,7 +1111,7 @@ func blockLoop(pool *rpcPool, cache *stateCache, clients *clientManager) error {
 							"gasLimit":    ir.info.GasLimit,
 							"entries":     entries,
 						})
-						clients.broadcast(msg)
+						s.clients.broadcast(msg)
 					}
 				}
 			}

@@ -259,9 +259,6 @@ type valueResult struct {
 
 func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
 	f.cacheMisses++
-	if f.cacheMisses <= 3 {
-		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: storage %s slot %s\n", f.cacheMisses, addr.Hex(), slot.Hex())
-	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"slot":        slot.Hex(),
@@ -282,9 +279,6 @@ func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.H
 
 func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
 	f.cacheMisses++
-	if f.cacheMisses <= 3 {
-		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: balance %s\n", f.cacheMisses, addr.Hex())
-	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": f.block,
@@ -329,9 +323,6 @@ func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
 
 func (f *wsFetcher) FetchCode(addr common.Address) []byte {
 	f.cacheMisses++
-	if f.cacheMisses <= 3 {
-		fmt.Fprintf(os.Stderr, "[native] CACHE MISS #%d: code %s\n", f.cacheMisses, addr.Hex())
-	}
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": f.block,

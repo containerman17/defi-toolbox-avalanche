@@ -8,7 +8,7 @@
 import { createQuoter } from "../sdk.ts";
 import { keccak256, pad, toHex, encodeFunctionData, decodeFunctionResult, parseAbi, hexToBigInt } from "viem";
 
-const STATE_SERVER = "ws://127.0.0.1:7449";
+const STATE_SERVER = "ws://127.0.0.1:7449/live";
 
 // Missing pools (from registry.txt:1 but not in pharaoh_v1_registry.go)
 const MISSING_POOLS = [

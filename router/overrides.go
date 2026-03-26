@@ -16,6 +16,9 @@ import (
 //go:embed contracts/bytecode.hex
 var bytecodeHex string
 
+//go:embed contracts/address.json
+var deployedRouterJSON string
+
 //go:embed data/token_overrides.json
 var tokenOverridesJSON string
 
@@ -36,6 +39,32 @@ func init() {
 	for i := range entries {
 		addr := common.HexToAddress(entries[i].Address)
 		overrideMap[addr] = &entries[i]
+	}
+}
+
+// config holds the deployment config from contracts/address.json.
+var config = parseConfig()
+
+// DeployedRouter is the on-chain address of the HayabusaRouter contract.
+var DeployedRouter = config.Address
+
+// DeployedBlock is the reference block number for benchmarking and state snapshots.
+var DeployedBlock = config.Block
+
+type deployConfig struct {
+	Address common.Address
+	Block   int
+}
+
+func parseConfig() deployConfig {
+	var raw struct {
+		Address string `json:"address"`
+		Block   int    `json:"block"`
+	}
+	json.Unmarshal([]byte(deployedRouterJSON), &raw)
+	return deployConfig{
+		Address: common.HexToAddress(raw.Address),
+		Block:   raw.Block,
 	}
 }
 
@@ -61,17 +90,28 @@ func computeBalanceSlot(holder common.Address, entry *tokenOverrideEntry) common
 	return crypto.Keccak256Hash(slotKey[:])
 }
 
-// BuildOverrides creates state overrides for the router + token balances for all tokens in pools.
+// BuildTokenOverrides creates token balance overrides only (no router bytecode).
+// Use this when the router contract is already deployed on-chain and its code
+// is available in the state dump.
+func BuildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {
+	return buildTokenOverrides(routerAddr, pools)
+}
+
+// BuildOverrides creates state overrides for the router bytecode + token balances.
+// Use this when the router code must be injected (e.g., evm-quoter SDK, LFJ backrunning).
 func BuildOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {
 	bytecode := RouterBytecode()
 
-	// Router bytecode override
 	overrides := []pathfinder.ParsedOverride{{
 		Addr:    routerAddr,
 		Balance: uint256.NewInt(0),
 		Code:    bytecode,
 	}}
 
+	return append(overrides, buildTokenOverrides(routerAddr, pools)...)
+}
+
+func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {
 	// Collect all unique tokens
 	tokenSet := make(map[common.Address]bool)
 	for i := range pools {
@@ -84,6 +124,7 @@ func BuildOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfi
 	// 1000 units (at 18 decimals) — enough for quoting but not so large it creates fake arb.
 	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1000), uint256.NewInt(1_000_000_000_000_000_000)) // 1000 * 1e18
 
+	var overrides []pathfinder.ParsedOverride
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]
 		if !ok {

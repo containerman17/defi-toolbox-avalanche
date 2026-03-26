@@ -11,7 +11,19 @@ import * as path from "node:path";
 import { createPublicClient, type Hex, decodeAbiParameters } from "viem";
 import { wsPool, closePool, getPoolStats } from "../../../rpc/ws-pool.ts";
 import { avalanche } from "viem/chains";
-import { quoteRoute, quoteFlat, ROUTER_ADDRESS, getBalanceOverride, getAllowanceOverride, type FlatStep } from "../../../router/index.ts";
+import { quoteRoute, quoteFlat, getBalanceOverride, getAllowanceOverride, getRouterBytecode, type FlatStep } from "../../../router/index.ts";
+
+// LFJ backrunning uses a fake address so bytecode is always injected.
+// If injection fails, we get empty code (obvious revert) instead of outdated code (silent failure).
+const BACKRUN_ROUTER = "0x000000000000000000000000cafebabe00facade";
+
+/** Merge router bytecode injection into extra state overrides. */
+function withRouterCode(extra?: Record<string, any>): Record<string, any> {
+  const code = getRouterBytecode();
+  const merged = { ...(extra ?? {}) };
+  merged[BACKRUN_ROUTER] = { ...(merged[BACKRUN_ROUTER] ?? {}), code };
+  return merged;
+}
 import { type StoredPool, type PoolType, POOL_TYPE_TRANSFER_FROM } from "../../../pool-collector/index.ts";
 
 // Bridge-equivalent tokens: .e versions have 1:1 value with their native counterparts
@@ -72,7 +84,7 @@ function buildTransferFromOverrides(steps: { pools: string[]; poolTypes: number[
       if (!extraHex || extraHex === "" || extraHex === "0x" || extraHex.length < 66) continue;
       const [outAmount] = decodeAbiParameters([{ type: "uint256" }], extraHex as Hex);
       const balOvr = getBalanceOverride(tokenOut, outAmount * 2n, vaultAddr);
-      const allowOvr = getAllowanceOverride(tokenOut, vaultAddr, ROUTER_ADDRESS);
+      const allowOvr = getAllowanceOverride(tokenOut, vaultAddr, BACKRUN_ROUTER);
 
       for (const ovr of [balOvr, allowOvr]) {
         for (const [addr, val] of Object.entries(ovr)) {
@@ -122,7 +134,7 @@ function payloadToRoute(p: Payload): { pool: StoredPool; tokenIn: string; tokenO
 }
 
 export async function run(limit?: number) {
-  const wsUrl = process.env.WS_URL ?? "ws://localhost:7449";
+  const wsUrl = process.env.WS_URL ?? "ws://localhost:7449/eth-call";
   const payloadsDir = path.join(import.meta.dirname!, "payloads");
 
   const client = createPublicClient({
@@ -224,7 +236,7 @@ export async function run(limit?: number) {
       // Try flat
       let flatOut: bigint | null = null;
       try {
-        flatOut = await payloadTimeout(quoteFlat(client, flatSteps, payload.inputToken, totalAmountIn, blockNumber, extraOvr));
+        flatOut = await payloadTimeout(quoteFlat(client, flatSteps, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
       } catch {}
 
       // If flat gives -N% and there's an input gap, try proportional redistribution:
@@ -263,7 +275,7 @@ export async function run(limit?: number) {
           propProduced.add(s.tokenOut.toLowerCase());
         }
         try {
-          const propOut = await payloadTimeout(quoteFlat(client, propFlat, payload.inputToken, totalAmountIn, blockNumber, extraOvr));
+          const propOut = await payloadTimeout(quoteFlat(client, propFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
           if (propOut > flatOut!) flatOut = propOut;
         } catch {}
       }
@@ -320,7 +332,7 @@ export async function run(limit?: number) {
             topoProd.add(s.tokenOut.toLowerCase());
           }
           try {
-            const topoOut = await payloadTimeout(quoteFlat(client, topoFlat, payload.inputToken, totalAmountIn, blockNumber, extraOvr));
+            const topoOut = await payloadTimeout(quoteFlat(client, topoFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
             if (topoOut > flatOut!) flatOut = topoOut;
           } catch {}
         }
@@ -345,7 +357,7 @@ export async function run(limit?: number) {
           const amountIn = BigInt(step.amountIn);
           const stepOvr = buildTransferFromOverrides([step]);
           try {
-            const out = await payloadTimeout(quoteRoute(client, route, amountIn, blockNumber, stepOvr));
+            const out = await payloadTimeout(quoteRoute(client, route, amountIn, blockNumber, withRouterCode(stepOvr), BACKRUN_ROUTER));
             if (tokenMatchesOutput(step.tokens[step.tokens.length - 1], outputToken)) {
               perStepTotal += out;
             }
@@ -386,7 +398,7 @@ export async function run(limit?: number) {
                 }
               }
               try {
-                greedyFlatOut = await payloadTimeout(quoteFlat(client, candidateFlat, payload.inputToken, totalAmountIn, blockNumber, extraOvr));
+                greedyFlatOut = await payloadTimeout(quoteFlat(client, candidateFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
                 greedyWorkingIndices.push(si);
               } catch {
                 // Adding this step causes revert — skip it
@@ -495,7 +507,7 @@ export async function run(limit?: number) {
         : undefined;
 
       try {
-        const actualOut = await payloadTimeout(quoteRoute(client, route, amountIn, blockNumber, extraOvr));
+        const actualOut = await payloadTimeout(quoteRoute(client, route, amountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
         const delta = actualOut - expectedOut;
         const pct = expectedOut > 0n ? Number(delta * 10000n / expectedOut) / 100 : 0;
         if (actualOut >= expectedOut * 2n) {
@@ -546,7 +558,7 @@ export async function run(limit?: number) {
             });
           }
           try {
-            const flatOut = await payloadTimeout(quoteFlat(client, flatSteps, inputToken, amountIn, blockNumber, extraOvr));
+            const flatOut = await payloadTimeout(quoteFlat(client, flatSteps, inputToken, amountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
             const delta = flatOut - expectedOut;
             const pct = expectedOut > 0n ? Number(delta * 10000n / expectedOut) / 100 : 0;
             if (flatOut >= expectedOut * 2n) {

@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-03-26 — Multi-endpoint state-server
+
+### State-server refactored to multi-endpoint architecture
+- `GET /` — JSON info page listing active endpoints
+- `ws://host:port/live` — follows the chain with block diffs (state only)
+- `ws://host:port/debug/<block>` — frozen at a specific block (state only)
+- `ws://host:port/eth-call` — independent eth_call caching proxy
+- Removed `--dev` flag and hardcoded `devBlock = 80_000_000`
+- Each endpoint is a completely independent `stateServer` (own cache, own clients)
+- Servers created lazily on first connection, shared by subsequent clients
+- `eth_call` is fully separated — no longer mixed with state requests on the same socket
+
+### All clients updated for new endpoints
+- Go clients (`cmd/benchmark`, `cmd/discover`): default URL → `ws://localhost:7449/live`
+- 6 TypeScript scripts/benchmarks in `evm-quoter/`: hardcoded URLs → `/live`
+- `examples/backend-quoting`, `pathfinder/benchmarks/bench.ts`: defaults → `/live`
+- LFJ backrun: default → `ws://localhost:7449/eth-call` (eth_call only)
+- Pass-through clients (sdk.ts, sdk-browser.ts, cmd/native): no change, callers pass URL
+
+---
+
+## 2026-03-26 — Deploy HayabusaRouter on-chain, single source of truth for address
+
+### Router contract deployed on-chain
+- Deployed HayabusaRouter to `0x7dbFa2380A926Bc36552a7dD5641a44D7328838D` on Avalanche C-Chain.
+- Compiled with forge (solc paris, viaIR, optimizer 200 runs).
+- TX: `0x7431929c4535e49838c6c30ad49919bcb7fa501d79c1adb8f6d0064f00674597`
+
+### Single source of truth: `router/contracts/address.json`
+- Go reads via `go:embed` + `json.Unmarshal` → `router.DeployedRouter`
+- TypeScript reads via `import ... with { type: "json" }` → works in Node AND browser bundlers
+- One JSON file to update when redeploying. Address appears nowhere else in code.
+
+### Every consumer uses the real deployed address
+- **Go**: benchmark, discover, BFS pathfinder, microbench, native harness — all use
+  `router.DeployedRouter`. No bytecode injection; code comes from state-server dump.
+  `BuildTokenOverrides` creates only token balance overrides (no router bytecode).
+- **TypeScript**: `router/quote.ts` exports `ROUTER_ADDRESS` from `address.json`.
+  `buildStateOverrides` no longer injects router bytecode (removed entirely).
+- **evm-quoter SDK** (both Node and browser): imports `address.json`, uses real address.
+- **Only exception**: LFJ backrunning (`router/benchmarks/backrun_lfj/03_test.ts`)
+  uses a fake address (`cafebabe00facade`) because it modifies the contract on the fly.
+  Failed injection at fake address → empty code → obvious revert.
+  Failed injection at real address → outdated code → silent failure.
+
+### Updated `bytecode.hex`
+- Recompiled with forge to match the deployed contract.
+
+---
+
 ## 2026-03-26 — 3-pass benchmark, V4 encoding fix, 100% correctness
 
 ### 3-pass benchmark architecture

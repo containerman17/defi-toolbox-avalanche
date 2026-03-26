@@ -27,7 +27,7 @@ let _overrides: Map<string, TokenOverrideEntry> | null = null;
 // ── Router bytecode (cached) ─────────────────────────────────────────
 
 let _routerBytecodeCache: Hex | undefined;
-function getRouterBytecode(): Hex {
+export function getRouterBytecode(): Hex {
   if (!_routerBytecodeCache) {
     const hex = readFileSync(join(import.meta.dirname!, "contracts", "bytecode.hex"), "utf-8").trim();
     _routerBytecodeCache = `0x${hex}` as Hex;
@@ -212,7 +212,7 @@ export function getHookOverrides(token: string): Record<string, { code: Hex }> {
 
 /**
  * Build geth-style state overrides for quoting via the Hayabusa router.
- * Works for both eth_call (on-chain router) and local EVM (cafebabe router).
+ * Builds token balance overrides for the router address.
  *
  * Sets router bytecode and token balance slots for the specified amounts.
  */
@@ -247,12 +247,6 @@ export function buildStateOverrides(opts: {
       balance: `0x${nativeAmount.toString(16)}`,
     };
   }
-
-  // Router bytecode
-  stateOverride[routerAddress] = {
-    ...(stateOverride[routerAddress] ?? {}),
-    code: getRouterBytecode(),
-  };
 
   // Merge extra state overrides
   if (extraStateOverrides) {

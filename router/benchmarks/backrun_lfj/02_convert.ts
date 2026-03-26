@@ -1597,7 +1597,7 @@ async function main() {
   for (const p of extraV2Pools) {
     const addr = p.address.toLowerCase();
     if (!poolMap.has(addr)) {
-      poolMap.set(addr, { address: addr, providerName: "univ2_misc", poolType: 8 as any, tokens: p.tokens, latestSwapBlock: 80000000 } as StoredPool);
+      poolMap.set(addr, { address: addr, providerName: "univ2_misc", poolType: 8 as any, tokens: p.tokens, latestSwapBlock: 0 } as StoredPool);
     }
   }
 

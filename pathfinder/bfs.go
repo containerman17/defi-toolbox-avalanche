@@ -53,9 +53,6 @@ type hopQuote struct {
 	amountIn   *uint256.Int
 }
 
-// ROUTER is the synthetic router address used for quoting.
-var ROUTER = common.HexToAddress("0x000000000000000000000000cafebabe00facade")
-
 // DUMMY_SENDER is the from address for EVM calls.
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
@@ -66,6 +63,7 @@ func FindBestRoute(
 	cfg statedb.EVMConfig,
 	registry *formulas.Registry,
 	overrides []ParsedOverride,
+	routerAddr common.Address,
 	graph *Graph,
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
@@ -164,7 +162,7 @@ func FindBestRoute(
 				et0 := time.Now()
 				stats.EVMQuotes++
 				cs.Reset()
-				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, calldata)
 				stats.EVMMs += float64(time.Since(et0).Microseconds()) / 1000.0
 				if evmErr == nil && len(ret) >= 32 {
 					var out uint256.Int

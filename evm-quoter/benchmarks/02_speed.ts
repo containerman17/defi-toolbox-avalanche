@@ -3,8 +3,9 @@
 // Returns: ms/pool for native backend
 
 import { createQuoter, loadPools, buildStateOverrides } from "../sdk.ts";
+import addressJson from "../../router/contracts/address.json" with { type: "json" };
 
-const STATE_SERVER = "ws://127.0.0.1:7449";
+const STATE_SERVER = `ws://127.0.0.1:7449/debug/${addressJson.block}`;
 
 export async function run(poolCount = 1000) {
   const pools = loadPools(null, poolCount);

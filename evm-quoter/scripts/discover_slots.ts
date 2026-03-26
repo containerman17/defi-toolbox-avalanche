@@ -18,7 +18,7 @@ import { dirname, join } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dirname, "../..");
 
-const STATE_SERVER = "ws://127.0.0.1:7449";
+const STATE_SERVER = "ws://127.0.0.1:7449/live";
 const OVERRIDES_PATH = join(REPO, "router/data/token_overrides.json");
 const POOLS_PATH = join(REPO, "pool-collector/data/pools.txt");
 

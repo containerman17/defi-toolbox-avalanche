@@ -241,11 +241,11 @@ func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash { return common.Hash{
 
 // ─── Main ──────────────────────────────────────────────────────────
 
-var ROUTER = common.HexToAddress("0x000000000000000000000000cafebabe00facade")
+var ROUTER = router.DeployedRouter
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
 func main() {
-	stateServerURL := "ws://localhost:7449"
+	stateServerURL := "ws://localhost:7449/live"
 	poolLimit := 4000
 	skipFormulas := false
 
@@ -278,7 +278,7 @@ func main() {
 	registerBalancerV2Pools(pools, state, cfg, registry)
 
 	// Build overrides for all tokens
-	overrides := router.BuildOverrides(ROUTER, pools)
+	overrides := router.BuildTokenOverrides(ROUTER, pools)
 
 	// Apply overrides flat — no overlay indirection, CallState reads one layer
 	baseWithOverrides := pathfinder.ApplyOverridesFlat(state, overrides)

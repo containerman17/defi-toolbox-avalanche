@@ -24,7 +24,8 @@ const REPO = join(__dirname, "..");
 
 // ── Constants ─────────────────────────────────────────────────────────
 
-export const ROUTER = "0x000000000000000000000000cafebabe00facade";
+import addressJson from "../router/contracts/address.json" with { type: "json" };
+export const ROUTER = addressJson.address.toLowerCase();
 export const DUMMY_SENDER = "0x000000000000000000000000000000000000dEaD";
 const POOLS_PATH = join(REPO, "pool-collector/data/pools.txt");
 
@@ -231,7 +232,7 @@ async function createWasmBackend(stateServerUrl) {
 
   // Connect to state server
   let stateWs = null;
-  let blockNumber = 80_000_000;
+  let blockNumber = addressJson.block;
   let timestamp = 0;
   let closed = false;
   let initialDumpPromise = null;

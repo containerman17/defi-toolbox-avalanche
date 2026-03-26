@@ -7,10 +7,11 @@ import {
   createQuoter, loadPools, buildStateOverrides, encodeSwapSingle,
   ROUTER, DUMMY_SENDER,
 } from "../sdk.ts";
+import addressJson from "../../router/contracts/address.json" with { type: "json" };
 
-const STATE_SERVER = "ws://127.0.0.1:7449";
+const STATE_SERVER = `ws://127.0.0.1:7449/debug/${addressJson.block}`;
 const RPC_URL = "http://127.0.0.1:9650/ext/bc/C/rpc";
-const BLOCK = 80_000_000;
+const BLOCK = addressJson.block;
 const blockHex = "0x" + BLOCK.toString(16);
 
 async function rpcQuote(pool, stateOverrides) {

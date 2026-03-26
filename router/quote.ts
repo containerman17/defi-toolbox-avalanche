@@ -1,7 +1,10 @@
 import { type PublicClient, type Hex, decodeAbiParameters } from "viem";
 import { encodeSwap, encodeSwapFlat, type RouteStep, type FlatStep } from "./encode.ts";
 import { buildStateOverrides, getBalanceOverrideAsync, getHookOverrides, isReflectionToken } from "./overrides.ts";
-export const ROUTER_ADDRESS = "0x2bef1becdafcfe8990a233d03a98bbb39021c96e" as const;
+import addressJson from "./contracts/address.json" with { type: "json" };
+
+// Single source of truth: imported from contracts/address.json (shared with Go via go:embed)
+export const ROUTER_ADDRESS = addressJson.address.toLowerCase();
 
 const DUMMY_SENDER = "0x000000000000000000000000000000000000dEaD";
 const NATIVE_TOKEN = "0x0000000000000000000000000000000000000000";
@@ -12,6 +15,7 @@ export async function quoteRoute(
   amountIn: bigint,
   blockNumber?: bigint,
   extraStateOverrides?: Record<string, any>,
+  routerAddress: string = ROUTER_ADDRESS,
 ): Promise<bigint> {
   if (route.length === 0) throw new Error("empty route");
 
@@ -29,7 +33,7 @@ export async function quoteRoute(
   // Build extra overrides for reflection tokens and hook contracts
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
   if (inputToken !== NATIVE_TOKEN && isReflectionToken(inputToken)) {
-    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, ROUTER_ADDRESS, blockNumber);
+    const reflOvr = await getBalanceOverrideAsync(client, inputToken, amountIn, routerAddress, blockNumber);
     for (const [addr, val] of Object.entries(reflOvr)) {
       if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
       if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -46,7 +50,7 @@ export async function quoteRoute(
   const hasExtra = Object.keys(mergedExtra).length > 0;
   const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
   const stateOverride = buildStateOverrides({
-    routerAddress: ROUTER_ADDRESS,
+    routerAddress,
     tokenAmounts,
     extraStateOverrides: hasExtra ? mergedExtra : undefined,
   });
@@ -56,7 +60,7 @@ export async function quoteRoute(
     params: [
       {
         from: DUMMY_SENDER,
-        to: ROUTER_ADDRESS,
+        to: routerAddress,
         data: calldata,
         value: inputToken === NATIVE_TOKEN ? `0x${amountIn.toString(16)}` : undefined,
       },
@@ -80,6 +84,7 @@ export async function quoteFlat(
   totalAmountIn: bigint,
   blockNumber?: bigint,
   extraStateOverrides?: Record<string, any>,
+  routerAddress: string = ROUTER_ADDRESS,
 ): Promise<bigint> {
   if (steps.length === 0) throw new Error("empty steps");
 
@@ -111,7 +116,7 @@ export async function quoteFlat(
   const mergedExtra: Record<string, any> = { ...(extraStateOverrides ?? {}) };
   for (const [token, amount] of tokenAmounts) {
     if (token !== NATIVE_TOKEN && isReflectionToken(token)) {
-      const reflOvr = await getBalanceOverrideAsync(client, token, amount, ROUTER_ADDRESS, blockNumber);
+      const reflOvr = await getBalanceOverrideAsync(client, token, amount, routerAddress, blockNumber);
       for (const [addr, val] of Object.entries(reflOvr)) {
         if (!mergedExtra[addr]) mergedExtra[addr] = { stateDiff: {} };
         if (!mergedExtra[addr].stateDiff) mergedExtra[addr].stateDiff = {};
@@ -128,7 +133,7 @@ export async function quoteFlat(
 
   const hasExtra = Object.keys(mergedExtra).length > 0;
   const stateOverride = buildStateOverrides({
-    routerAddress: ROUTER_ADDRESS,
+    routerAddress,
     tokenAmounts,
     extraStateOverrides: hasExtra ? mergedExtra : undefined,
   });
@@ -138,7 +143,7 @@ export async function quoteFlat(
     params: [
       {
         from: DUMMY_SENDER,
-        to: ROUTER_ADDRESS,
+        to: routerAddress,
         data: calldata,
         value: normalizedInput === NATIVE_TOKEN ? `0x${totalAmountIn.toString(16)}` : undefined,
       },
@@ -163,13 +168,14 @@ export async function estimateRouteGas(
   route: RouteStep[],
   amountIn: bigint,
   blockNumber?: bigint,
+  routerAddress: string = ROUTER_ADDRESS,
 ): Promise<bigint> {
   if (route.length === 0) throw new Error("empty route");
 
   const calldata = encodeSwap(route, amountIn);
   const inputToken = route[0].tokenIn.toLowerCase();
   const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
-  const stateOverride = buildStateOverrides({ routerAddress: ROUTER_ADDRESS, tokenAmounts });
+  const stateOverride = buildStateOverrides({ routerAddress, tokenAmounts });
   const blockHex = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
 
   const resp = await client.request({
@@ -177,7 +183,7 @@ export async function estimateRouteGas(
     params: [
       {
         from: DUMMY_SENDER,
-        to: ROUTER_ADDRESS,
+        to: routerAddress,
         data: calldata,
         value: inputToken === NATIVE_TOKEN ? `0x${amountIn.toString(16)}` : undefined,
       },
@@ -197,13 +203,14 @@ export async function traceRouteGas(
   route: RouteStep[],
   amountIn: bigint,
   blockNumber?: bigint,
+  routerAddress: string = ROUTER_ADDRESS,
 ): Promise<{ gas: bigint; failed: boolean }> {
   if (route.length === 0) throw new Error("empty route");
 
   const calldata = encodeSwap(route, amountIn);
   const inputToken = route[0].tokenIn.toLowerCase();
   const tokenAmounts = new Map<string, bigint>([[inputToken, amountIn]]);
-  const stateOverrides = buildStateOverrides({ routerAddress: ROUTER_ADDRESS, tokenAmounts });
+  const stateOverrides = buildStateOverrides({ routerAddress, tokenAmounts });
   const blockHex = blockNumber ? `0x${blockNumber.toString(16)}` : "latest";
 
   const resp = await client.request({
@@ -211,7 +218,7 @@ export async function traceRouteGas(
     params: [
       {
         from: DUMMY_SENDER,
-        to: ROUTER_ADDRESS,
+        to: routerAddress,
         data: calldata,
         value: inputToken === NATIVE_TOKEN ? `0x${amountIn.toString(16)}` : undefined,
         gas: "0x5F5E100", // 100M

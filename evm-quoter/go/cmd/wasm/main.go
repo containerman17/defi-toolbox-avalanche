@@ -3,6 +3,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -121,6 +122,15 @@ func (f *jsFetcher) FetchBlockHash(num uint64) common.Hash {
 
 // ─── Global state ──────────────────────────────────────────────────
 
+//go:embed address.json
+var configJSON string
+
+var deployBlock = func() int {
+	var c struct{ Block int `json:"block"` }
+	json.Unmarshal([]byte(configJSON), &c)
+	return c.Block
+}()
+
 var (
 	state    *harness.StateDB
 	fetcher  = &jsFetcher{}
@@ -132,7 +142,7 @@ var (
 func main() {
 	state = harness.NewStateDB(fetcher)
 	evmCfg = harness.EVMConfig{
-		BlockNumber: 80_000_000,
+		BlockNumber: uint64(deployBlock),
 		Timestamp:   0,
 		ChainID:     43114,
 	}

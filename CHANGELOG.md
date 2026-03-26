@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-03-26 — 100% correctness achieved + registry rewrite
+
+### 100% correctness: 0 mismatches
+- Rewrote `cmd/discover` with 10-amount verification: each pool tested with 10 different
+  input amounts against BOTH formula and EVM. All 10 must match exactly.
+- Simplified `PoolManager.Get()`: registry is authoritative, no fallback overrides.
+  Removed 121 lines of hack logic. -1 means -1, period.
+- `SetFormulaID` no longer overrides existing entries.
+- 19 pools with edge-case mismatches marked -1 (will fix formulas and re-fill).
+
+### Coverage: needs work
+- Formula: 5070 quotes (167ms)
+- EVM: 2930 calls (1090ms) — pools marked -1 by strict 10-amount verification
+- Many -1 pools are likely fixable: reflection tokens, FoT edge cases, rounding
+- Workflow: fix formula → delete pool from registry → re-run fill → verify
+
 ## 2026-03-25 — IMPORTANT: dishonest benchmark fixed
 
 ### What happened

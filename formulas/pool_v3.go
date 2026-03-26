@@ -29,7 +29,9 @@ type V3Pool struct {
 	liquidity    uint256.Int
 
 	// Pre-loaded bitmap words: wordPos -> 256-bit bitmap
-	bitmapWords map[int16]uint256.Int
+	bitmapWords    map[int16]uint256.Int
+	bitmapMinWord  int16 // inclusive lower bound of pre-loaded range
+	bitmapMaxWord  int16 // inclusive upper bound of pre-loaded range
 
 	// Pre-loaded tick data: tickIdx -> liquidityNet
 	tickLiquidityNet map[int32]uint256.Int
@@ -108,8 +110,10 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		compressed-- // round towards negative infinity
 	}
 	centerWord := int16(compressed >> 8)
+	bitmapMinWord := centerWord - 200
+	bitmapMaxWord := centerWord + 200
 	bitmapWords := make(map[int16]uint256.Int)
-	for wordPos := centerWord - 200; wordPos <= centerWord+200; wordPos++ {
+	for wordPos := bitmapMinWord; wordPos <= bitmapMaxWord; wordPos++ {
 		word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
 		if err != nil {
 			continue
@@ -142,6 +146,8 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		tick:             tick,
 		liquidity:        liquidity,
 		bitmapWords:      bitmapWords,
+		bitmapMinWord:    bitmapMinWord,
+		bitmapMaxWord:    bitmapMaxWord,
 		tickLiquidityNet: tickLiquidityNet,
 		preStepsDown:     make(map[int32]*v3PrecomputedStep),
 		preStepsUp:       make(map[int32]*v3PrecomputedStep),
@@ -172,6 +178,9 @@ func (p *V3Pool) precomputeSteps() {
 
 			if zeroForOne {
 				wordPos, bitPos := v3Position(compressed)
+				if wordPos < p.bitmapMinWord {
+					break // out of pre-loaded bitmap range
+				}
 				word := p.bitmapWords[wordPos]
 				var mask, masked uint256.Int
 				mask.Lsh(uint256.NewInt(1), uint(bitPos)+1)
@@ -187,6 +196,9 @@ func (p *V3Pool) precomputeSteps() {
 			} else {
 				compressed++
 				wordPos, bitPos := v3Position(compressed)
+				if wordPos > p.bitmapMaxWord {
+					break // out of pre-loaded bitmap range
+				}
 				word := p.bitmapWords[wordPos]
 				var maskSub, mask, masked uint256.Int
 				maskSub.Lsh(uint256.NewInt(1), uint(bitPos))
@@ -306,7 +318,12 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	}
 
 	for !amountRemaining.IsZero() && !sqrtPriceX96.Eq(&sqrtPriceLimitX96) {
-		nextTick, initialized := p.nextInitializedTick(tick, zeroForOne)
+		nextTick, initialized, outOfRange := p.nextInitializedTick(tick, zeroForOne)
+		if outOfRange {
+			// Swap pushed price beyond the pre-loaded bitmap range.
+			// Return (nil, false) so the caller falls back to EVM.
+			return nil, false
+		}
 
 		if nextTick < algebraMinTick {
 			nextTick = algebraMinTick
@@ -393,11 +410,16 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 }
 
 // nextInitializedTick scans ONE pre-loaded bitmap word (exact same as Solidity).
-func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) {
+// Returns (nextTick, initialized, outOfRange). If outOfRange is true, the swap
+// has moved beyond the pre-loaded bitmap window and the caller should bail out.
+func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool, bool) {
 	compressed := v3FloorDiv(int(tick), int(p.tickSpacing))
 
 	if zeroForOne {
 		wordPos, bitPos := v3Position(compressed)
+		if wordPos < p.bitmapMinWord {
+			return 0, false, true
+		}
 		word := p.bitmapWords[wordPos]
 
 		var mask, masked uint256.Int
@@ -408,14 +430,17 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 		if !masked.IsZero() {
 			msb := masked.BitLen() - 1
 			next := (compressed - (int(bitPos) - msb)) * int(p.tickSpacing)
-			return int32(next), true
+			return int32(next), true, false
 		}
 		next := (compressed - int(bitPos)) * int(p.tickSpacing)
-		return int32(next), false
+		return int32(next), false, false
 	}
 
 	compressed++
 	wordPos, bitPos := v3Position(compressed)
+	if wordPos > p.bitmapMaxWord {
+		return 0, false, true
+	}
 	word := p.bitmapWords[wordPos]
 
 	var maskSub, mask, masked uint256.Int
@@ -439,9 +464,9 @@ func (p *V3Pool) nextInitializedTick(tick int32, zeroForOne bool) (int32, bool) 
 		}
 	foundLsb:
 		next := (compressed + (lsb - int(bitPos))) * int(p.tickSpacing)
-		return int32(next), true
+		return int32(next), true, false
 	}
 	next := (compressed + (255 - int(bitPos))) * int(p.tickSpacing)
-	return int32(next), false
+	return int32(next), false, false
 }
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-03-26 — V3 formula fixes: PangolinV3 layout + bitmap range guard
+
+### PangolinV3 layout (Issue 1)
+- Added `v3LayoutPangolin` with slot0=5, liquidity=9, ticks=10, bitmap=11.
+- PangolinV3 pools use factory `0x1128f23d...` but are labeled `uniswap_v3` in pools.txt.
+- Layout auto-detected: Standard (slot0=0), Proxy (slot0=4), Pangolin (slot0=5).
+- Recovers ~30-40 pools that were failing layout detection and returning -1.
+
+### Bitmap range guard (Issue 2)
+- V3Pool pre-loads ±200 bitmap words centered on the current tick.
+- Large swaps that push the price beyond this range used to produce wrong results
+  (partial swap with missing ticks treated as zero liquidity).
+- `nextInitializedTick` now returns `outOfRange=true` when the wordPos is outside
+  the pre-loaded range, causing `Quote()` to return `(nil, false)`.
+- `precomputeSteps` also stops at bitmap boundaries to avoid wasting memory.
+- These pools correctly fall back to EVM for extreme amounts.
+
 ## 2026-03-26 — 100% correctness achieved + registry rewrite
 
 ### 100% correctness: 0 mismatches

@@ -13,9 +13,10 @@ import (
 // bitmap words and ticks lazily during the swap, exactly as Solidity does.
 // The caller controls caching via the StateReader implementation.
 //
-// Four storage layouts supported (auto-detected):
-//   Standard V3: slot0=0, liquidity=4, ticks=5, bitmap=6
-//   Proxy V3: slot0=4, liquidity=9, ticks=10, bitmap=11
+// Five storage layouts supported (auto-detected):
+//   Standard V3:   slot0=0, liquidity=4, ticks=5, bitmap=6
+//   Proxy V3:      slot0=4, liquidity=9, ticks=10, bitmap=11
+//   Pangolin V3:   slot0=5, liquidity=9, ticks=10, bitmap=11
 //   Pharaoh V3 v1: ERC-7201 keccak256("states.storage") + offsets
 //   Pharaoh V3 v2: ERC-7201 keccak256("pool.storage") + offsets
 
@@ -36,6 +37,12 @@ var (
 	}
 	v3LayoutProxy = v3Layout{
 		slot0:     big.NewInt(4),
+		liquidity: big.NewInt(9),
+		ticks:     big.NewInt(10),
+		bitmap:    big.NewInt(11),
+	}
+	v3LayoutPangolin = v3Layout{
+		slot0:     big.NewInt(5),
 		liquidity: big.NewInt(9),
 		ticks:     big.NewInt(10),
 		bitmap:    big.NewInt(11),
@@ -68,7 +75,7 @@ var (
 
 // v3ResolveLayout detects the storage layout for a V3 pool by trying slot0 reads.
 func v3ResolveLayout(read StateReader, poolAddress string) (*v3Layout, error) {
-	layouts := []*v3Layout{&v3LayoutStandard, &v3LayoutProxy}
+	layouts := []*v3Layout{&v3LayoutStandard, &v3LayoutProxy, &v3LayoutPangolin}
 	if pharaohV3Pools[poolAddress] {
 		layouts = []*v3Layout{&v3LayoutPharaohV1, &v3LayoutPharaohV2}
 	}

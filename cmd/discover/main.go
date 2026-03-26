@@ -378,7 +378,7 @@ func main() {
 	for _, c := range candidates {
 		p := c.pool
 		amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-		calldata := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, p.Tokens[0], p.Tokens[1], amountIn)
+		calldata := pathfinder.EncodeSwapSingleWithExtra(p.Address, p.PoolType, p.Tokens[0], p.Tokens[1], amountIn, p.ExtraData)
 		cs.Reset()
 		evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 	}
@@ -414,7 +414,7 @@ func main() {
 			}
 
 			// Step 1: EVM probe with base amount
-			evmOut := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, baseAmount)
+			evmOut := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, baseAmount, p.ExtraData)
 
 			// Step 2: Formula probe with base amount
 			pq := pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
@@ -430,7 +430,7 @@ func main() {
 			for mult := uint64(1); mult <= 10; mult++ {
 				testAmount := new(uint256.Int).Mul(baseAmount, uint256.NewInt(mult))
 
-				evmResult := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, testAmount)
+				evmResult := evmQuote(evmCtx, cs, p.Address, p.PoolType, tokenIn, tokenOut, testAmount, p.ExtraData)
 
 				// Rebuild formula quoter for each test (clean state)
 				pq = pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
@@ -530,8 +530,8 @@ func main() {
 }
 
 // evmQuote runs a single-pool swap via EVM. Returns nil on revert (treated as zero).
-func evmQuote(evmCtx *statedb.CachedContext, cs *statedb.CallState, pool common.Address, poolType int, tokenIn, tokenOut common.Address, amount *uint256.Int) *uint256.Int {
-	calldata := pathfinder.EncodeSwapSingle(pool, poolType, tokenIn, tokenOut, amount)
+func evmQuote(evmCtx *statedb.CachedContext, cs *statedb.CallState, pool common.Address, poolType int, tokenIn, tokenOut common.Address, amount *uint256.Int, extraData string) *uint256.Int {
+	calldata := pathfinder.EncodeSwapSingleWithExtra(pool, poolType, tokenIn, tokenOut, amount, extraData)
 	cs.Reset()
 	ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 	if evmErr != nil || len(ret) < 32 {

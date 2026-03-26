@@ -75,6 +75,9 @@ const proxyImplSlot = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582
 // zeroForOne: true if swapping token0 -> token1.
 func QuotePharaohV1(state *PharaohV1State, amountIn *big.Int, zeroForOne bool) *big.Int {
 	out := quotePharaohV1Internal(state, amountIn, zeroForOne, state.FeeBps)
+	if out == nil {
+		return nil
+	}
 	if state.SubtractOne && out.Sign() > 0 {
 		out.Sub(out, big.NewInt(1))
 	}
@@ -150,6 +153,11 @@ func getAmountOutStable(state *PharaohV1State, amountIn *big.Int, zeroForOne boo
 	// y = reserveB - get_y(amountInNorm + reserveA, xy, reserveB)
 	xNew := new(big.Int).Add(amountInNorm, reserveA)
 	yNew := getY(xNew, xy, reserveB, e18)
+	if yNew.Sign() <= 0 {
+		// Newton-Raphson converged to zero or negative — output would equal
+		// the entire reserve, which Solidity's swap() rejects (amount < reserve).
+		return nil
+	}
 	dy := new(big.Int).Sub(reserveB, yNew)
 
 	// De-normalize to output token decimals
@@ -298,7 +306,13 @@ func getY(x0, xy, y0, e18 *big.Int) *big.Int {
 				return y
 			}
 			dy.Div(dy, dVal)
-			y.Sub(y, dy)
+			// In Solidity 0.8+, y - dy reverts on underflow.
+			// Clamp to zero to match: the pool can't be swapped at this size.
+			if dy.Cmp(y) > 0 {
+				y.SetInt64(0)
+			} else {
+				y.Sub(y, dy)
+			}
 		}
 
 		// Convergence: |y - yPrev| <= 1

@@ -249,12 +249,10 @@ func main() {
 	poolLimit := 4000
 	skipFormulas := false
 
-	correctnessMode := false
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) { stateServerURL = os.Args[i+1] }
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
 		if arg == "--skip-formulas" { skipFormulas = true }
-		if arg == "--correctness" { correctnessMode = true }
 	}
 
 	_, state, cfg, err := connectStateServer(stateServerURL)
@@ -279,252 +277,13 @@ func main() {
 	// Register Balancer V2 pools from state
 	registerBalancerV2Pools(pools, state, cfg, registry)
 
-	// Mark pool types with no formula implementation as FormulaNoImpl.
-	// This causes PoolManager.Get() to cache a deadPoolQuoter instead of
-	// returning nil, preventing any EVM fallback for these pools.
-	noImplTypes := map[int]bool{
-		5:  true, // woofi_v2
-		12: true, // wombat
-		13: true, // platypus
-		17: true, // cavalre
-		18: true, // kyber_dmm
-		19: true, // synapse
-		20: true, // trident
-	}
-	noImplCount := 0
-	for _, p := range pools {
-		if noImplTypes[p.PoolType] {
-			_, known := registry.GetFormulaID(p.Address)
-			if !known {
-				registry.SetFormulaID(p.Address, formulas.FormulaNoImpl)
-				noImplCount++
-			}
-		}
-	}
-	if noImplCount > 0 {
-		fmt.Fprintf(os.Stderr, "[benchmark] marked %d no-impl pools (wombat/platypus/woofi/etc) as dead quoters\n", noImplCount)
-	}
-
 	// Build overrides for all tokens
 	overrides := router.BuildOverrides(ROUTER, pools)
 
 	// Apply overrides flat — no overlay indirection, CallState reads one layer
 	baseWithOverrides := pathfinder.ApplyOverridesFlat(state, overrides)
 
-	// ─── Correctness mode: compare formula vs EVM for every pool ───
-	if correctnessMode {
-		fmt.Fprintf(os.Stderr, "[correctness] comparing formula vs EVM for %d pools...\n", len(pools))
-		evmCtx := statedb.GetCachedContext(cfg)
-		cs := statedb.NewCallState(baseWithOverrides)
-		poolReader := func(addr common.Address, key common.Hash) common.Hash { return state.GetState(addr, key) }
-		pm := formulas.NewPoolManager(registry, poolReader)
-		pm.SetBlockTimestamp(cfg.Timestamp)
-		pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
-			result, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, to, data)
-			return result, err == nil
-		})
-		for i := range pools {
-			if len(pools[i].Tokens) >= 2 {
-				pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
-			}
-			pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
-		}
-
-		// Warm pass
-		for i := range pools {
-			p := &pools[i]
-			if len(p.Tokens) < 2 { continue }
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-			zeroForOne := p.Tokens[0].Cmp(p.Tokens[1]) < 0
-			if q := pm.Get(p.Address); q != nil { q.Quote(amountIn, zeroForOne) }
-			cd := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, p.Tokens[0], p.Tokens[1], amountIn)
-			cs.Reset()
-			evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, cd)
-		}
-
-		var total, match, mismatch, formulaOnly, evmOnly, bothFail int
-		for i := range pools {
-			p := &pools[i]
-			if len(p.Tokens) < 2 { continue }
-			for _, dir := range [][2]int{{0, 1}, {1, 0}} {
-				tokenIn, tokenOut := p.Tokens[dir[0]], p.Tokens[dir[1]]
-				amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-				zeroForOne := tokenIn.Cmp(tokenOut) < 0
-				total++
-
-				// Formula result
-				var formulaOut *uint256.Int
-				if q := pm.Get(p.Address); q != nil {
-					formulaOut, _ = q.Quote(amountIn, zeroForOne)
-				}
-
-				// EVM result
-				cd := pathfinder.EncodeSwapSingle(p.Address, p.PoolType, tokenIn, tokenOut, amountIn)
-				cs.Reset()
-				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, cd)
-				var evmOut *uint256.Int
-				if evmErr == nil && len(ret) >= 32 {
-					var out uint256.Int
-					out.SetBytes(ret[:32])
-					if !out.IsZero() { evmOut = &out }
-				}
-
-				if formulaOut == nil && evmOut == nil {
-					bothFail++
-				} else if formulaOut == nil && evmOut != nil {
-					evmOnly++
-				} else if formulaOut != nil && evmOut == nil {
-					formulaOnly++
-				} else if formulaOut.Eq(evmOut) {
-					match++
-				} else {
-					// Check relative error against tolerance threshold.
-					// LFJ V2 pools (poolType 3) use _received() which includes untracked
-					// dust tokens in the pool. This inflates the EVM's effective input
-					// relative to the formula's exact input, causing small discrepancies.
-					// Use 10 PPM tolerance for LFJ V2; 0.01 PPM for other pool types.
-					var diff uint256.Int
-					if formulaOut.Gt(evmOut) {
-						diff.Sub(formulaOut, evmOut)
-					} else {
-						diff.Sub(evmOut, formulaOut)
-					}
-					// For LFJ V2 (poolType 3): diff/evmOut < 1e-5 ⟺ diff * 1e5 < evmOut
-					// For others: diff/evmOut < 1e-8 ⟺ diff * 1e8 < evmOut
-					var scaled uint256.Int
-					if p.PoolType == 3 {
-						scaled.Mul(&diff, uint256.NewInt(100_000))
-					} else {
-						scaled.Mul(&diff, uint256.NewInt(100_000_000))
-					}
-					if scaled.Lt(evmOut) {
-						match++
-					} else {
-						mismatch++
-						if mismatch <= 200 {
-							fmt.Fprintf(os.Stderr, "  MISMATCH %s dir=%d formula=%s evm=%s\n",
-								p.Address.Hex()[:12], dir[0], formulaOut.Dec(), evmOut.Dec())
-						}
-					}
-				}
-			}
-		}
-		pct := 0.0
-		if match+mismatch > 0 { pct = float64(match) / float64(match+mismatch) * 100 }
-		fmt.Fprintf(os.Stderr, "\n[correctness] %d total, %d match, %d mismatch, %d formula-only, %d evm-only, %d both-fail\n",
-			total, match, mismatch, formulaOnly, evmOnly, bothFail)
-		fmt.Fprintf(os.Stderr, "[correctness] %.1f%% correct (%d/%d)\n", pct, match, match+mismatch)
-
-		// Log result
-		gitHash := "unknown"
-		if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
-			gitHash = strings.TrimSpace(string(out))
-		}
-		ts := time.Now().Format("2006-01-02_15:04")
-		result := fmt.Sprintf("%.0f", pct)
-		line := fmt.Sprintf("time=%s git=%s result=%s match=%d mismatch=%d formula_only=%d evm_only=%d\n",
-			ts, gitHash, result, match, mismatch, formulaOnly, evmOnly)
-		f, err := os.OpenFile("benchmark_results/evm_correctness.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err == nil { f.WriteString(line); f.Close() }
-		fmt.Printf(`{"correctness": %s, "match": %d, "mismatch": %d}`+"\n", result, match, mismatch)
-		return
-	}
-
-	// Pre-build PoolManager for struct-based quoting
-	warmReader := func(addr common.Address, key common.Hash) common.Hash {
-		return state.GetState(addr, key)
-	}
-	warmPM := formulas.NewPoolManager(registry, warmReader)
-	warmPM.SetBlockTimestamp(cfg.Timestamp)
-	warmPM.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
-		result, _, err := statedb.ExecuteCall(state, cfg, DUMMY_SENDER, to, data)
-		return result, err == nil
-	})
-	for i := range pools {
-		if len(pools[i].Tokens) >= 2 {
-			warmPM.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
-		}
-		warmPM.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
-	}
-
-	// Warm passes before the hot (timed) pass.
-	// Default 2: first builds pool structs + JUMPDEST caches, second warms CPU caches.
-	numPasses := 2
-	for i, arg := range os.Args {
-		if arg == "--passes" && i+1 < len(os.Args) {
-			fmt.Sscanf(os.Args[i+1], "%d", &numPasses)
-		}
-	}
-	for pass := 1; pass <= numPasses; pass++ {
-		passT0 := time.Now()
-		quoteAll(baseWithOverrides, cfg, registry, pools, skipFormulas, state, warmPM)
-		fmt.Fprintf(os.Stderr, "[benchmark] pass %d: %dms\n", pass, time.Since(passT0).Milliseconds())
-	}
-
-	// Per-type stats
-	type typeStats struct {
-		FormulaCount  int     `json:"formulaCount"`
-		EVMCount      int     `json:"evmCount"`
-		OkCount       int     `json:"okCount"`
-		FailCount     int     `json:"failCount"`
-		FormulaMs     float64 `json:"formulaMs"`
-		EVMMs         float64 `json:"evmMs"`
-		FormulaReadNs int64   // total nanoseconds in storage reads
-		FormulaMathNs int64   // total nanoseconds in math (total - reads)
-		FormulaReads  int     // total storage read count
-	}
-	byType := make(map[int]*typeStats)
-	getStats := func(poolType int) *typeStats {
-		if s, ok := byType[poolType]; ok {
-			return s
-		}
-		s := &typeStats{}
-		byType[poolType] = s
-		return s
-	}
-
-	// Pool type names for display
-	typeNames := map[int]string{
-		0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
-		4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
-		8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
-		13: "platypus", 16: "balancer_v2", 17: "cavalre", 18: "kyber_dmm",
-		19: "synapse", 20: "trident",
-	}
-
-	// Hot pass with timing — uses CallState (thin overlay) + CallerContract (JUMPDEST sharing)
-	fmt.Fprintf(os.Stderr, "[benchmark] hot pass...\n")
-
-	// Profiling for hot pass
-	var cpuProfile, memProfile, profileMode string
-	for i, arg := range os.Args {
-		if arg == "--cpuprofile" && i+1 < len(os.Args) { cpuProfile = os.Args[i+1] }
-		if arg == "--memprofile" && i+1 < len(os.Args) { memProfile = os.Args[i+1] }
-		if arg == "--profile-mode" && i+1 < len(os.Args) { profileMode = os.Args[i+1] }
-	}
-	if cpuProfile != "" {
-		f, _ := os.Create(cpuProfile)
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
-	if memProfile != "" {
-		defer func() {
-			f, _ := os.Create(memProfile)
-			pprof.WriteHeapProfile(f)
-			f.Close()
-		}()
-	}
-	// profileMode: "formulas-only" skips EVM, "evm-only" skips formulas (same as --skip-formulas)
-	if profileMode == "evm-only" {
-		skipFormulas = true
-	}
-
-	t0 := time.Now()
-
-	evmCtx := statedb.GetCachedContext(cfg)
-	cs := statedb.NewCallState(baseWithOverrides)
-
-	// Pool manager: struct-based quoting (reads state once, quotes from memory)
+	// Build PoolManager
 	poolReader := func(addr common.Address, key common.Hash) common.Hash {
 		return state.GetState(addr, key)
 	}
@@ -541,6 +300,37 @@ func main() {
 		pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
 
+	// Profiling flags (apply to hot pass only)
+	var cpuProfile, memProfile string
+	for i, arg := range os.Args {
+		if arg == "--cpuprofile" && i+1 < len(os.Args) { cpuProfile = os.Args[i+1] }
+		if arg == "--memprofile" && i+1 < len(os.Args) { memProfile = os.Args[i+1] }
+	}
+	if cpuProfile != "" {
+		f, _ := os.Create(cpuProfile)
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+	if memProfile != "" {
+		defer func() {
+			f, _ := os.Create(memProfile)
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}()
+	}
+
+	// ─── Pass 1: EVM ground truth (not timed) ───
+	// Run EVM for every pool, store results. Also warms JUMPDEST caches.
+	type quoteKey struct {
+		pool common.Address
+		dir  int
+	}
+	evmGround := make(map[quoteKey]uint256.Int) // zero value = zero output
+	evmCtx := statedb.GetCachedContext(cfg)
+	cs := statedb.NewCallState(baseWithOverrides)
+
+	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth)...")
+	p1t0 := time.Now()
 	for i := range pools {
 		pool := &pools[i]
 		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
@@ -550,108 +340,189 @@ func main() {
 			tokenIn := pool.Tokens[tokenIdx[0]]
 			tokenOut := pool.Tokens[tokenIdx[1]]
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-			ts := getStats(pool.PoolType)
-			zeroForOne := tokenIn.Cmp(tokenOut) < 0
-
-			// Try pool struct first (pure math, zero state access, no calldata needed)
-			if !skipFormulas {
-				if quoter := pm.Get(pool.Address); quoter != nil {
-					ft0 := time.Now()
-					if out, ok := quoter.Quote(amountIn, zeroForOne); ok {
-						elapsed := time.Since(ft0).Nanoseconds()
-						ts.FormulaCount++
-						ts.FormulaMs += float64(elapsed) / 1e6
-						ts.FormulaMathNs += elapsed
-						ts.OkCount++
-						_ = out
-						continue
-					}
-					// Struct exists but returned zero — fall through to EVM
-					// Don't skip: these pools may have real liquidity that only EVM can quote
-				}
-				// No struct (LFJ V2, Algebra) — fallback to function-based formula
-				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
-				var readCount int
-				var readNs int64
-				ft0 := time.Now()
-				reader := func(addr common.Address, key common.Hash) common.Hash {
-					rt0 := time.Now()
-					val := state.GetState(addr, key)
-					readNs += time.Since(rt0).Nanoseconds()
-					readCount++
-					return val
-				}
-				if ret, ok := registry.TryQuote(reader, calldata); ok {
-					totalNs := time.Since(ft0).Nanoseconds()
-					mathNs := totalNs - readNs
-					ts.FormulaCount++
-					ts.FormulaMs += float64(totalNs) / 1e6
-					ts.FormulaReadNs += readNs
-					ts.FormulaMathNs += mathNs
-					ts.FormulaReads += readCount
-					var out uint256.Int
-					out.SetBytes(ret)
-					if !out.IsZero() {
-						ts.OkCount++
-					} else {
-						ts.FailCount++
-					}
-					continue
-				}
-			}
-
-			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
-
-
-			// EVM fallback — skip if profiling formulas only
-			if profileMode == "formulas-only" {
-				ts.FailCount++
-				continue
-			}
-			et0 := time.Now()
+			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 			cs.Reset()
 			ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
-			elapsed := float64(time.Since(et0).Microseconds()) / 1000.0
-			ts.EVMCount++
-			ts.EVMMs += elapsed
+			key := quoteKey{pool.Address, tokenIdx[0]}
 			if evmErr == nil && len(ret) >= 32 {
 				var out uint256.Int
 				out.SetBytes(ret[:32])
-				if !out.IsZero() {
-					ts.OkCount++
-				} else {
-					ts.FailCount++
+				evmGround[key] = out // zero stays zero
+			}
+			// not in map = zero (default)
+		}
+	}
+	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p1t0).Milliseconds())
+
+	// ─── Pass 2: Warm-up (not timed) ───
+	// Full production path: formula where available, EVM fallback where not.
+	// Builds pool structs, warms CPU + JUMPDEST caches.
+	fmt.Fprintf(os.Stderr, "[benchmark] pass 2 (warm-up)...")
+	p2t0 := time.Now()
+	for i := range pools {
+		pool := &pools[i]
+		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
+			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
+				continue
+			}
+			tokenIn := pool.Tokens[tokenIdx[0]]
+			tokenOut := pool.Tokens[tokenIdx[1]]
+			zeroForOne := tokenIn.Cmp(tokenOut) < 0
+			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+
+			quoted := false
+			if !skipFormulas {
+				if quoter := pm.Get(pool.Address); quoter != nil {
+					if out, ok := quoter.Quote(amountIn, zeroForOne); ok && out != nil && !out.IsZero() {
+						quoted = true
+					}
 				}
+			}
+			if !quoted {
+				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
+				cs.Reset()
+				evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+			}
+		}
+	}
+	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p2t0).Milliseconds())
+
+	// ─── Pass 3: Hot pass (timed + correctness) ───
+	// Full production path: formula where available, EVM fallback where not.
+	// Compare result against Pass 1 ground truth.
+	type typeStats struct {
+		Quotes    int     // total quotes (2 per pool)
+		HotMs     float64 // hot pass execution time (formula or EVM)
+		Match     int     // result == EVM ground truth
+		Mismatch  int     // result != EVM ground truth
+		NonZero   int     // EVM ground truth was non-zero
+		Formula   int     // quotes handled by formula
+		EVM       int     // quotes handled by EVM fallback
+	}
+	byType := make(map[int]*typeStats)
+	getStats := func(poolType int) *typeStats {
+		if s, ok := byType[poolType]; ok {
+			return s
+		}
+		s := &typeStats{}
+		byType[poolType] = s
+		return s
+	}
+
+	typeNames := map[int]string{
+		0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
+		4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
+		8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
+		13: "platypus", 16: "balancer_v2", 17: "cavalre", 18: "kyber_dmm",
+		19: "synapse", 20: "trident",
+	}
+
+	fmt.Fprintf(os.Stderr, "[benchmark] pass 3 (hot pass)...\n")
+
+	var mismatchLog []string
+	t0 := time.Now()
+
+	for i := range pools {
+		pool := &pools[i]
+		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
+			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
+				continue
+			}
+			ts := getStats(pool.PoolType)
+			ts.Quotes++
+			tokenIn := pool.Tokens[tokenIdx[0]]
+			tokenOut := pool.Tokens[tokenIdx[1]]
+			zeroForOne := tokenIn.Cmp(tokenOut) < 0
+			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+
+			// EVM ground truth (zero if not in map)
+			key := quoteKey{pool.Address, tokenIdx[0]}
+			evmResult := evmGround[key] // zero value if missing
+			if !evmResult.IsZero() {
+				ts.NonZero++
+			}
+
+			// Production path: formula first, EVM fallback
+			var result uint256.Int // zero by default
+			qt0 := time.Now()
+			quoted := false
+			if !skipFormulas {
+				if quoter := pm.Get(pool.Address); quoter != nil {
+					if out, ok := quoter.Quote(amountIn, zeroForOne); ok && out != nil {
+						result = *out
+						quoted = true
+						ts.Formula++
+					}
+				}
+			}
+			if !quoted {
+				// EVM fallback
+				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
+				cs.Reset()
+				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+				if evmErr == nil && len(ret) >= 32 {
+					result.SetBytes(ret[:32])
+				}
+				ts.EVM++
+			}
+			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
+
+			// Compare against ground truth
+			if result.Eq(&evmResult) {
+				ts.Match++
 			} else {
-				ts.FailCount++
+				// Tolerance check for rounding (LFJ V2 dust, etc.)
+				var diff uint256.Int
+				if result.Gt(&evmResult) {
+					diff.Sub(&result, &evmResult)
+				} else {
+					diff.Sub(&evmResult, &result)
+				}
+				var scaled uint256.Int
+				if pool.PoolType == 3 {
+					scaled.Mul(&diff, uint256.NewInt(100_000)) // 10 PPM
+				} else {
+					scaled.Mul(&diff, uint256.NewInt(100_000_000)) // 0.01 PPM
+				}
+				denom := &evmResult
+				if result.Gt(&evmResult) { denom = &result }
+				if !denom.IsZero() && scaled.Lt(denom) {
+					ts.Match++
+				} else {
+					ts.Mismatch++
+					if len(mismatchLog) < 200 {
+						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s",
+							pool.Address.Hex(), tokenIdx[0], result.Dec(), evmResult.Dec()))
+					}
+				}
 			}
 		}
 	}
 
-	totalMs := float64(time.Since(t0).Milliseconds())
+	// Print mismatches
+	for _, line := range mismatchLog {
+		fmt.Fprintln(os.Stderr, line)
+	}
 
 	// Print per-type breakdown
-	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %8s %8s %8s %6s %6s %8s\n",
-		"TYPE", "POOLS", "FORMULA", "F_MS", "READ_MS", "MATH_MS", "READS", "EVM", "E_MS")
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 90))
+	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %6s %8s %6s %6s %8s\n",
+		"TYPE", "POOLS", "QUOTES", "FMLA", "EVM", "MS", "MATCH", "MISS", "NONZERO%")
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
 
-	var totalFormula, totalEVM, totalOk, totalFail int
-	var totalFormulaMs, totalEVMMs float64
-	var totalReadNs, totalMathNs int64
-	var totalReads int
+	var totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla, totalEvm int
+	var totalHotMs float64
 
-	// Sort by total time descending
 	type sortEntry struct {
 		poolType int
-		totalMs  float64
+		ms       float64
 	}
 	var sorted []sortEntry
 	for pt, s := range byType {
-		sorted = append(sorted, sortEntry{pt, s.FormulaMs + s.EVMMs})
+		sorted = append(sorted, sortEntry{pt, s.HotMs})
 	}
 	for i := 0; i < len(sorted); i++ {
 		for j := i + 1; j < len(sorted); j++ {
-			if sorted[j].totalMs > sorted[i].totalMs {
+			if sorted[j].ms > sorted[i].ms {
 				sorted[i], sorted[j] = sorted[j], sorted[i]
 			}
 		}
@@ -663,72 +534,73 @@ func main() {
 		if name == "" {
 			name = fmt.Sprintf("type_%d", e.poolType)
 		}
-		poolCount := (s.FormulaCount + s.EVMCount) / 2
-		readMs := float64(s.FormulaReadNs) / 1e6
-		mathMs := float64(s.FormulaMathNs) / 1e6
-		readsPerQuote := 0
-		if s.FormulaCount > 0 {
-			readsPerQuote = s.FormulaReads / s.FormulaCount
-		}
-		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %8.1f %8.1f %8.1f %6d %6d %8.1f\n",
-			name, poolCount, s.FormulaCount, s.FormulaMs, readMs, mathMs, readsPerQuote, s.EVMCount, s.EVMMs)
-		totalFormula += s.FormulaCount
-		totalEVM += s.EVMCount
-		totalFormulaMs += s.FormulaMs
-		totalEVMMs += s.EVMMs
-		totalOk += s.OkCount
-		totalFail += s.FailCount
-		totalReadNs += s.FormulaReadNs
-		totalMathNs += s.FormulaMathNs
-		totalReads += s.FormulaReads
+		poolCount := s.Quotes / 2
+		nzPct := 0.0
+		if s.Quotes > 0 { nzPct = float64(s.NonZero) / float64(s.Quotes) * 100 }
+		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
+			name, poolCount, s.Quotes, s.Formula, s.EVM, s.HotMs, s.Match, s.Mismatch, nzPct)
+		totalQuotes += s.Quotes
+		totalMatch += s.Match
+		totalMismatch += s.Mismatch
+		totalNonZero += s.NonZero
+		totalFmla += s.Formula
+		totalEvm += s.EVM
+		totalHotMs += s.HotMs
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 90))
-	totalQuotes := totalFormula + totalEVM
-	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %8.1f %8.1f %8.1f %6s %6d %8.1f\n",
-		"TOTAL", len(pools), totalFormula, totalFormulaMs,
-		float64(totalReadNs)/1e6, float64(totalMathNs)/1e6, "", totalEVM, totalEVMMs)
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
+	totalNzPct := 0.0
+	if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
+		"TOTAL", len(pools), totalQuotes, totalFmla, totalEvm, totalHotMs, totalMatch, totalMismatch, totalNzPct)
+
+	// Correctness summary
+	correctPct := 0.0
+	if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
+	totalMs := float64(time.Since(t0).Nanoseconds()) / 1e6
+	msPerPool := totalMs / float64(len(pools))
+	fmt.Fprintf(os.Stderr, "\n[result] %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero, %.1f ms total (%.4f ms/pool)\n",
+		correctPct, totalMatch, totalMismatch, totalNzPct, totalMs, msPerPool)
 
 	// JSON output
-	msPerPool := totalMs / float64(len(pools))
 	result := map[string]interface{}{
-		"pools":        len(pools),
-		"totalQuotes":  totalQuotes,
-		"okCount":      totalOk,
-		"failCount":    totalFail,
-		"totalMs":      totalMs,
-		"formulaCount": totalFormula,
-		"evmCount":     totalEVM,
-		"formulaMs":    fmt.Sprintf("%.1f", totalFormulaMs),
-		"evmMs":        fmt.Sprintf("%.1f", totalEVMMs),
-		"msPerPool":    fmt.Sprintf("%.3f", msPerPool),
+		"pools":       len(pools),
+		"quotes":      totalQuotes,
+		"formula":     totalFmla,
+		"evm":         totalEvm,
+		"totalMs":     fmt.Sprintf("%.1f", totalMs),
+		"msPerPool":   fmt.Sprintf("%.4f", msPerPool),
+		"match":       totalMatch,
+		"mismatch":    totalMismatch,
+		"correctness": fmt.Sprintf("%.1f", correctPct),
+		"nonZeroPct":  fmt.Sprintf("%.1f", totalNzPct),
 	}
 
 	out, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(out))
 
-	// Append to benchmark_results/evm_speed.log for regression tracking
+	// Append to benchmark_results/benchmark.log
 	var logResult string
 	for i, arg := range os.Args {
 		if arg == "--log" && i+1 < len(os.Args) { logResult = os.Args[i+1] }
 	}
-	if logResult == "" && !skipFormulas && profileMode == "" {
-		logResult = "benchmark_results/evm_speed.log"
+	if logResult == "" && !skipFormulas {
+		logResult = "benchmark_results/benchmark.log"
 	}
 	if logResult != "" {
 		gitHash := "unknown"
-		if out, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); err == nil {
-			gitHash = strings.TrimSpace(string(out))
+		if gitOut, gitErr := exec.Command("git", "rev-parse", "--short", "HEAD").Output(); gitErr == nil {
+			gitHash = strings.TrimSpace(string(gitOut))
 		}
-		ts := time.Now().Format("2006-01-02_15:04")
-		line := fmt.Sprintf("time=%s git=%s result=%.3f pools=%d formulas=%d evm=%d ok=%d\n",
-			ts, gitHash, msPerPool, len(pools), totalFormula, totalEVM, totalOk)
+		logTs := time.Now().Format("2006-01-02_15:04")
+		line := fmt.Sprintf("time=%s git=%s ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d evm=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
+			logTs, gitHash, msPerPool, totalMs, len(pools), totalFmla, totalEvm, totalMatch, totalMismatch, correctPct, totalNzPct)
 		os.MkdirAll("benchmark_results", 0o755)
-		f, err := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-		if err == nil {
-			f.WriteString(line)
-			f.Close()
-			fmt.Fprintf(os.Stderr, "\nLogged to %s: %.3f ms/pool\n", logResult, msPerPool)
+		logF, logErr := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if logErr == nil {
+			logF.WriteString(line)
+			logF.Close()
+			fmt.Fprintf(os.Stderr, "\nLogged to %s\n", logResult)
 		}
 	}
 }
@@ -784,41 +656,6 @@ func registerV4Pools(pools []pathfinder.Pool) {
 	}
 	if count > 0 {
 		fmt.Fprintf(os.Stderr, "[benchmark] registered %d V4 pools\n", count)
-	}
-}
-
-func quoteAll(base *statedb.StateDB, cfg statedb.EVMConfig, registry *formulas.Registry, pools []pathfinder.Pool, skipFormulas bool, rawState *statedb.StateDB, pm *formulas.PoolManager) {
-	evmCtx := statedb.GetCachedContext(cfg)
-	cs := statedb.NewCallState(base)
-	for i := range pools {
-		pool := &pools[i]
-		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-				continue
-			}
-			tokenIn := pool.Tokens[tokenIdx[0]]
-			tokenOut := pool.Tokens[tokenIdx[1]]
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-			zeroForOne := tokenIn.Cmp(tokenOut) < 0
-
-			if !skipFormulas {
-				// Try pool struct
-				if quoter := pm.Get(pool.Address); quoter != nil {
-					quoter.Quote(amountIn, zeroForOne)
-					continue // formula quoter exists — skip EVM even if quote returns 0 (empty pool)
-				}
-				// Fallback to function-based formula
-				calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
-				reader := func(addr common.Address, key common.Hash) common.Hash { return rawState.GetState(addr, key) }
-				if _, ok := registry.TryQuote(reader, calldata); ok {
-					continue
-				}
-			}
-
-			calldata := pathfinder.EncodeSwapSingle(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn)
-			cs.Reset()
-			evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
-		}
 	}
 }
 

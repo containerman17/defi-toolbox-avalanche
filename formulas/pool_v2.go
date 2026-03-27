@@ -107,9 +107,5 @@ func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	var result uint256.Int
 	result.Div(&num, &den)
 
-	if result.IsZero() {
-		return nil, false
-	}
-
 	return &result, true
 }

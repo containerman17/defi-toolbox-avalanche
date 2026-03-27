@@ -32,6 +32,7 @@ type Scanner struct {
 	pt           *PoolTable
 	cyclesByPool map[uint16][]int32 // poolIdx → cycle indices (int32 saves memory at >1M cycles)
 	hub          common.Address
+	MaxSize      *uint256.Int // max trade size (set from wallet balance)
 }
 
 func NewScanner(cycles []Cycle, pm *formulas.PoolManager, pt *PoolTable, hub common.Address) *Scanner {
@@ -142,6 +143,7 @@ func (s *Scanner) OnBlock(
 	phase1Time := time.Since(t0)
 
 	// ── Phase 2: Sequential formula quoting ──────────────────────
+	// For each unique cycle in top candidates, try ALL size buckets to find optimal size.
 	t1 := time.Now()
 	type formulaResult struct {
 		candidate
@@ -152,30 +154,55 @@ func (s *Scanner) OnBlock(
 	var results []formulaResult
 	var nearMisses []formulaResult
 
+	// Deduplicate cycles — try all sizes for each
+	triedCycles := make(map[int]bool)
 	for _, cand := range candidates {
-		c := &s.cycles[cand.cycleIdx]
-		amountIn := SizeBuckets[cand.size]
-
-		out := s.sequentialQuote(c, amountIn)
-		if out == nil || out.IsZero() {
+		if triedCycles[cand.cycleIdx] {
 			continue
 		}
+		triedCycles[cand.cycleIdx] = true
 
-		inF := float64FromU256(amountIn)
-		outF := float64FromU256(out)
-		profitF := outF - inF
+		c := &s.cycles[cand.cycleIdx]
+		var bestFR *formulaResult
+		var bestNM *formulaResult
 
-		fr := formulaResult{
-			candidate: cand,
-			amountIn:  new(uint256.Int).Set(amountIn),
-			amountOut: out,
-			profit:    profitF,
+		for size := 0; size < NumSizeBuckets; size++ {
+			amountIn := SizeBuckets[size]
+			if s.MaxSize != nil && amountIn.Cmp(s.MaxSize) > 0 {
+				continue
+			}
+			out := s.sequentialQuote(c, amountIn)
+			if out == nil || out.IsZero() {
+				continue
+			}
+
+			inF := float64FromU256(amountIn)
+			outF := float64FromU256(out)
+			profitF := outF - inF
+
+			fr := formulaResult{
+				candidate: candidate{cycleIdx: cand.cycleIdx, size: size, product: cand.product},
+				amountIn:  new(uint256.Int).Set(amountIn),
+				amountOut: out,
+				profit:    profitF,
+			}
+
+			if profitF > 0 {
+				if bestFR == nil || profitF > bestFR.profit {
+					bestFR = &fr
+				}
+			} else if inF > 0 && outF/inF > 0.99 {
+				if bestNM == nil || profitF > bestNM.profit {
+					bestNM = &fr
+				}
+			}
 		}
 
-		if profitF > 0 {
-			results = append(results, fr)
-		} else if inF > 0 && outF/inF > 0.99 {
-			nearMisses = append(nearMisses, fr)
+		if bestFR != nil {
+			results = append(results, *bestFR)
+		}
+		if bestNM != nil {
+			nearMisses = append(nearMisses, *bestNM)
 		}
 	}
 
@@ -208,13 +235,15 @@ func (s *Scanner) OnBlock(
 				continue
 			}
 
+			// swap() returns gross amountOut. Profit = out - in - gasCost.
 			gasCost := gasUsed * gasPrice
 			gasCostU := new(uint256.Int).SetUint64(gasCost)
+			totalCost := new(uint256.Int).Add(r.amountIn, gasCostU)
 			var evmProfit float64
-			if evmOut.Cmp(gasCostU) > 0 {
-				evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, gasCostU))
+			if evmOut.Cmp(totalCost) > 0 {
+				evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, totalCost))
 			} else {
-				evmProfit = -(float64FromU256(new(uint256.Int).Sub(gasCostU, evmOut)))
+				evmProfit = -(float64FromU256(new(uint256.Int).Sub(totalCost, evmOut)))
 			}
 
 			if evmProfit > 0 && (bestOpp == nil || evmProfit > bestOpp.EVMProfit) {

@@ -417,8 +417,10 @@ func runBlockBenchmark(
 			var result uint256.Int
 			qt0 := time.Now()
 			quoted := false
+			quoterNil := true
 			if !skipFormulas {
 				if quoter := pm.Get(pool.Address); quoter != nil {
+					quoterNil = false
 					if out, ok := quoter.Quote(amountIn, zeroForOne); ok && out != nil {
 						result = *out
 						quoted = true
@@ -438,7 +440,7 @@ func runBlockBenchmark(
 				}
 				ts.EVM++
 				// Debug: log why formula was not used (dir=0 only to avoid dups)
-				if debugCoverage && tokenIdx[0] == 0 {
+				if debugCoverage && tokenIdx[0] == 0 && quoterNil {
 					fid, known := registry.GetFormulaID(pool.Address)
 					reason := "not_in_registry"
 					if known && fid < 0 {

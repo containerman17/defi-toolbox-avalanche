@@ -553,12 +553,14 @@ func main() {
 	skipFormulas := false
 	numBlocks := 1
 	debugCoverage := false
+	var singlePool string
 
 	for i, arg := range os.Args {
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
 		if arg == "--skip-formulas" { skipFormulas = true }
 		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
 		if arg == "--debug-coverage" { debugCoverage = true }
+		if arg == "--pool" && i+1 < len(os.Args) { singlePool = os.Args[i+1] }
 	}
 	if numBlocks < 1 { numBlocks = 1 }
 
@@ -570,6 +572,23 @@ func main() {
 
 	registry := formulas.LoadEmbeddedRegistry()
 	pools := poolcollector.EmbeddedPools(poolLimit)
+
+	// Filter to single pool if --pool specified
+	if singlePool != "" {
+		target := common.HexToAddress(singlePool)
+		var filtered []pathfinder.Pool
+		for i := range pools {
+			if pools[i].Address == target {
+				filtered = append(filtered, pools[i])
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			fmt.Fprintf(os.Stderr, "pool %s not found in pool list\n", singlePool)
+			os.Exit(1)
+		}
+		pools = filtered
+	}
 
 	validated, invalid := registry.RegistryStats()
 	fmt.Fprintf(os.Stderr, "[benchmark] registry: %d validated, %d invalid\n", validated, invalid)

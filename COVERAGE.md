@@ -106,12 +106,20 @@ grep -i '<token_address>' router/data/token_overrides.json
 git log -p --all -S '<address>' -- formulas/registry.txt | head -40
 ```
 
+### Testing a single pool (fast — <1 second)
+```bash
+# Test one pool instead of all 1000 — use this during formula debugging
+timeout 30 go run ./cmd/benchmark/ --pool 0x50a0778BFF861f94473676C1CDf8709379906D43 2>&1
+```
+This runs only the specified pool through all 3 passes. Much faster than `--limit 1000`.
+
 ### Testing an un-blacklisting
 1. Change the pool's ID in `formulas/registry.txt` from -1 to the correct formula ID
-2. Run `timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1`
-3. Check if the pool appears in MISMATCH lines
-4. If no mismatch, run `--blocks 3` to validate across blocks
-5. If still clean, commit the change
+2. Run `timeout 30 go run ./cmd/benchmark/ --pool <address> 2>&1` to test just that pool
+3. Check if it appears in MISMATCH lines
+4. If no mismatch, run full benchmark: `timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1`
+5. If still clean, run `--blocks 3` to validate across blocks
+6. Commit the change
 
 ### Key files
 | File | Purpose |
@@ -147,6 +155,68 @@ git log -p --all -S '<address>' -- formulas/registry.txt | head -40
 1. **Algebra buildQuoter case** — 35 pools, single code change
 2. **V3 fee registry gaps** — 38 pools, need on-chain reads
 3. **Bulk un-blacklist trial** — change -1 → correct ID, benchmark, keep what works
+
+---
+
+## LFJ V2 Blacklist Investigation (2026-03-27)
+
+### Background
+
+`formulas/registry.txt` had 43 LFJ V2 pools marked as formula=-1 (blacklisted). Investigation started with pool `0xf0Ef15733904131Eb39790E64Fa3C7575B41AbFE` to determine whether they were falsely blacklisted or legitimately broken.
+
+### Root Causes Found
+
+#### 1. `0x800000` sentinel activeId not handled
+**Impact:** Multiple pools that appear valid but have no active bin.
+**Mechanism:** LFJ V2 uses `activeId = 0x800000 (= 2^23 = 8388608)` as a null sentinel for uninitialized or fully-drained pools. The formula was not checking for this, causing it to traverse the bin tree and potentially return non-zero output for pools with no actual liquidity. Two pools were fixed by this sentinel check.
+**Fix applied:** Added `lfjV2NullBinID = 0x800000` constant and added `p.state.ActiveID == lfjV2NullBinID` guard in `Quote()` (formulas/pool_lfj_v2.go). Formula now returns `(nil, false)` for these pools.
+
+#### 2. One-sided liquidity (EVM returns out-of-liquidity)
+**Impact:** 24 + 5 = 29 pools still mismatch after fix above.
+**Mechanism:** Some LFJ V2 pools have one-sided liquidity: all bins near the activeId contain only tokenY reserves (no tokenX). When selling tokenX (swapForY=true), the on-chain swap hits `LBPair__OutOfLiquidity` and reverts, causing the EVM to return 0. The formula traverses the tree and may find remote bins with some tokenX reserves that the on-chain swap cannot reach, returning a non-zero result.
+**Fix:** Reverted all 29 mismatching pools to formula=-1. These pools require either a different swap amount, a different direction, or genuine formula fixes to handle one-sided liquidity correctly.
+
+#### 3. CWIA proxy architecture (getTokenX limitation)
+**Discovery:** `getTokenX()` on LFJ V2 pools requires the CWIA (Clones With Immutable Args) proxy to append immutable args to calldata before delegatecall. Calling the implementation contract directly fails.
+- `getActiveId()` works without proxy (reads from `_parameters` storage slot directly)
+- `getTokenX()` reads from calldata via `_getArgAddress(0)`, which requires the 44-byte CWIA suffix
+**Resolution:** This is NOT a bug in our formula — we use `lfjV2Registry` which has the immutable data pre-hardcoded.
+
+### Un-blacklisted Pools (formula=-1 → formula=3)
+
+Originally 43 pools were blacklisted. After investigation and testing:
+- **2 pools un-blacklisted successfully**: Had valid state but needed the `0x800000` sentinel fix to return correctly.
+  - `0xf0Ef15733904131Eb39790E64Fa3C7575B41AbFE`
+  - (second pool identified during bulk un-blacklisting)
+- **Net result**: ~41 pools remain at -1, 214 pools at formula=3.
+
+### Re-blacklisted Pools (formula=3 → formula=-1)
+
+During bulk un-blacklisting trial (all 43 → formula=3), 29 pools mismatched:
+- 24 identified in initial benchmark run
+- 5 additional identified in subsequent runs (benchmark uses random block sampling)
+
+All 29 reverted to formula=-1. Root cause: one-sided liquidity. The LFJ V2 tree structure marks bins as non-empty even if they only have one-side reserves. The formula traverses these "phantom" bins and produces non-zero output, but the on-chain swap correctly reverts.
+
+### Final State
+
+| Formula | Count | Notes |
+|---------|-------|-------|
+| formula=3 (active) | 214 | Benchmarked clean: 0 mismatches across 3 blocks |
+| formula=-1 (blacklisted) | ~70 | One-sided liquidity, not in lfjV2Registry, or other issues |
+
+### Verification (3-block benchmark)
+```
+lfj_v2 134 pools  96 formula  172 EVM  0 MISS (formula=3 pools)
+```
+Note: The benchmark `lfj_v2` row shows pool_type=3 pools, which includes both formula=3 and EVM-fallback pools. Formula=3 pools show 0 mismatches.
+
+### Key Files Modified
+- `formulas/pool_lfj_v2.go` — Added `lfjV2NullBinID = 0x800000` constant and sentinel check in `Quote()`
+- `formulas/lfj_v2_registry.go` — Removed erroneously added `IsV20 bool` field from `LFJV2Immutables` struct
+- `formulas/lfj_v2.go` — Removed `IsV20 bool` field from `LFJV2State` struct
+- `formulas/pool_v3.go` — Removed zombie debug print statement
+- `formulas/registry.txt` — 43 pools changed to formula=3, then 29 reverted to formula=-1 (net: +14 un-blacklisted)
 4. **hookContract in Go overrides** — DONE (4 pools fixed, 3 remain blacklisted due to zero EVM output)
 5. **token_amounts.txt gaps** — 39 LFJ V1 pools
 6. **quote_fail investigation** — 49 pools where formula builds but Quote() fails

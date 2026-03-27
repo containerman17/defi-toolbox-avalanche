@@ -98,6 +98,47 @@ func BuildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 	return buildTokenOverrides(routerAddr, pools)
 }
 
+// BuildSingleTokenOverride creates a balance override for one token on the router.
+// Returns nil if the token has no known balance slot in token_overrides.json.
+func BuildSingleTokenOverride(routerAddr, token common.Address, amount *uint256.Int) *pathfinder.ParsedOverride {
+	entry, ok := overrideMap[token]
+	if !ok {
+		return nil
+	}
+
+	slot := computeBalanceSlot(routerAddr, entry)
+
+	var value common.Hash
+	if entry.Shift > 0 {
+		shifted := new(uint256.Int).Lsh(amount, uint(entry.Shift))
+		value = common.Hash(shifted.Bytes32())
+	} else {
+		value = common.Hash(amount.Bytes32())
+	}
+
+	po := pathfinder.ParsedOverride{
+		Addr: token,
+		Slots: []struct {
+			Slot  common.Hash
+			Value common.Hash
+		}{{Slot: slot, Value: value}},
+	}
+
+	for _, ds := range entry.DisableSlots {
+		dsHash := common.BigToHash(uint256.NewInt(uint64(ds)).ToBig())
+		po.Slots = append(po.Slots, struct {
+			Slot  common.Hash
+			Value common.Hash
+		}{Slot: dsHash, Value: common.Hash{}})
+	}
+
+	if entry.HookContract != "" {
+		// Hook neutralization needs a separate override — caller handles this
+	}
+
+	return &po
+}
+
 // BuildOverrides creates state overrides for the router bytecode + token balances.
 // Use this when the router code must be injected (e.g., evm-quoter SDK, LFJ backrunning).
 func BuildOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {

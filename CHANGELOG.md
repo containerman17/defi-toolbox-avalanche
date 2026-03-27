@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-27 — WAVAX cyclic arbitrage scanner
+
+### New `arb/` package + `cmd/arb` binary
+- 3-phase pipeline for WAVAX→...→WAVAX cyclic arbitrage detection:
+  - **Phase 1 — Rate screening**: maintains float64 rate table per pool (5 size buckets × 2 directions). On new block, re-quotes dirty pools, multiplies rates along cycles, ranks top 500 candidates.
+  - **Phase 2 — Sequential formula quoting**: feeds exact amounts through each hop sequentially (handles AMM nonlinearity). Ranks by formula profit.
+  - **Phase 3 — Time-budgeted EVM verification**: verifies top candidates through HayabusaRouter via full EVM execution. Capped at ~100ms. Reports real gas used.
+- Cycle enumeration: iterative-deepening DFS from WAVAX, 2–4 hops, formula-only pools. Reverse reachability pruning to cut dead-end branches early. Deduplication via canonical rotation.
+- Rate table: `float64` out/in ratios for instant cycle screening (millions of multiply-chains per ms).
+- Connects to state server via WebSocket (same pattern as `cmd/native`), tracks dirty pools via `InvalidateBySlot`.
+- Outputs EVM-verified profitable opportunities as JSON to stdout.
+
+### Files
+- `arb/cycles.go` — cycle enumeration with reachability pruning
+- `arb/rates.go` — per-pool rate table with 5 size buckets
+- `arb/scanner.go` — 3-phase pipeline orchestration
+- `arb/verify.go` — EVM verification via multi-hop executeSwap encoding
+- `cmd/arb/main.go` — standalone binary entry point
+
 ## 2026-03-27 — LFJ V2.0 pool support
 
 ### Added V2.0 storage layout for LFJ V2 (Liquidity Book) pools

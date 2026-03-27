@@ -104,14 +104,15 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		return nil
 	}
 
-	// Pre-load bitmap words centered on current tick (±200 words from current position)
+	// Pre-load bitmap words centered on current tick.
 	compressed := tick / tickSpacing
 	if tick < 0 && tick%tickSpacing != 0 {
 		compressed-- // round towards negative infinity
 	}
 	centerWord := int16(compressed >> 8)
-	bitmapMinWord := centerWord - 200
-	bitmapMaxWord := centerWord + 200
+	bitmapRadius := int16(200)
+	bitmapMinWord := centerWord - bitmapRadius
+	bitmapMaxWord := centerWord + bitmapRadius
 	bitmapWords := make(map[int16]uint256.Int)
 	for wordPos := bitmapMinWord; wordPos <= bitmapMaxWord; wordPos++ {
 		word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
@@ -123,10 +124,38 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		}
 	}
 
-	// Zombie pool detection: return nil for pools with non-zero liquidity but empty
-	// bitmap (tokens were removed without proper accounting). Falls back to EVM.
+	// If bitmap is empty but liquidity is non-zero, the pool likely has full-range
+	// positions with initialized ticks at MIN_TICK/MAX_TICK (e.g. compressed ±88727
+	// = words ±346). Extend the scan to cover the full tick range.
 	if len(bitmapWords) == 0 && !liquidity.IsZero() {
-		return nil
+		// Full-range: MIN_TICK/MAX_TICK compressed by tickSpacing, then >>8 for word
+		maxCompressed := int32(algebraMaxTick) / tickSpacing
+		fullRangeWord := int16(maxCompressed >> 8)
+		if fullRangeWord+1 > bitmapRadius {
+			extMin := centerWord - fullRangeWord - 1
+			extMax := centerWord + fullRangeWord + 1
+			// Only scan words outside the already-scanned range
+			for wordPos := extMin; wordPos < bitmapMinWord; wordPos++ {
+				word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
+				if err != nil {
+					continue
+				}
+				if !word.IsZero() {
+					bitmapWords[wordPos] = word
+				}
+			}
+			for wordPos := bitmapMaxWord + 1; wordPos <= extMax; wordPos++ {
+				word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)
+				if err != nil {
+					continue
+				}
+				if !word.IsZero() {
+					bitmapWords[wordPos] = word
+				}
+			}
+			bitmapMinWord = extMin
+			bitmapMaxWord = extMax
+		}
 	}
 
 	// Pre-load liquidityNet for all initialized ticks
@@ -296,6 +325,40 @@ func (p *V3Pool) precomputeSteps() {
 	}
 }
 
+// evmWouldComplete estimates whether the EVM would complete a full-range
+// swap without reverting from gas exhaustion. This is used when the formula
+// exhausts liquidity within the bitmap window to decide whether to return
+// partial output (EVM completes) or zero (EVM reverts).
+func (p *V3Pool) evmWouldComplete(zeroForOne bool) bool {
+	// Estimate EVM gas for a directional swap through bitmap words.
+	// Each swap loop iteration costs ~7000 gas (empirically calibrated):
+	//   SLOAD + getSqrtRatio + computeSwapStep + state management overhead.
+	// Each initialized tick crossing adds ~15K gas (SLOAD tick info + liquidity update).
+	const gasPerTick = 15000
+	const gasPerWord = 7000
+	const gasLimit = 5_000_000
+	const overheadGas = 200_000 // base cost + quoter overhead
+
+	// Direction-specific word count: from current tick to the range boundary.
+	var rangeWords int64
+	if zeroForOne {
+		// Going down: from current tick to MIN_TICK
+		rangeWords = (int64(p.tick) + int64(algebraMaxTick)) / int64(p.tickSpacing) / 256
+	} else {
+		// Going up: from current tick to MAX_TICK
+		rangeWords = (int64(algebraMaxTick) - int64(p.tick)) / int64(p.tickSpacing) / 256
+	}
+	if rangeWords < 0 {
+		rangeWords = 0
+	}
+
+	tickGas := int64(len(p.tickLiquidityNet)) * gasPerTick
+	wordGas := rangeWords * gasPerWord
+	totalGas := tickGas + wordGas + overheadGas
+
+	return totalGas < gasLimit
+}
+
 func (p *V3Pool) Address() common.Address {
 	return p.addr
 }
@@ -305,9 +368,9 @@ func (p *V3Pool) TickCount() int {
 	return len(p.tickLiquidityNet)
 }
 
-func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	var sqrtPriceX96, liquidity, amountRemaining, amountOut uint256.Int
@@ -323,12 +386,26 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		sqrtPriceLimitX96.Sub(u256MaxSqr, uint256.NewInt(1))
 	}
 
+	const maxSwapSteps = 500 // guard against gas-exhaustion in EVM (5M gas ≈ ~50 initialized crossings)
+	steps := 0
 	for !amountRemaining.IsZero() && !sqrtPriceX96.Eq(&sqrtPriceLimitX96) {
+		if steps >= maxSwapSteps {
+			// Too many crossings — EVM would revert from gas exhaustion.
+			return uint256.Int{}
+		}
+		steps++
 		nextTick, initialized, outOfRange := p.nextInitializedTick(tick, zeroForOne)
 		if outOfRange {
 			// Swap pushed price beyond the pre-loaded bitmap range.
-			// Return (nil, false) so the caller falls back to EVM.
-			return nil, false
+			// If liquidity is zero (all initialized ticks crossed) and the EVM
+			// would complete the remaining empty-word traversal without running
+			// out of gas, return the accumulated partial output. This handles
+			// the out-of-liquidity pattern where the swap exhausts all available
+			// liquidity but the remaining input exceeds what the pool can absorb.
+			if liquidity.IsZero() && p.evmWouldComplete(zeroForOne) {
+				return amountOut
+			}
+			return uint256.Int{}
 		}
 
 		if nextTick < algebraMinTick {
@@ -407,12 +484,7 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		}
 	}
 
-	if amountOut.IsZero() {
-		return nil, false
-	}
-
-	result := new(uint256.Int).Set(&amountOut)
-	return result, true
+	return amountOut
 }
 
 // nextInitializedTick scans ONE pre-loaded bitmap word (exact same as Solidity).

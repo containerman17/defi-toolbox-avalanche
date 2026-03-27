@@ -43,8 +43,8 @@ type nullLFJV2Pool struct {
 }
 
 func (p *nullLFJV2Pool) Address() common.Address { return p.addr }
-func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) (*uint256.Int, bool) {
-	return nil, false
+func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) uint256.Int {
+	return uint256.Int{}
 }
 
 // balanceOfSelector is the ERC20 balanceOf(address) function selector.
@@ -154,11 +154,10 @@ func (p *LFJV2Pool) SetBlockTimestamp(ts uint64) {
 	p.blockTimestamp = ts
 }
 
-func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint256.Int, ok bool) {
+func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256.Int) {
 	defer func() {
 		if r := recover(); r != nil {
-			result = nil
-			ok = false
+			result = uint256.Int{}
 		}
 	}()
 
@@ -167,7 +166,7 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 	// contract for uninitialized or fully-drained pools. Without an active bin, bin
 	// traversal would produce incorrect non-zero results from adjacent tree nodes.
 	if p.state.ActiveID == 0 || p.state.ActiveID == lfjV2NullBinID {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Map zeroForOne to swapForY:
@@ -194,18 +193,12 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 
 	amtIn := adjustedIn.ToBig()
 	out := QuoteLFJV2Fast(p.reader, p.state, p.layout, amtIn, swapForY, p.blockTimestamp)
-	if out == nil {
-		return nil, false
-	}
-	if out.Sign() <= 0 {
-		// Formula computed zero output (e.g. out-of-liquidity revert).
-		// Return zero with ok=true so the caller doesn't fall through to
-		// an expensive EVM call that would also revert.
-		return new(uint256.Int), true
+	if out == nil || out.Sign() <= 0 {
+		return uint256.Int{}
 	}
 	outU256, overflow := uint256.FromBig(out)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
-	return outU256, true
+	return *outU256
 }

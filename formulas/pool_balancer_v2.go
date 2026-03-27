@@ -76,12 +76,12 @@ func (p *BalancerV2Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	if amountIn.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 	if len(p.info.Tokens) < 2 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// For 2-token pools, zeroForOne maps directly to index 0→1 or 1→0.
@@ -99,7 +99,7 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	// The PoolQuoter interface only provides zeroForOne, which is insufficient
 	// to identify the token pair in a pool with >2 tokens.
 	if len(p.info.Tokens) > 2 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Read live balances from Vault storage.
@@ -122,11 +122,11 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 		}
 
 	default:
-		return nil, false
+		return uint256.Int{}
 	}
 
 	if rawBalIn == nil || rawBalOut == nil || rawBalIn.Sign() <= 0 || rawBalOut.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	sf := p.info.ScalingFactors
@@ -139,7 +139,7 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	feeAmount := fpMulUp(amountIn18, p.info.SwapFeePercentage)
 	amountInAfterFee := new(big.Int).Sub(amountIn18, feeAmount)
 	if amountInAfterFee.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Weighted math: amountOut18 = balOut18 * (1 - (balIn18/(balIn18+amountInAfterFee))^(wIn/wOut))
@@ -152,18 +152,18 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	)
 
 	if amountOut18 == nil || amountOut18.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Scale back from 18 decimals: amountOutRaw = amountOut18 / scalingFactorOut
 	amountOutRaw := new(big.Int).Div(amountOut18, sf[indexOut])
 	if amountOutRaw.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	result, overflow := uint256.FromBig(amountOutRaw)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
-	return result, true
+	return *result
 }

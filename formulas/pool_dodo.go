@@ -46,11 +46,10 @@ func (p *DODOPool) Address() common.Address {
 	return p.addr
 }
 
-func (p *DODOPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint256.Int, ok bool) {
+func (p *DODOPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256.Int) {
 	defer func() {
 		if r := recover(); r != nil {
-			result = nil
-			ok = false
+			result = uint256.Int{}
 		}
 	}()
 	amtIn := amountIn.ToBig()
@@ -59,11 +58,11 @@ func (p *DODOPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint25
 	sellBase := zeroForOne == p.baseIsToken0
 	out := QuoteDODO(p.state, amtIn, sellBase)
 	if out == nil || out.Sign() < 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 	outU256, overflow := uint256.FromBig(out)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
-	return outU256, true
+	return *outU256
 }

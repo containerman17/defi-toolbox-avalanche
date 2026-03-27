@@ -40,53 +40,23 @@ type RouteStats struct {
 // DUMMY_SENDER is the from address for EVM calls.
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
-// quotePool quotes a single pool swap: PoolManager first (cached structs), EVM fallback.
-// Returns nil if the pool returns zero or errors.
+// quotePool quotes a single pool swap using the formula.
+// Returns nil if the pool returns zero.
 func quotePool(
 	pool *Pool,
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
 	pm *formulas.PoolManager,
-	cs *statedb.CallState,
-	evmCtx *statedb.CachedContext,
-	routerAddr common.Address,
 	stats *RouteStats,
-	formulaOnly bool,
 ) *uint256.Int {
 	stats.TotalQuotes++
-
-	// Try PoolManager (pool cache + quote cache)
 	ft0 := time.Now()
 	zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
-	out, ok := pm.Quote(pool.Address, amountIn, zeroForOne)
-	if ok || pm.Get(pool.Address) != nil {
-		// Formula exists (cached hit or pool struct present)
-		stats.FormulaQuotes++
-		stats.FormulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
-		if ok && out != nil && !out.IsZero() {
-			return out
-		}
-		return nil
-	}
-
-	// Skip EVM fallback when formula-only mode is enabled
-	if formulaOnly {
-		return nil
-	}
-
-	// EVM fallback (pool not in registry or construction failed)
-	calldata := EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
-	et0 := time.Now()
-	stats.EVMQuotes++
-	cs.Reset()
-	ret, _, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, calldata)
-	stats.EVMMs += float64(time.Since(et0).Microseconds()) / 1000.0
-	if err == nil && len(ret) >= 32 {
-		var out uint256.Int
-		out.SetBytes(ret[:32])
-		if !out.IsZero() {
-			return &out
-		}
+	out := pm.Quote(pool.Address, amountIn, zeroForOne)
+	stats.FormulaQuotes++
+	stats.FormulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
+	if !out.IsZero() {
+		return new(uint256.Int).Set(&out)
 	}
 	return nil
 }
@@ -129,7 +99,6 @@ func FindBestRoute(
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
 	maxHops int,
-	formulaOnly bool,
 ) *Route {
 	if tokenIn == tokenOut {
 		return nil
@@ -153,8 +122,7 @@ func FindBestRoute(
 		if edge.TokenOut != tokenOut {
 			continue
 		}
-		out := quotePool(edge.Pool, tokenIn, tokenOut, amountIn,
-			pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
+		out := quotePool(edge.Pool, tokenIn, tokenOut, amountIn, pm, &stats)
 		if out != nil {
 			candidates = append(candidates, routeCandidate{
 				steps: []RouteStep{{
@@ -205,8 +173,7 @@ func FindBestRoute(
 			}
 		}
 
-		out := quotePool(edge.Pool, tokenIn, mid, amountIn,
-			pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
+		out := quotePool(edge.Pool, tokenIn, mid, amountIn, pm, &stats)
 		if out == nil {
 			continue
 		}
@@ -236,8 +203,7 @@ func FindBestRoute(
 			}
 			seenPool[edge.Pool.Address] = true
 
-			out := quotePool(edge.Pool, mid, tokenOut, hop1.amount,
-				pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
+			out := quotePool(edge.Pool, mid, tokenOut, hop1.amount, pm, &stats)
 			if out != nil {
 				candidates = append(candidates, routeCandidate{
 					steps: []RouteStep{
@@ -256,18 +222,6 @@ func FindBestRoute(
 
 	if len(candidates) == 0 {
 		return nil
-	}
-
-	// ── Formula-only: skip EVM verification, return best candidate ────
-	if formulaOnly {
-		sort.Slice(candidates, func(i, j int) bool {
-			return candidates[i].amountOut.Gt(candidates[j].amountOut)
-		})
-		return &Route{
-			Steps:     candidates[0].steps,
-			AmountOut: candidates[0].amountOut,
-			Stats:     stats,
-		}
 	}
 
 	// ── EVM verification ───────────────────────────────────────────────

@@ -77,7 +77,7 @@ func (p *V2Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	var reserveIn, reserveOut *uint256.Int
 	if zeroForOne {
 		reserveIn = &p.reserve0
@@ -101,11 +101,11 @@ func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 	den.Add(&den, &tmp)
 
 	if den.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	var result uint256.Int
 	result.Div(&num, &den)
 
-	return &result, true
+	return result
 }

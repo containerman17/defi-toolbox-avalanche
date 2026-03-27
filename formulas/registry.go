@@ -374,11 +374,6 @@ func (r *Registry) SetFormulaID(pool common.Address, id int) {
 }
 
 
-func (r *Registry) IsInvalid(pool common.Address) bool {
-	id, known := r.pools[pool]
-	return known && id < 0
-}
-
 // RegistryStats returns the count of validated and invalid pools.
 func (r *Registry) RegistryStats() (validated, invalid int) {
 	for _, id := range r.pools {

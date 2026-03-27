@@ -547,11 +547,11 @@ func formulaQuote(pq formulas.PoolQuoter, amount *uint256.Int, zeroForOne bool) 
 	if pq == nil {
 		return uint256.NewInt(0)
 	}
-	out, ok := pq.Quote(amount, zeroForOne)
-	if !ok || out == nil {
+	out := pq.Quote(amount, zeroForOne)
+	if out.IsZero() {
 		return uint256.NewInt(0)
 	}
-	return out
+	return &out
 }
 
 // amountsEqual compares two amounts. Both nil/zero counts as equal.

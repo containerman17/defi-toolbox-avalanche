@@ -12,10 +12,10 @@ import (
 // Fee-on-transfer tokens subtract a tax from the transferred amount.
 type TokenModel interface {
 	// AdjustInput returns the effective amount a pool receives after transfer tax.
-	AdjustInput(amount *uint256.Int) *uint256.Int
+	AdjustInput(amount *uint256.Int) uint256.Int
 
 	// AdjustOutput returns the effective amount a user receives after transfer tax.
-	AdjustOutput(amount *uint256.Int) *uint256.Int
+	AdjustOutput(amount *uint256.Int) uint256.Int
 
 	// IsFoT returns true if this model applies a fee-on-transfer adjustment.
 	IsFoT() bool
@@ -24,9 +24,9 @@ type TokenModel interface {
 // defaultTokenModel is the identity — no adjustment, used for normal ERC20 tokens.
 type defaultTokenModel struct{}
 
-func (d defaultTokenModel) AdjustInput(amount *uint256.Int) *uint256.Int  { return amount }
-func (d defaultTokenModel) AdjustOutput(amount *uint256.Int) *uint256.Int { return amount }
-func (d defaultTokenModel) IsFoT() bool                                   { return false }
+func (d defaultTokenModel) AdjustInput(amount *uint256.Int) uint256.Int  { return *amount }
+func (d defaultTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int { return *amount }
+func (d defaultTokenModel) IsFoT() bool                                  { return false }
 
 // fotTokenModel subtracts a fee-on-transfer tax from the amount.
 type fotTokenModel struct {
@@ -34,11 +34,11 @@ type fotTokenModel struct {
 	calcReceived func(*big.Int) *big.Int // if set, computes received amount directly (matches Solidity rounding)
 }
 
-func (f *fotTokenModel) AdjustInput(amount *uint256.Int) *uint256.Int {
+func (f *fotTokenModel) AdjustInput(amount *uint256.Int) uint256.Int {
 	return f.adjust(amount)
 }
 
-func (f *fotTokenModel) AdjustOutput(amount *uint256.Int) *uint256.Int {
+func (f *fotTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int {
 	return f.adjust(amount)
 }
 
@@ -47,7 +47,7 @@ func (f *fotTokenModel) IsFoT() bool { return true }
 // adjust computes the post-fee amount. If calcReceived is set, use it directly
 // (matches Solidity's `amount * (10000 - fee) / 10000` pattern without rounding error).
 // Otherwise falls back to `amount - calcFee(amount)`.
-func (f *fotTokenModel) adjust(amount *uint256.Int) *uint256.Int {
+func (f *fotTokenModel) adjust(amount *uint256.Int) uint256.Int {
 	amtBig := amount.ToBig()
 	var resultBig *big.Int
 
@@ -59,13 +59,13 @@ func (f *fotTokenModel) adjust(amount *uint256.Int) *uint256.Int {
 	}
 
 	if resultBig.Sign() <= 0 {
-		return nil
+		return uint256.Int{}
 	}
 	adjusted, overflow := uint256.FromBig(resultBig)
 	if overflow || adjusted.IsZero() {
-		return nil
+		return uint256.Int{}
 	}
-	return adjusted
+	return *adjusted
 }
 
 // reflectionTokenModel implements exact RFI/SafeMoon reflection math.
@@ -91,25 +91,25 @@ type reflectionTokenModel struct {
 
 func (r *reflectionTokenModel) IsFoT() bool { return true }
 
-func (r *reflectionTokenModel) AdjustInput(amount *uint256.Int) *uint256.Int {
+func (r *reflectionTokenModel) AdjustInput(amount *uint256.Int) uint256.Int {
 	return r.adjustReflection(amount)
 }
 
-func (r *reflectionTokenModel) AdjustOutput(amount *uint256.Int) *uint256.Int {
+func (r *reflectionTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int {
 	return r.adjustReflection(amount)
 }
 
 // adjustReflection computes the exact post-reflection received amount.
 // tAmount is the raw transfer amount before any fees.
 // Returns the amount the recipient's balanceOf increases by.
-func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) *uint256.Int {
+func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int {
 	tAmount := amount.ToBig()
 
 	// Compute total fee (reflection + team/other) — same as fotCalculators entry
 	totalFee := r.calcFee(tAmount)
 	tTransfer := new(big.Int).Sub(tAmount, totalFee)
 	if tTransfer.Sign() <= 0 {
-		return nil
+		return uint256.Int{}
 	}
 
 	// Compute reflection fee only (the part that reduces _rTotal via _reflectFee)
@@ -129,7 +129,8 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) *uint256.In
 	if rTotal.Sign() == 0 {
 		// Fallback: if storage read fails, use basic fee subtraction
 		result, _ := uint256.FromBig(tTransfer)
-		return result
+		if result == nil { return uint256.Int{} }
+		return *result
 	}
 
 	// Read _tTotal from storage if slot is set, otherwise use constant
@@ -139,7 +140,8 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) *uint256.In
 		tTotal = new(big.Int).SetBytes(tTotalRaw[:])
 		if tTotal.Sign() == 0 {
 			result, _ := uint256.FromBig(tTransfer)
-			return result
+			if result == nil { return uint256.Int{} }
+			return *result
 		}
 	}
 
@@ -170,27 +172,26 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) *uint256.In
 	}
 	if newRTotal.Sign() <= 0 || newTTotal.Sign() <= 0 {
 		result, _ := uint256.FromBig(tTransfer)
-		return result
+		if result == nil { return uint256.Int{} }
+		return *result
 	}
 
 	// newRate = newRTotal / newTTotal
 	newRate := new(big.Int).Div(newRTotal, newTTotal)
 	if newRate.Sign() <= 0 {
 		result, _ := uint256.FromBig(tTransfer)
-		return result
+		if result == nil { return uint256.Int{} }
+		return *result
 	}
 
 	// buyer_t = rTransferAmount / newRate (integer division, same as Solidity balanceOf)
 	buyerT := new(big.Int).Div(rTransferAmount, newRate)
 
 	result, overflow := uint256.FromBig(buyerT)
-	if overflow {
-		return nil
+	if overflow || result == nil || result.IsZero() {
+		return uint256.Int{}
 	}
-	if result.IsZero() {
-		return nil
-	}
-	return result
+	return *result
 }
 
 // TokenModelRegistry maps token addresses to their TokenModel.

@@ -137,8 +137,8 @@ func buildFormulaGraph(graph *pf.Graph, pt *PoolTable, registry *formulas.Regist
 			if !ok {
 				continue
 			}
-			fid, known := registry.GetFormulaID(e.Pool.Address)
-			if !known || fid < 0 {
+			_, known := registry.GetFormulaID(e.Pool.Address)
+			if !known {
 				continue
 			}
 			dir := e.Pool.Tokens[0] == tokenIn

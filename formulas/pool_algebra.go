@@ -48,22 +48,21 @@ func (p *AlgebraPool) Address() common.Address {
 	return p.addr
 }
 
-func (p *AlgebraPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint256.Int, ok bool) {
+func (p *AlgebraPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256.Int) {
 	defer func() {
 		if r := recover(); r != nil {
-			result = nil
-			ok = false
+			result = uint256.Int{}
 		}
 	}()
 
 	poolAddress := strings.ToLower(p.addr.Hex())
 	out, err := QuoteAlgebraStorage(p.stateReader, poolAddress, amountIn.ToBig(), zeroForOne)
 	if err != nil || out == nil || out.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 	outU256, overflow := uint256.FromBig(out)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
-	return outU256, true
+	return *outU256
 }

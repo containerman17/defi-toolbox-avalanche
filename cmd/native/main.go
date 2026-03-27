@@ -722,7 +722,7 @@ func main() {
 			}
 
 			pm.SetBlockTimestamp(currentTimestamp)
-			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops, params.FormulaOnly)
+			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
 			} else {

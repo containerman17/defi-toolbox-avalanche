@@ -46,15 +46,15 @@ func (p *PharaohV1Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *PharaohV1Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *PharaohV1Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	amtIn := amountIn.ToBig()
 	out := QuotePharaohV1(p.state, amtIn, zeroForOne)
 	if out == nil || out.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 	outU256, overflow := uint256.FromBig(out)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
-	return outU256, true
+	return *outU256
 }

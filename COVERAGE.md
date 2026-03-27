@@ -44,7 +44,7 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 
 | Reason | Count | Description |
 |--------|-------|-------------|
-| blacklisted | 61 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
+| blacklisted | 60 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
 | quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — bitmap exhaustion, zero sqrtPrice, etc. |
 | not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
 | builder_nil(fid=2) V3 | 6 | Zombie pools: non-zero liquidity but no initialized ticks in bitmap |
@@ -62,7 +62,7 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 |------|-------|-------|
 | uniswap_v4 (type=9) | 24 | Formula returns non-zero, EVM returns 0 |
 | lfj_v1 (type=2) | 11 | Missing token overrides |
-| v2 family (type=8) | 11 | vapordex(4), hurricane(4), swapsicle(2), pangolin(1) |
+| v2 family (type=8) | 9 | vapordex(4), hurricane(4), pangolin(1) |
 | uniswap_v3/pharaoh_v3 (type=0) | 6 | Token-drained pools, formula can't detect zero ERC20 balances |
 | algebra (type=1) | 4 | pluginConfig=2 dynamic fee via beforeSwap() hook |
 | lfj_v2 (type=3) | 4 | One-sided liquidity or missing overrides |

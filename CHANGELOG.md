@@ -13,6 +13,200 @@
 - Concurrent map write: PoolManager accessed from readLoop + main goroutine; buffered slot changes
 - 16 reverted txs from uncapped trade sizes (1 AVAX with 0.1 AVAX wallet); added WAVAX balance cap
 
+## 2026-03-27 — V3 out-of-liquidity fix: return partial output when bitmap exhausted
+
+### Changed
+- V3Pool.Quote() now returns accumulated partial output when the swap exhausts all
+  initialized ticks (liquidity drops to zero) and hits the bitmap boundary, instead
+  of returning zero. Previously this pattern caused formula=0 vs EVM>0 mismatches.
+- Added `evmWouldComplete(zeroForOne)` heuristic to estimate whether the EVM quoter
+  would have enough gas to traverse the remaining empty bitmap words. Only returns
+  partial output when the EVM would also succeed (preventing formula>0 vs EVM=0
+  mismatches from gas-exhaustion reverts).
+- Gas model: ~7000 gas per bitmap word + ~15000 per initialized tick + 200K overhead.
+  Direction-aware (counts words from current tick to range boundary, not full range).
+- Un-blacklisted pool `0x66A5dE11d1e1f20da825d974453f099c4Bb13647` (pharaoh_v3,
+  fid=-1 to fid=2). Dir=1 matches, dir=0 has standard out-of-liquidity inversion.
+
+### Results
+- Fixed pools (0% or 50% -> 100%):
+  - `0x9fb97f58` (pharaoh_v3, tickSpacing=5): 50% -> 100%. Dir=0 now returns correct
+    partial output matching EVM. Dir=1 EVM reverts (gas exhaustion), both return 0.
+  - `0xaC8B3e6d` (pharaoh_v3, tickSpacing=10): 50% -> 100%. Dir=1 partial output matches.
+  - `0xCF26eaf8` (pharaoh_v3, tickSpacing=5): 50% -> 100%. Dir=1 returns 1200 (exact match).
+- Unfixable pools (genuine bitmap exhaustion with non-zero liquidity remaining):
+  - `0x3E230575` (pharaoh_v3, tickSpacing=5, fee=100): 0%. Both dirs have liq>0 (48051)
+    at bitmap boundary. EVM uses 4.1M gas traversing more words than we pre-load.
+  - `0x87fBc430` (pharaoh_v3, tickSpacing=5, fee=125): 50%. Dir=0 has liq>0 (35T) at
+    boundary. Would require larger bitmap radius to fix.
+- Regression benchmark (1000 pools, 3 blocks): 97.5% correctness, no regressions.
+
+### Root Cause Analysis
+- Pharaoh V3 pools with small tickSpacing (5) have very wide effective tick ranges.
+  With bitmapRadius=200 words, coverage is 200*256*5 = 256,000 ticks per direction.
+- Pools with few initialized ticks (2-6) but large swap amounts exhaust all liquidity
+  within the first few ticks, then the swap loop traverses hundreds of empty bitmap
+  words looking for more initialized ticks that don't exist.
+- Previously, hitting the bitmap boundary returned zero (treating it as "unknown").
+  Now we distinguish: liq==0 means all liquidity consumed (return partial output),
+  liq>0 means there may be more ticks beyond our window (return zero, let EVM handle).
+
+## 2026-03-27 — Un-blacklist 3 Algebra pools (out-of-liquidity in dir=1)
+
+### Changed
+- Un-blacklisted 3 Algebra (formula ID 4) pools in `formulas/registry.txt`:
+  - `0xA02Ec3Ba8d17887567672b2CDCAF525534636Ea0` (WAVAX/USDC)
+  - `0x41100C6D2c6920B10d12Cd8D59c8A9AA2eF56fC7` (WAVAX/USDC)
+  - `0xf28764E649546616c748b9c66a4bF6c9547716BE` (small-cap pair)
+- All 3 match perfectly in dir=0. Dir=1 shows formula>0 but EVM=0 (out-of-liquidity pattern).
+  - 0xA02E and 0x4110: EVM uses ~4.9M gas then reverts (liquidity exhaustion).
+  - 0xf287: EVM reverts with "ERC20: transfer amount exceeds balance" (pool lacks tokens for dir=1).
+- Regression benchmark (1000 pools, 3 blocks): 97.4% correctness, no new regressions.
+
+## 2026-03-27 — Un-blacklist 6 LFJ V1 pools (out-of-liquidity pattern)
+
+### Changed
+- Un-blacklisted 6 LFJ V1 (type=lfj_v1, formula ID 0) pools in `formulas/registry.txt`:
+  - `0x4792834168EAfFaF8d6C1CA5FD83464A5DDe8DB1`
+  - `0xE56e9e624bb2608e5E50aBDd726e2AfA7d9bc174`
+  - `0x9b78A6342F15F8cB27F46dBe736F200cf144a734`
+  - `0x7AA8C43892F89A20E363fa7c4891d2fa523E0dF1`
+  - `0xc4955Fa7c9526964817d82648bBD0cdD03f73520`
+  - `0x0512Ab7CcF96AF5512dBc2d4C93048f3f6A16608`
+- All 6 match in one direction, with the opposite direction showing the standard out-of-liquidity pattern (formula>0, EVM=0).
+- Verified with --blocks 3: 97.4-97.5% correctness, no regressions.
+- No remaining blacklisted lfj_v1 pools in registry.
+
+## 2026-03-27 — Investigation: BalancerV3 pool 0x31Ae returns 0 (3-token pool, unsupported)
+
+### Investigation
+- Pool `0x31Ae873544658654CE767BDE179fD1BbCB84850b` has formula ID 7 (BalancerV3) but returns 0 in both directions while EVM returns ~2.2B and ~2B.
+- Root cause: this is a **3-token Stable pool** (waAvaAUSD, waAvaUSDT, waAvaUSDC — all ERC4626 wrapped tokens).
+- `registerBalancerV3Pools()` in `cmd/benchmark/main.go` line 878 explicitly skips pools with `len(p.Tokens) != 2`.
+- Without registration, `newBalancerV3Pool()` finds no `balV3PoolInfos` entry (line 119-122) and returns nil, producing a zero quoter.
+- Even if registration were extended, `Quote()` (lines 249-253) also explicitly returns zero for >2 token pools.
+- Two barriers to support: (1) registration skips >2 tokens, (2) Quote() bails on >2 tokens.
+- The PoolQuoter interface only provides `zeroForOne` direction, which is insufficient for >2 token pools where you need to know which specific token pair is being swapped.
+- No code changes made — this is a known architectural limitation.
+
+## 2026-03-27 — Un-blacklist 2 swapsicle V2 pools (out-of-liquidity, not formula issue)
+
+### Investigation
+- Pools `0x7B4BFbEed1DEBb17c612a343CE392A9aFa1B3F6A` and `0x3e938F737696a0370bF01E8Cc30ed0e845cF78F2` were blacklisted (fid=-1).
+- Both are swapsicle V2 (type=8) pools sharing token `0xe80772eaf6e2e18b651f160bc9158b2a5cafca65`.
+- Changed registry entries from -1 to 0 (standard V2 formula).
+- dir=0: formula matches EVM exactly (100%).
+- dir=1: EVM reverts with "ERC20: transfer amount exceeds balance" (returns 0), formula returns non-zero.
+- Root cause: the pool's actual ERC20 balance of the output token is lower than the reserves stored in the contract. This is the same out-of-liquidity pattern seen in LFJ V2 pools.
+- Confirmed other swapsicle pools (e.g., 0x7e028006) get 100% match with formula=0, so no custom fee factor is needed.
+- No more blacklisted swapsicle pools remain. 22 additional swapsicle pools exist in pools.txt but are not yet in registry.txt (need discover run).
+
+### Changes
+- `formulas/registry.txt`: changed fid from -1 to 0 for both pools.
+- `COVERAGE.md`: updated blacklisted count (v2 family 11->9, removed swapsicle from notes).
+
+## 2026-03-27 — Un-blacklist Algebra pool 0x668A (WAVAX/USDC)
+
+### Investigation
+- Pool `0x668Aa7AEfa8512416Fc6244afBE5129200277A69` was blacklisted (fid=-1) in registry.txt.
+- It is an Algebra (type=1) pool with WAVAX/USDC, discovered at block 81122620.
+- Changed registry entry from `-1` to `4` (Algebra formula ID).
+- dir=0 (WAVAX->USDC): formula returns 9541318, matches EVM exactly. Pool is active.
+- dir=1 (USDC->WAVAX): EVM reverts (gas exhaustion traversing ~1800 ticks with 1e18 USDC input = 1 trillion USDC). Formula returns a large non-zero value because it has no gas limit. This is a benchmark artifact — no real swap would use such an absurd input amount for a 6-decimal token.
+
+### Changes
+- `formulas/registry.txt`: changed fid from -1 to 4 for pool 0x668A.
+- `formulas/algebra.go`: added liquidity exhaustion check — return 0 when `currentLiquidity` drops to zero or negative after crossing a tick.
+
+### Benchmark
+- Single pool: dir=0 matches (100%), dir=1 mismatch (expected, benchmark artifact).
+- Broad (1000 pools): 97.4% correct, no regression on other Algebra pools.
+
+## 2026-03-27 — Fix 13 Balancer V3 pools mis-registered as V2 (formula 0)
+
+### Bug fix
+- 13 pools from `balancer_v3` DEX were registered in `registry.txt` with formula ID 0
+  (V2 constant-product) instead of formula ID 7 (Balancer V3).
+- Root cause: the formula discovery script incorrectly assigned formula 0 to these pools.
+- The V2 formula reads reserves from slot 8, which is meaningless for Balancer V3 pools
+  (they use a Vault singleton with completely different storage layout), so it returned 0.
+- Fix: changed all 13 entries in `registry.txt` from `:0` to `:7`.
+- Of the 13 pools: 10 are 2-token (now quotable via Balancer V3 formula), 3 are 3-token
+  (Balancer V3 formula returns 0 for >2 tokens due to PoolQuoter interface limitation;
+  handled by EVM fallback in production).
+
+### Affected pools (2-token, now working)
+- `0x1fed8401c145f64da567881d272d0df233118dca`
+- `0x22715161201922af61f4ca22e979ef0c6c20be13`
+- `0x304e19e3029a6dbfde0d70d9e32ad9cc694a9b68`
+- `0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1`
+- `0x5faeec2d073d9e7fdecee6f3f1d1f364dda4e78e`
+- `0xb109a472b1c59fadce6b3691eaa79269d4bba37c`
+- `0xc07f45ee39f3fa2abaeb2b3309543e69129e3c21`
+- `0xe2be33d380b3fe12279553fcdb61c60871de55ce`
+- `0xf602b6fba3332f9a19c122ae2ecbfe8f0d3b3eff`
+- `0xfb4e6f150a0682a0bcb43a6f7d660a977bd194de`
+
+### Affected pools (3-token, formula unsupported)
+- `0x31ae873544658654ce767bde179fd1bbcb84850b`
+- `0x99a9a471dbe0dcc6855b4cd4bbabeccb1280f5e8`
+- `0xfcec3c8d86329defb548202fe1b86ff2188603a8`
+
+### Regression check
+- 1000-pool benchmark: 97.4% correct (1948/2000 match), no regressions from this change.
+
+## 2026-03-27 — Fix V3 full-range position pools returning nil
+
+### Bug fix
+- Four V3 pools returned nil from `newV3Pool` due to incorrect "zombie pool" heuristic.
+- Root cause: pools have full-range liquidity positions with initialized ticks at MIN_TICK/MAX_TICK (bitmap words ~346), beyond the default +-200 word scan radius.
+- Old code: `if len(bitmapWords) == 0 && !liquidity.IsZero() { return nil }` — wrongly rejected valid pools.
+- Fix: extend bitmap scan to cover full tick range when initial scan finds no words but liquidity is non-zero.
+- Also added `maxSwapSteps = 500` guard in `Quote()` to prevent infinite loops.
+
+### Affected pools
+- `0x0305F8CA5CFA3A832488fe3f178f8B0dfE2c801E` (fee=500, tickSpacing=10)
+- `0x34f9235ba2328E667F0787c0C94434eBf0752D10` (fee=500, tickSpacing=10)
+- `0x3dfB1855e69c4160232328Fe7543A0685C7675aa` (fee=500, tickSpacing=10)
+- `0xd3e0B1D5a7f225498f2c1E88e1377c54A7925c32` (fee=10, tickSpacing=1)
+- All confirmed 100% match vs EVM after fix.
+
+### Regression check
+- 1000-pool benchmark: 97.5% correct (1950/2000 match), no regressions.
+
+## 2026-03-27 — Un-blacklist Uniswap V3 pool 0xfAe3f424
+
+### Pool fix
+- Un-blacklisted `0xfAe3f424a0a47706811521E3ee268f00cFb5c45E` (WAVAX/USDC, Uniswap V3).
+- Changed registry.txt from `-1` (blacklisted) to `2` (V3 formula).
+- Pool was already in v3_registry.go with correct fee=500, tickSpacing=10.
+- Benchmark confirms 100% match (0 mismatches) for this pool.
+- No regressions: 1000-pool benchmark unchanged (97.0% correct, 1939/2000 match).
+
+## 2026-03-27 — Simplify Quote: value return + remove EVM fallback
+
+### Quote return type: `(*uint256.Int, bool)` → `uint256.Int`
+- Every pool formula now returns `uint256.Int` by value. Zero = no output.
+- No more `nil` pointer checks, no more `bool ok` pattern.
+- `QuoteCache` simplified: no more `ok` field, just stores the value.
+- `PoolManager.Get()` never returns nil — unknown/blacklisted pools get `zeroQuoter`.
+
+### EVM fallback removed
+- Benchmark no longer falls back to EVM when formula can't answer.
+- Pathfinder `quotePool` uses formula only (EVM verification of top-10 stays).
+- `--debug-coverage` flag removed (no more fallback to categorize).
+- Single metric: **mismatches** (formula != EVM ground truth).
+- Benchmark: 2000/2000 formula, 36.5ms total (was ~1300ms with EVM fallback).
+
+### Files changed
+- `formulas/pool_quoter.go` — interface, cache, PoolManager, zeroQuoter, fotPoolQuoter
+- `formulas/token_model.go` — AdjustInput/AdjustOutput return types
+- All `formulas/pool_*.go` — Quote signature (10 implementations)
+- `pathfinder/bfs.go` — removed EVM fallback, simplified quotePool
+- `cmd/benchmark/main.go` — removed EVM fallback, simplified hot pass
+- `arb/rates.go`, `arb/scanner.go`, `arb/cycles.go` — adapted to value returns
+- `formulas/registry.go` — removed unused `IsInvalid()`
+
 ## 2026-03-27 — WAVAX cyclic arbitrage scanner
 
 ### New `arb/` package + `cmd/arb` binary

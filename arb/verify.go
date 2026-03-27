@@ -5,15 +5,18 @@ import (
 	"math/big"
 	"os"
 
+	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
-	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
 
-// swap selector: keccak256("swap(address[],uint8[],address[],uint256[],bytes[])")[:4]
-// swap() pulls tokenIn from msg.sender via transferFrom, executes hops, sends tokenOut back.
+// executeSwap selector — for simulation (router already has tokens via override)
+var executeSwapSelector = [4]byte{0x32, 0x39, 0x33, 0x4d}
+
+// swap selector — for on-chain tx (router pulls from wallet via transferFrom)
 var SwapSelector = [4]byte{0x46, 0x6a, 0x92, 0x59}
 
 // Verifier handles EVM verification of cycle candidates.
@@ -21,14 +24,11 @@ type Verifier struct {
 	state      *statedb.StateDB
 	cfg        statedb.EVMConfig
 	routerAddr common.Address
-	caller     common.Address // the wallet that will send the tx
+	caller     common.Address
 	evmCtx     *statedb.CachedContext
 	pt         *PoolTable
 	hub        common.Address
-	balSlot   common.Hash   // keccak256(wallet, 3) on hub token
-	allowSlot common.Hash   // keccak256(router, keccak256(wallet, 4)) on hub token
-	walletBal *uint256.Int  // wallet's hub token balance for override
-	verbose   bool
+	verbose    bool
 }
 
 // SetVerbose enables detailed logging of each EVM verification attempt.
@@ -41,9 +41,8 @@ func NewVerifier(
 	caller common.Address,
 	pt *PoolTable,
 	hub common.Address,
-	walletBalance *uint256.Int, // wallet's hub token balance (e.g. WAVAX)
 ) *Verifier {
-	v := &Verifier{
+	return &Verifier{
 		state:      state,
 		cfg:        cfg,
 		routerAddr: routerAddr,
@@ -51,27 +50,7 @@ func NewVerifier(
 		evmCtx:     statedb.GetCachedContext(cfg),
 		pt:         pt,
 		hub:        hub,
-		walletBal:  walletBalance,
 	}
-
-	if walletBalance != nil {
-		// WAVAX: balanceOf at slot 3, allowance at slot 4
-		var balKey [64]byte
-		copy(balKey[12:32], caller[:])
-		balKey[63] = 3
-		v.balSlot = crypto.Keccak256Hash(balKey[:])
-
-		var innerKey [64]byte
-		copy(innerKey[12:32], caller[:])
-		innerKey[63] = 4
-		innerHash := crypto.Keccak256Hash(innerKey[:])
-		var outerKey [64]byte
-		copy(outerKey[12:32], routerAddr[:])
-		copy(outerKey[32:64], innerHash[:])
-		v.allowSlot = crypto.Keccak256Hash(outerKey[:])
-	}
-
-	return v
 }
 
 // Verify executes a full multi-hop cycle through the HayabusaRouter via EVM.
@@ -79,22 +58,23 @@ func NewVerifier(
 func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64, bool) {
 	calldata := encodeMultiHopSwap(c, v.pt, v.hub, amountIn)
 
-	// Inject wallet's WAVAX balance + approval directly into the base state.
-	// These are sticky (persist across blocks) but that's fine — they represent
-	// the wallet's actual on-chain state which doesn't change between our trades.
-	if v.walletBal != nil && v.balSlot != (common.Hash{}) {
-		v.state.SetStorageSlot(v.hub, v.balSlot, common.Hash(v.walletBal.Bytes32()))
-		v.state.SetStorageSlot(v.hub, v.allowSlot, common.Hash(v.walletBal.Bytes32()))
+	// Use executeSwap with router balance override (matches the working pathfinder pattern).
+	// Override just the router's hub token balance to amountIn.
+	po := router.BuildSingleTokenOverride(v.routerAddr, v.hub, amountIn)
+	var overrides []pf.ParsedOverride
+	if po != nil {
+		overrides = []pf.ParsedOverride{*po}
 	}
+	base := pf.ApplyOverridesFlat(v.state, overrides)
 	from := v.caller
-	cs := statedb.NewCallState(v.state)
+	cs := statedb.NewCallState(base)
 
 	ret, gasUsed, err := v.evmCtx.ExecuteWithCallState(cs, from, v.routerAddr, calldata)
 
 	if v.verbose {
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[arb/evm] REVERT %d-hop in=%s err=%v gas=%d ret_len=%d ret_hex=%x\n",
-				c.Hops, amountIn.Dec(), err, gasUsed, len(ret), ret)
+			fmt.Fprintf(os.Stderr, "[arb/evm] REVERT %d-hop in=%s err=%v gas=%d ret_len=%d ret_hex=%x sel=%x to=%s from=%s\n",
+				c.Hops, amountIn.Dec(), err, gasUsed, len(ret), ret, calldata[:4], v.routerAddr.Hex()[:10], from.Hex()[:10])
 		} else if len(ret) < 32 {
 			fmt.Fprintf(os.Stderr, "[arb/evm] SHORT_RET %d-hop in=%s ret_len=%d gas=%d\n",
 				c.Hops, amountIn.Dec(), len(ret), gasUsed)
@@ -118,9 +98,10 @@ func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64
 }
 
 // EncodeSwapCalldata builds swap() calldata for on-chain execution.
-// Same encoding used for both simulation and real tx.
 func EncodeSwapCalldata(c *Cycle, pt *PoolTable, hub common.Address, amountIn *uint256.Int) []byte {
-	return encodeMultiHopSwap(c, pt, hub, amountIn)
+	data := encodeMultiHopSwap(c, pt, hub, amountIn)
+	copy(data[0:4], SwapSelector[:]) // on-chain uses swap(), not executeSwap()
+	return data
 }
 
 // encodeMultiHopSwap builds executeSwap calldata for EVM simulation.
@@ -169,7 +150,7 @@ func encodeMultiHopSwap(c *Cycle, pt *PoolTable, hub common.Address, amountIn *u
 	totalPayload := dataOffset + poolsSize + typesSize + tokensSize + amountsSize + extraOffsetSize + extraDataSize
 	buf := make([]byte, 4+totalPayload)
 
-	copy(buf[0:4], SwapSelector[:]) // swap() pulls from caller, matches on-chain behavior
+	copy(buf[0:4], executeSwapSelector[:]) // simulation uses executeSwap (router has override balance)
 	base := 4
 
 	poolsOff := dataOffset

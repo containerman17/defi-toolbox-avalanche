@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-27 — WAVAX cyclic arbitrage bot: first successful on-chain trade
+
+### First on-chain arb execution
+- TX `0x1086ab21741a...` — 4-hop WAVAX cycle, 0.01 AVAX in, +0.000014 AVAX net profit (status 0x1)
+- Simulation uses `executeSwap` + router balance override; on-chain uses `swap()` (transferFrom from wallet)
+- Auto-approves WAVAX for router on startup, caps trade size to wallet WAVAX balance
+
+### Bugs fixed during live testing
+- Calldata encoding: router expects paired tokens `[in0,out0,in1,out1]`, not path `[A,B,C]`
+- Blanket 1000-token override broke multi-hop balance accounting; fixed to override only router's input token
+- Concurrent map write: PoolManager accessed from readLoop + main goroutine; buffered slot changes
+- 16 reverted txs from uncapped trade sizes (1 AVAX with 0.1 AVAX wallet); added WAVAX balance cap
+
 ## 2026-03-27 — WAVAX cyclic arbitrage scanner
 
 ### New `arb/` package + `cmd/arb` binary

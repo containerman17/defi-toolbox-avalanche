@@ -18,6 +18,7 @@ import (
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/gorilla/websocket"
 	"github.com/holiman/uint256"
 )
@@ -449,13 +450,27 @@ func main() {
 		}
 		executor.SetNonce(nonce)
 
-		// Query WAVAX (ERC-20) balance — this is what we trade
+		// Query WAVAX (ERC-20) balance — this is what we trade.
+		// Also seed the local state with the real balance + allowance slots
+		// so EVM simulation sees the same state as on-chain.
 		wavaxBal, err := executor.FetchERC20Balance(WAVAX)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[arb] WARNING: could not fetch WAVAX balance: %v\n", err)
 		} else {
 			balF := new(big.Float).Quo(new(big.Float).SetInt(wavaxBal), new(big.Float).SetFloat64(1e18))
 			fmt.Fprintf(os.Stderr, "[arb] WAVAX balance: %s\n", balF.Text('f', 6))
+
+			// Seed wallet's WAVAX balance slot into local state (real value, not override)
+			walletAddr := executor.Address()
+			var balKey [64]byte
+			copy(balKey[12:32], walletAddr[:])
+			balKey[63] = 3 // WAVAX balanceOf mapping slot
+			balSlot := crypto.Keccak256Hash(balKey[:])
+			balU, _ := uint256.FromBig(wavaxBal)
+			state.SetStorageSlot(WAVAX, balSlot, common.Hash(balU.Bytes32()))
+			// Verify readback
+			readback := state.GetState(WAVAX, balSlot)
+			fmt.Fprintf(os.Stderr, "[arb] seeded WAVAX balance slot %s readback=%s seeded=%s\n", balSlot.Hex()[:14], readback.Hex(), common.Hash(balU.Bytes32()).Hex())
 		}
 		// Also show native AVAX (for gas)
 		nativeBal, err := executor.FetchBalance()
@@ -468,6 +483,20 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[arb] WARNING: could not check allowance: %v\n", err)
 		} else {
+			// Seed allowance slot into local state
+			walletAddr := executor.Address()
+			var innerKey [64]byte
+			copy(innerKey[12:32], walletAddr[:])
+			innerKey[63] = 4 // WAVAX allowance mapping slot
+			innerHash := crypto.Keccak256Hash(innerKey[:])
+			var outerKey [64]byte
+			copy(outerKey[12:32], router.DeployedRouter[:])
+			copy(outerKey[32:64], innerHash[:])
+			allowSlot := crypto.Keccak256Hash(outerKey[:])
+			allowU, _ := uint256.FromBig(allowance)
+			state.SetStorageSlot(WAVAX, allowSlot, common.Hash(allowU.Bytes32()))
+			fmt.Fprintf(os.Stderr, "[arb] seeded WAVAX allowance slot %s\n", allowSlot.Hex()[:14])
+
 			// Need at least 1000 WAVAX allowance to be useful
 			minAllowance := new(big.Int).Mul(big.NewInt(1000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 			if allowance.Cmp(minAllowance) < 0 {
@@ -500,6 +529,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "[arb] max trade size: %s WAVAX\n", balF.Text('f', 6))
 		}
 	}
+
+	// Verify key contracts are in state (check code size without triggering fetch)
+	fmt.Fprintf(os.Stderr, "[arb] router code: %d bytes, WAVAX code: %d bytes\n",
+		state.GetCodeSize(router.DeployedRouter), state.GetCodeSize(WAVAX))
 
 	// Initial rate sweep BEFORE wiring callbacks (PoolManager is not thread-safe)
 	fmt.Fprintf(os.Stderr, "[arb] running initial rate sweep...\n")
@@ -563,16 +596,11 @@ func main() {
 			GasLimit:    bi.gasLimit,
 		}
 
-		// Create verifier — wallet balance override so swap() simulation works
 		caller := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
-		var walletBal *uint256.Int
 		if executor != nil {
 			caller = executor.Address()
 		}
-		if scanner.MaxSize != nil {
-			walletBal = scanner.MaxSize
-		}
-		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX, walletBal)
+		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX)
 		verifier.SetVerbose(true)
 
 		opp := scanner.OnBlock(dp, verifier, bi.baseFee)

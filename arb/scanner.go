@@ -216,12 +216,11 @@ func (s *Scanner) OnBlock(
 	evmBudget := 100 * time.Millisecond
 	var bestOpp *Opportunity
 
+	// EVM-verify ALL formula results + all near-misses, sorted by profit descending.
+	// Only filter by profitability at execution time, not verification.
 	evmCandidates := append([]formulaResult{}, results...)
-	nmCount := 3
-	if nmCount > len(nearMisses) {
-		nmCount = len(nearMisses)
-	}
-	evmCandidates = append(evmCandidates, nearMisses[:nmCount]...)
+	evmCandidates = append(evmCandidates, nearMisses...)
+	sort.Slice(evmCandidates, func(i, j int) bool { return evmCandidates[i].profit > evmCandidates[j].profit })
 
 	if evmVerifier != nil && len(evmCandidates) > 0 {
 		for _, r := range evmCandidates {

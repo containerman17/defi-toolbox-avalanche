@@ -22,3 +22,18 @@ time=2026-03-26_06:02 git=038ae11 ms_per_pool=0.0157 total_ms=63.0 pools=4000 fo
 time=2026-03-26_06:45 git=038ae11 ms_per_pool=0.0153 total_ms=61.0 pools=4000 formula=0 evm=8000 match=8000 mismatch=0 correctness=100.0 nonzero=0.0
 time=2026-03-26_06:53 git=038ae11 ms_per_pool=0.9695 total_ms=3878.0 pools=4000 formula=0 evm=8000 match=8000 mismatch=0 correctness=100.0 nonzero=62.6
 time=2026-03-26_06:56 git=038ae11 ms_per_pool=0.7027 total_ms=2810.7 pools=4000 formula=6546 evm=1454 match=7967 mismatch=33 correctness=99.6 nonzero=89.7
+time=2026-03-27_04:13 git=9d9aaa8 ms_per_pool=1.7099 total_ms=1709.9 pools=1000 formula=1511 evm=489 match=1997 mismatch=3 correctness=99.9 nonzero=86.4
+time=2026-03-27_04:14 git=9d9aaa8 ms_per_pool=1.0836 total_ms=2167.1 pools=2000 formula=3209 evm=791 match=3995 mismatch=5 correctness=99.9 nonzero=89.5
+time=2026-03-27_04:15 git=9d9aaa8 ms_per_pool=0.8737 total_ms=2621.1 pools=3000 formula=4888 evm=1112 match=5987 mismatch=13 correctness=99.8 nonzero=90.6
+time=2026-03-27_04:16 git=9d9aaa8 ms_per_pool=0.8038 total_ms=3215.2 pools=4000 formula=6392 evm=1608 match=7967 mismatch=33 correctness=99.6 nonzero=89.7
+time=2026-03-27_04:18 git=9d9aaa8 ms_per_pool=0.7203 total_ms=3601.6 pools=5000 formula=8108 evm=1892 match=9720 mismatch=280 correctness=97.2 nonzero=87.9
+time=2026-03-27_04:31 git=9d9aaa8 ms_per_pool=0.6429 total_ms=3857.6 pools=6000 formula=9732 evm=2268 match=11502 mismatch=498 correctness=95.9 nonzero=86.5
+time=2026-03-27_04:36 git=9d9aaa8 ms_per_pool=0.7200 total_ms=5759.9 pools=8000 formula=13154 evm=2846 match=14715 mismatch=1285 correctness=92.0 nonzero=83.3
+time=2026-03-27_04:37 git=9d9aaa8 ms_per_pool=0.7043 total_ms=5634.5 pools=8000 formula=13154 evm=2846 match=14715 mismatch=1285 correctness=92.0 nonzero=83.3
+time=2026-03-27_06:05 git=9d9aaa8 blocks=1 ms_per_pool=1.7187 total_ms=1718.7 pools=1000 formula=1511 evm=489 match=1997 mismatch=3 correctness=99.9 nonzero=86.4
+time=2026-03-27_06:11 git=9d9aaa8 blocks=3 ms_per_pool=1.7284 total_ms=1728.4 pools=1000 formula=1511 evm=489 match=1997 mismatch=3 correctness=99.9 nonzero=86.4
+time=2026-03-27_06:15 git=cbe6bd0 blocks=1 ms_per_pool=1.6707 total_ms=1670.7 pools=1000 formula=1501 evm=499 match=2000 mismatch=0 correctness=100.0 nonzero=86.4
+time=2026-03-27_06:22 git=f5cdc19 blocks=1 ms_per_pool=1.6911 total_ms=1691.1 pools=1000 formula=1501 evm=499 match=2000 mismatch=0 correctness=100.0 nonzero=86.4
+time=2026-03-27_06:23 git=f5cdc19 blocks=1 ms_per_pool=1.6707 total_ms=1670.7 pools=1000 formula=1501 evm=499 match=2000 mismatch=0 correctness=100.0 nonzero=86.4
+time=2026-03-27_06:24 git=f5cdc19 blocks=1 ms_per_pool=1.5874 total_ms=1587.4 pools=1000 formula=1501 evm=499 match=2000 mismatch=0 correctness=100.0 nonzero=86.4
+time=2026-03-27_06:25 git=f5cdc19 blocks=1 ms_per_pool=1.7107 total_ms=1710.7 pools=1000 formula=1501 evm=499 match=2000 mismatch=0 correctness=100.0 nonzero=86.4

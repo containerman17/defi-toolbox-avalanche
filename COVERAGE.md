@@ -3,6 +3,38 @@
 Living document for investigating and fixing formula coverage gaps.
 Agents investigating coverage should read this first, and append findings/tools below.
 
+## Running the Benchmark
+
+**Prerequisites**: The state server must be running at `ws://localhost:7449`.
+
+```bash
+# Full benchmark (1000 pools, ~2 minutes)
+timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1
+
+# Single pool (< 1 second) — use this when debugging a formula
+timeout 30 go run ./cmd/benchmark/ --pool 0xADDRESS 2>&1
+
+# With coverage debug (shows WHY each pool falls back to EVM)
+timeout 120 go run ./cmd/benchmark/ --limit 1000 --debug-coverage 2>&1
+
+# Multi-block validation (prevents single-block overfitting)
+timeout 600 go run ./cmd/benchmark/ --limit 1000 --blocks 3 2>&1
+
+# Wider pool set
+timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
+```
+
+**Flags:**
+| Flag | Description |
+|------|-------------|
+| `--limit N` | Number of pools to test (default 4000) |
+| `--pool 0x...` | Test a single pool only (fastest iteration) |
+| `--blocks N` | Test across N blocks (default 1) |
+| `--debug-coverage` | Log why each pool falls back to EVM |
+| `--skip-formulas` | EVM-only mode (no formula quotes) |
+| `--cpuprofile FILE` | Write CPU profile |
+| `--memprofile FILE` | Write memory profile |
+
 ## Current State (2026-03-27)
 
 7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools × 2 directions).

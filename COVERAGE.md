@@ -5,8 +5,8 @@ Agents investigating coverage should read this first, and append findings/tools 
 
 ## Current State (2026-03-27)
 
-1581 formula / 419 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
-**79% formula coverage, 99.7% correctness** (7 pre-existing algebra/pharaoh mismatches).
+1582 formula / 418 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
+**79.1% formula coverage, 100% correctness** (0 mismatches).
 
 ### EVM Fallback Breakdown
 
@@ -22,7 +22,7 @@ Agents investigating coverage should read this first, and append findings/tools 
 | builder_nil(fid=7) Bal V3 | 2 | `newBalancerV3Pool` returns nil (GyroECLP pools) |
 | builder_nil(fid=1) Pharaoh | 0 | FIXED: added 5 missing pools to `pharaoh_v1_registry.go` |
 | builder_nil(fid=0) V2 | 2 | `newV2Pool` returns nil |
-| builder_nil(fid=5) DODO | 1 | `newDODOPool` returns nil |
+| builder_nil(fid=5) DODO | 0 | FIXED: graceful nil propagation for degenerate quadratic |
 
 ### Blacklisted by Pool Type
 
@@ -280,6 +280,26 @@ Use `eth_call` to call `getAmountOut(uint256 amountIn, address tokenIn)` on the 
 **Method:** Used `evm-quoter/scripts/probe_pharaoh_v1.ts` to call `metadata()` on each pool, detect fee via `getAmountOut()` reverse-engineering, and detect storage layout by matching reserve values against known slot patterns.
 
 **Benchmark results:** 0 mismatches, 100% correct. Pharaoh V1 formula coverage: 204 -> 210 quotes (+6). Total formula coverage: 1580 / 2000 (79%).
+
+### DODO DPP Advanced degenerate quadratic fix (2026-03-27)
+
+**Problem:** Pool `0xa7548448f4C774E3C3005BCfe81cD21B5925E91a` (DPP Advanced, type=4, formula=5) caused `builder_nil(fid=5)` in coverage report. Investigation revealed `newDODOPool()` actually succeeded (state reads correctly via DSP layout detection), but `DODOPool.Quote()` returned `(nil, false)` because `QuoteDODO` panicked.
+
+**Root cause:** `dodoSolveQuadraticForTrade()` in `formulas/dodo.go` has a `require(numerator > 0)` equivalent — when the discriminant's square root equals `bAbs`, `numerator = squareRoot - bAbs = 0`, and the Solidity contract reverts with "DODOMath: should not be zero". The Go code panicked at this point, caught by `recover()` in `Quote()`.
+
+This happens when the swap amount (1e18) is enormously larger than the pool's reserves (~600M base, ~165B quote in raw units). The quadratic solver degenerates — intermediate values cause the discriminant to be a near-perfect square, yielding `numerator ≈ 0`. Both `querySellBase` and `querySellQuote` revert on-chain for this pool at block 81300000 (confirmed via `cast call`).
+
+**Three-part fix:**
+
+1. **`dodoSolveQuadraticForTrade()` returns nil instead of panicking** when `numerator <= 0`. This signals "on-chain revert" without crashing.
+
+2. **Nil propagation in `dodoSellBaseToken()` and `dodoSellQuoteToken()`**: When R transitions through ONE (case 2.3 / R<1 case 3), the remainder's quadratic solve can return nil. Added nil checks before `Add()` to propagate the revert signal instead of panicking on `nil.Add()`.
+
+3. **`QuoteDODO()` nil check + `DODOPool.Quote()` zero acceptance**:
+   - `QuoteDODO` returns `big.NewInt(0)` when the sell function returns nil (matching EVM revert → 0 output).
+   - `DODOPool.Quote()` changed from `out.Sign() <= 0` to `out.Sign() < 0`, allowing zero results to be returned as valid formula output `(uint256(0), true)`.
+
+**Benchmark results:** 0 mismatches, 100% correct. DODO formula coverage: 4/6 → 6/6 quotes (+2). Total formula coverage: 1580 → 1582 / 2000 (79.1%).
 
 ### LFJ V2.0 pool support (2026-03-27)
 

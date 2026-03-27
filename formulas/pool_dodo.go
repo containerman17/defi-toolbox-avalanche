@@ -58,7 +58,7 @@ func (p *DODOPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint25
 	// If baseToken is token1, then zeroForOne means sellQuote (so sellBase = !zeroForOne).
 	sellBase := zeroForOne == p.baseIsToken0
 	out := QuoteDODO(p.state, amtIn, sellBase)
-	if out == nil || out.Sign() <= 0 {
+	if out == nil || out.Sign() < 0 {
 		return nil, false
 	}
 	outU256, overflow := uint256.FromBig(out)

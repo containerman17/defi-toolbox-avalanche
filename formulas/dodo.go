@@ -375,6 +375,12 @@ func QuoteDODO(state *DODOState, amountIn *big.Int, sellBase bool) *big.Int {
 		receiveAmount = dodoSellQuoteToken(state, amountIn)
 	}
 
+	// nil means the on-chain computation would revert (e.g. degenerate quadratic).
+	// Return zero to match EVM revert → 0 output.
+	if receiveAmount == nil {
+		return big.NewInt(0)
+	}
+
 	// Apply fees on original receiveAmount (parallel, matching Solidity).
 	// Solidity: lpFee = receiveAmount * lpFeeRate / 1e18
 	//           mtFee = receiveAmount * mtFeeRate / 1e18

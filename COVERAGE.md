@@ -599,3 +599,23 @@ time and add it to `amountIn` during `Quote()` for the appropriate swap directio
 LFJ V2 pool (one-time cost during warm-up).
 
 **Result:** 2000/2000 quotes match (0 mismatches), 100% correctness.
+
+### LFJ V2 pool 0xb3dC87Bd un-blacklisting (2026-03-27)
+
+**Pool:** `0xb3dC87Bd570d8dEAa960763234Ef3d93Cc789E6c` (LFJ V2, type=3)
+**Tokens:** token0=WAVAX (`0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7`), token1=FolksToken (`0xff7f8f301f7a706e3cfd3d2275f5dc0b9ee8009b`)
+
+**Investigation:** Pool was blacklisted (formula=-1). The user suspected token1's balance override slot was wrong because dir=1 (token1->token0) reverts while dir=0 works.
+
+**Findings:**
+1. Token1 is a UUPS proxy (`ERC1967Proxy`) with implementation at `0x82fd247d884e8b8195cacf329682b61639aa6a78` (FolksToken contract).
+2. FolksToken uses OpenZeppelin ERC20Upgradeable v5 with ERC-7201 namespaced storage. The `_balances` mapping is at base `0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00` -- this matches the override in `token_overrides.json`.
+3. The balance slot computation was verified correct: `keccak256(abi.encode(poolAddress, erc7201Base))` produces a slot whose on-chain storage matches `balanceOf(pool)`.
+4. The dir=1 EVM revert is `LBPair__OutOfLiquidity()` (selector `0xd36bfd88`), meaning the pool genuinely has no liquidity in that direction. This is NOT a token override issue.
+5. The formula correctly returns 0 for dir=1 (matching the EVM revert), and returns a non-zero value for dir=0 (matching EVM). 100% correctness.
+6. The token has 6 decimals and a cap of 50M tokens. The 1e21 balance override (1e15 tokens at 6 decimals) exceeds the cap but this doesn't matter because `ERC20CappedUpgradeable._update` only checks the cap on mints (from == address(0)), not transfers.
+
+**Fix:** Changed pool from formula=-1 to formula=3 in `formulas/registry.txt`. Benchmark confirms 100% correctness (2 quotes, 2 match, 0 mismatch).
+
+**Files changed:**
+- `formulas/registry.txt` -- Changed `0xb3dc87bd570d8deaa960763234ef3d93cc789e6c:-1` to `:3`

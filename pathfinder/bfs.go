@@ -54,11 +54,12 @@ func quotePool(
 ) *uint256.Int {
 	stats.TotalQuotes++
 
-	// Try PoolManager (cached struct, pure math after first construction)
+	// Try PoolManager (pool cache + quote cache)
 	ft0 := time.Now()
-	if quoter := pm.Get(pool.Address); quoter != nil {
-		zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
-		out, ok := quoter.Quote(amountIn, zeroForOne)
+	zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
+	out, ok := pm.Quote(pool.Address, amountIn, zeroForOne)
+	if ok || pm.Get(pool.Address) != nil {
+		// Formula exists (cached hit or pool struct present)
 		stats.FormulaQuotes++
 		stats.FormulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
 		if ok && out != nil && !out.IsZero() {

@@ -21,6 +21,47 @@ type PoolQuoter interface {
 // Returns (result, true) on success, (nil, false) on revert or error.
 type EVMCaller func(to common.Address, data []byte) ([]byte, bool)
 
+// quoteCacheEntry stores one cached quote result.
+type quoteCacheEntry struct {
+	amountIn   uint256.Int
+	zeroForOne bool
+	out        uint256.Int // valid only when ok==true
+	ok         bool        // false = revert/zero
+	occupied   bool
+}
+
+// QuoteCache is a 16-slot ring buffer for caching quote results per pool.
+// Linear scan for lookup, zero heap allocation.
+type QuoteCache struct {
+	entries [16]quoteCacheEntry
+	next    uint8
+}
+
+func (c *QuoteCache) Lookup(amountIn *uint256.Int, zeroForOne bool) (out *uint256.Int, ok bool, hit bool) {
+	for i := range c.entries {
+		e := &c.entries[i]
+		if e.occupied && e.zeroForOne == zeroForOne && e.amountIn.Eq(amountIn) {
+			if !e.ok {
+				return nil, false, true // cached negative result
+			}
+			return &e.out, true, true
+		}
+	}
+	return nil, false, false
+}
+
+func (c *QuoteCache) Store(amountIn *uint256.Int, zeroForOne bool, out *uint256.Int, ok bool) {
+	e := &c.entries[c.next&15]
+	e.amountIn.Set(amountIn)
+	e.zeroForOne = zeroForOne
+	if out != nil {
+		e.out.Set(out)
+	}
+	e.ok = ok
+	e.occupied = true
+	c.next++
+}
+
 // PoolManager holds pool structs and handles lazy construction + invalidation.
 type PoolManager struct {
 	pools          map[common.Address]PoolQuoter
@@ -34,21 +75,26 @@ type PoolManager struct {
 	blockTimestamp uint64 // block.timestamp for volatility reference updates (LFJ V2)
 
 	// depSlots: reverse map from (contractAddr, slot) → poolAddr for cache busting.
-	// Populated automatically during pool construction via slot-tracking reader.
 	depSlots map[common.Address]map[common.Hash]common.Address
+
+	// Quote cache: 16-slot ring buffer per pool. Skipped for LFJ V2 (time-dependent).
+	quoteCaches  map[common.Address]*QuoteCache
+	noQuoteCache map[common.Address]bool // true for LFJ V2 pools
 }
 
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
 func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 	return &PoolManager{
-		pools:       make(map[common.Address]PoolQuoter),
-		registry:    registry,
-		reader:      reader,
-		poolTokens:  make(map[common.Address][2]common.Address),
-		poolTypes:   make(map[common.Address]int),
-		poolDex:     make(map[common.Address]string),
-		tokenModels: NewTokenModelRegistry(reader),
-		depSlots:    make(map[common.Address]map[common.Hash]common.Address),
+		pools:        make(map[common.Address]PoolQuoter),
+		registry:     registry,
+		reader:       reader,
+		poolTokens:   make(map[common.Address][2]common.Address),
+		poolTypes:    make(map[common.Address]int),
+		poolDex:      make(map[common.Address]string),
+		tokenModels:  NewTokenModelRegistry(reader),
+		depSlots:     make(map[common.Address]map[common.Hash]common.Address),
+		quoteCaches:  make(map[common.Address]*QuoteCache),
+		noQuoteCache: make(map[common.Address]bool),
 	}
 }
 
@@ -102,6 +148,50 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 	}
 
 	return pm.buildQuoter(pool, formulaID)
+}
+
+// Quote returns the output for a pool swap, using both pool cache and quote cache.
+// The pool struct is lazily built and cached. Quote results are cached in a 16-slot
+// ring buffer per pool (skipped for LFJ V2 which is time-dependent).
+func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+	// Check quote cache
+	if !pm.noQuoteCache[pool] {
+		if cache, ok := pm.quoteCaches[pool]; ok {
+			if out, ok, hit := cache.Lookup(amountIn, zeroForOne); hit {
+				return out, ok
+			}
+		}
+	}
+
+	// Get/build pool struct (pool cache)
+	quoter := pm.Get(pool)
+	if quoter == nil {
+		return nil, false
+	}
+
+	out, ok := quoter.Quote(amountIn, zeroForOne)
+
+	// Store in quote cache
+	if !pm.noQuoteCache[pool] {
+		cache := pm.quoteCaches[pool]
+		if cache == nil {
+			cache = &QuoteCache{}
+			pm.quoteCaches[pool] = cache
+		}
+		cache.Store(amountIn, zeroForOne, out, ok)
+	}
+
+	return out, ok
+}
+
+// QuoteBypassQuoteCache uses the pool cache but skips the quote cache.
+// Use in benchmarks to measure actual formula speed.
+func (pm *PoolManager) QuoteBypassQuoteCache(pool common.Address, amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+	quoter := pm.Get(pool)
+	if quoter == nil {
+		return nil, false
+	}
+	return quoter.Quote(amountIn, zeroForOne)
 }
 
 // BuildQuoterForFormulaID builds a PoolQuoter for a pool using the given formula ID,
@@ -196,6 +286,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		}
 		if p := newDODOPool(pool, trackedReader, token0); p != nil { return wrapAndCache(p) }
 	case FormulaLFJV2:
+		pm.noQuoteCache[pool] = true // time-dependent: skip quote cache
 		if hasTokens {
 			return wrapAndCache(newLFJV2Pool(pool, trackedReader, tokens[0], tokens[1], pm.blockTimestamp))
 		}
@@ -213,6 +304,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 // Also cleans up depSlots entries that point to this pool.
 func (pm *PoolManager) Invalidate(addr common.Address) {
 	delete(pm.pools, addr)
+	delete(pm.quoteCaches, addr)
 	// Clean up depSlots: remove entries pointing to this pool.
 	// On next Get(), buildQuoter will re-record the slots.
 	for contract, slots := range pm.depSlots {
@@ -239,6 +331,7 @@ func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common
 		return common.Address{}
 	}
 	delete(pm.pools, poolAddr)
+	delete(pm.quoteCaches, poolAddr)
 	// Remove all depSlots entries for this pool so they get re-recorded on rebuild
 	for c, s := range pm.depSlots {
 		for sl, pa := range s {
@@ -257,6 +350,7 @@ func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common
 func (pm *PoolManager) InvalidateAll() {
 	pm.pools = make(map[common.Address]PoolQuoter)
 	pm.depSlots = make(map[common.Address]map[common.Hash]common.Address)
+	pm.quoteCaches = make(map[common.Address]*QuoteCache)
 }
 
 // poolHex returns the lowercase hex string for a pool address.

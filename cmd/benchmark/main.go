@@ -239,51 +239,66 @@ func (f *wsFetcher) FetchCode(addr common.Address) []byte {
 
 func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash { return common.Hash{} }
 
-// ─── Main ──────────────────────────────────────────────────────────
+// ─── Types ──────────────────────────────────────────────────────────
 
 var ROUTER = router.DeployedRouter
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
-func main() {
-	stateServerURL := "ws://localhost:7449/live"
-	poolLimit := 4000
-	skipFormulas := false
+type quoteKey struct {
+	pool common.Address
+	dir  int
+}
 
-	for i, arg := range os.Args {
-		if arg == "--state-server" && i+1 < len(os.Args) { stateServerURL = os.Args[i+1] }
-		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
-		if arg == "--skip-formulas" { skipFormulas = true }
-	}
+type typeStats struct {
+	Quotes   int     // total quotes (2 per pool)
+	HotMs    float64 // hot pass execution time (formula or EVM)
+	Match    int     // result == EVM ground truth
+	Mismatch int     // result != EVM ground truth
+	NonZero  int     // EVM ground truth was non-zero
+	Formula  int     // quotes handled by formula
+	EVM      int     // quotes handled by EVM fallback
+}
 
-	_, state, cfg, err := connectStateServer(stateServerURL)
+type blockResult struct {
+	blockNum    uint64
+	byType      map[int]*typeStats
+	mismatchSet map[quoteKey]bool // true = mismatched on this block
+	mismatchLog []string
+}
+
+var typeNames = map[int]string{
+	0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
+	4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
+	8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
+	13: "platypus", 16: "balancer_v2", 17: "cavalre", 18: "kyber_dmm",
+	19: "synapse", 20: "trident",
+}
+
+// ─── Per-block benchmark ────────────────────────────────────────────
+
+func runBlockBenchmark(
+	blockNum uint64,
+	registry *formulas.Registry,
+	pools []pathfinder.Pool,
+	overrides []pathfinder.ParsedOverride,
+	skipFormulas bool,
+) (*blockResult, error) {
+	stateServerURL := fmt.Sprintf("ws://localhost:7449/debug/%d", blockNum)
+
+	f, state, cfg, err := connectStateServer(stateServerURL)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to connect: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("block %d: %w", blockNum, err)
 	}
+	defer f.conn.Close()
 
-	registry := formulas.LoadEmbeddedRegistry()
-	pools := poolcollector.EmbeddedPools(poolLimit)
-
-	validated, invalid := registry.RegistryStats()
-	fmt.Fprintf(os.Stderr, "[benchmark] registry: %d validated, %d invalid\n", validated, invalid)
-	fmt.Fprintf(os.Stderr, "[benchmark] pools: %d\n", len(pools))
-
-	// Register V4 pools from ExtraData
-	registerV4Pools(pools)
-
-	// Register Balancer V3 pools from state
+	// Register Balancer V3/V2 pools (EVM calls against this block's state)
 	registerBalancerV3Pools(pools, state, cfg, registry)
-
-	// Register Balancer V2 pools from state
 	registerBalancerV2Pools(pools, state, cfg, registry)
 
-	// Build overrides for all tokens
-	overrides := router.BuildTokenOverrides(ROUTER, pools)
-
-	// Apply overrides flat — no overlay indirection, CallState reads one layer
+	// Apply token overrides to this block's statedb
 	baseWithOverrides := pathfinder.ApplyOverridesFlat(state, overrides)
 
-	// Build PoolManager
+	// Build PoolManager with this block's statedb
 	poolReader := func(addr common.Address, key common.Hash) common.Hash {
 		return state.GetState(addr, key)
 	}
@@ -300,32 +315,8 @@ func main() {
 		pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
 
-	// Profiling flags (apply to hot pass only)
-	var cpuProfile, memProfile string
-	for i, arg := range os.Args {
-		if arg == "--cpuprofile" && i+1 < len(os.Args) { cpuProfile = os.Args[i+1] }
-		if arg == "--memprofile" && i+1 < len(os.Args) { memProfile = os.Args[i+1] }
-	}
-	if cpuProfile != "" {
-		f, _ := os.Create(cpuProfile)
-		pprof.StartCPUProfile(f)
-		defer pprof.StopCPUProfile()
-	}
-	if memProfile != "" {
-		defer func() {
-			f, _ := os.Create(memProfile)
-			pprof.WriteHeapProfile(f)
-			f.Close()
-		}()
-	}
-
 	// ─── Pass 1: EVM ground truth (not timed) ───
-	// Run EVM for every pool, store results. Also warms JUMPDEST caches.
-	type quoteKey struct {
-		pool common.Address
-		dir  int
-	}
-	evmGround := make(map[quoteKey]uint256.Int) // zero value = zero output
+	evmGround := make(map[quoteKey]uint256.Int)
 	evmCtx := statedb.GetCachedContext(cfg)
 	cs := statedb.NewCallState(baseWithOverrides)
 
@@ -347,16 +338,13 @@ func main() {
 			if evmErr == nil && len(ret) >= 32 {
 				var out uint256.Int
 				out.SetBytes(ret[:32])
-				evmGround[key] = out // zero stays zero
+				evmGround[key] = out
 			}
-			// not in map = zero (default)
 		}
 	}
 	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p1t0).Milliseconds())
 
 	// ─── Pass 2: Warm-up (not timed) ───
-	// Full production path: formula where available, EVM fallback where not.
-	// Builds pool structs, warms CPU + JUMPDEST caches.
 	fmt.Fprintf(os.Stderr, "[benchmark] pass 2 (warm-up)...")
 	p2t0 := time.Now()
 	for i := range pools {
@@ -388,17 +376,6 @@ func main() {
 	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p2t0).Milliseconds())
 
 	// ─── Pass 3: Hot pass (timed + correctness) ───
-	// Full production path: formula where available, EVM fallback where not.
-	// Compare result against Pass 1 ground truth.
-	type typeStats struct {
-		Quotes    int     // total quotes (2 per pool)
-		HotMs     float64 // hot pass execution time (formula or EVM)
-		Match     int     // result == EVM ground truth
-		Mismatch  int     // result != EVM ground truth
-		NonZero   int     // EVM ground truth was non-zero
-		Formula   int     // quotes handled by formula
-		EVM       int     // quotes handled by EVM fallback
-	}
 	byType := make(map[int]*typeStats)
 	getStats := func(poolType int) *typeStats {
 		if s, ok := byType[poolType]; ok {
@@ -409,16 +386,9 @@ func main() {
 		return s
 	}
 
-	typeNames := map[int]string{
-		0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
-		4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
-		8: "v2", 9: "uniswap_v4", 10: "erc4626", 12: "wombat",
-		13: "platypus", 16: "balancer_v2", 17: "cavalre", 18: "kyber_dmm",
-		19: "synapse", 20: "trident",
-	}
-
 	fmt.Fprintf(os.Stderr, "[benchmark] pass 3 (hot pass)...\n")
 
+	mismatchSet := make(map[quoteKey]bool)
 	var mismatchLog []string
 	t0 := time.Now()
 
@@ -435,15 +405,13 @@ func main() {
 			zeroForOne := tokenIn.Cmp(tokenOut) < 0
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
-			// EVM ground truth (zero if not in map)
 			key := quoteKey{pool.Address, tokenIdx[0]}
-			evmResult := evmGround[key] // zero value if missing
+			evmResult := evmGround[key]
 			if !evmResult.IsZero() {
 				ts.NonZero++
 			}
 
-			// Production path: formula first, EVM fallback
-			var result uint256.Int // zero by default
+			var result uint256.Int
 			qt0 := time.Now()
 			quoted := false
 			if !skipFormulas {
@@ -456,7 +424,6 @@ func main() {
 				}
 			}
 			if !quoted {
-				// EVM fallback
 				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 				cs.Reset()
 				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
@@ -467,11 +434,9 @@ func main() {
 			}
 			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
 
-			// Compare against ground truth
 			if result.Eq(&evmResult) {
 				ts.Match++
 			} else {
-				// Tolerance check for rounding (LFJ V2 dust, etc.)
 				var diff uint256.Int
 				if result.Gt(&evmResult) {
 					diff.Sub(&result, &evmResult)
@@ -480,9 +445,9 @@ func main() {
 				}
 				var scaled uint256.Int
 				if pool.PoolType == 3 {
-					scaled.Mul(&diff, uint256.NewInt(100_000)) // 10 PPM
+					scaled.Mul(&diff, uint256.NewInt(100_000))
 				} else {
-					scaled.Mul(&diff, uint256.NewInt(100_000_000)) // 0.01 PPM
+					scaled.Mul(&diff, uint256.NewInt(100_000_000))
 				}
 				denom := &evmResult
 				if result.Gt(&evmResult) { denom = &result }
@@ -490,6 +455,7 @@ func main() {
 					ts.Match++
 				} else {
 					ts.Mismatch++
+					mismatchSet[key] = true
 					if len(mismatchLog) < 200 {
 						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s",
 							pool.Address.Hex(), tokenIdx[0], result.Dec(), evmResult.Dec()))
@@ -499,18 +465,21 @@ func main() {
 		}
 	}
 
-	// Print mismatches
-	for _, line := range mismatchLog {
-		fmt.Fprintln(os.Stderr, line)
-	}
+	_ = t0 // used above for timing
 
-	// Print per-type breakdown
+	return &blockResult{
+		blockNum:    blockNum,
+		byType:      byType,
+		mismatchSet: mismatchSet,
+		mismatchLog: mismatchLog,
+	}, nil
+}
+
+// printTypeTable prints the per-type breakdown table to stderr and returns totals.
+func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla, totalEvm int, totalHotMs float64) {
 	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %6s %8s %6s %6s %8s\n",
 		"TYPE", "POOLS", "QUOTES", "FMLA", "EVM", "MS", "MATCH", "MISS", "NONZERO%")
 	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
-
-	var totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla, totalEvm int
-	var totalHotMs float64
 
 	type sortEntry struct {
 		poolType int
@@ -534,11 +503,11 @@ func main() {
 		if name == "" {
 			name = fmt.Sprintf("type_%d", e.poolType)
 		}
-		poolCount := s.Quotes / 2
+		pc := s.Quotes / 2
 		nzPct := 0.0
 		if s.Quotes > 0 { nzPct = float64(s.NonZero) / float64(s.Quotes) * 100 }
 		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
-			name, poolCount, s.Quotes, s.Formula, s.EVM, s.HotMs, s.Match, s.Mismatch, nzPct)
+			name, pc, s.Quotes, s.Formula, s.EVM, s.HotMs, s.Match, s.Mismatch, nzPct)
 		totalQuotes += s.Quotes
 		totalMatch += s.Match
 		totalMismatch += s.Mismatch
@@ -552,31 +521,249 @@ func main() {
 	totalNzPct := 0.0
 	if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
 	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
-		"TOTAL", len(pools), totalQuotes, totalFmla, totalEvm, totalHotMs, totalMatch, totalMismatch, totalNzPct)
+		"TOTAL", poolCount, totalQuotes, totalFmla, totalEvm, totalHotMs, totalMatch, totalMismatch, totalNzPct)
+	return
+}
 
-	// Correctness summary
-	correctPct := 0.0
-	if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
-	totalMs := float64(time.Since(t0).Nanoseconds()) / 1e6
-	msPerPool := totalMs / float64(len(pools))
-	fmt.Fprintf(os.Stderr, "\n[result] %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero, %.1f ms total (%.4f ms/pool)\n",
-		correctPct, totalMatch, totalMismatch, totalNzPct, totalMs, msPerPool)
+// ─── Main ──────────────────────────────────────────────────────────
 
-	// JSON output
-	result := map[string]interface{}{
-		"pools":       len(pools),
-		"quotes":      totalQuotes,
-		"formula":     totalFmla,
-		"evm":         totalEvm,
-		"totalMs":     fmt.Sprintf("%.1f", totalMs),
-		"msPerPool":   fmt.Sprintf("%.4f", msPerPool),
-		"match":       totalMatch,
-		"mismatch":    totalMismatch,
-		"correctness": fmt.Sprintf("%.1f", correctPct),
-		"nonZeroPct":  fmt.Sprintf("%.1f", totalNzPct),
+func main() {
+	poolLimit := 4000
+	skipFormulas := false
+	numBlocks := 1
+
+	for i, arg := range os.Args {
+		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
+		if arg == "--skip-formulas" { skipFormulas = true }
+		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
+	}
+	if numBlocks < 1 { numBlocks = 1 }
+
+	// Compute block numbers
+	blocks := make([]uint64, numBlocks)
+	for i := 0; i < numBlocks; i++ {
+		blocks[i] = uint64(router.DeployedBlock) + uint64(i)*10000
 	}
 
-	out, _ := json.MarshalIndent(result, "", "  ")
+	registry := formulas.LoadEmbeddedRegistry()
+	pools := poolcollector.EmbeddedPools(poolLimit)
+
+	validated, invalid := registry.RegistryStats()
+	fmt.Fprintf(os.Stderr, "[benchmark] registry: %d validated, %d invalid\n", validated, invalid)
+	fmt.Fprintf(os.Stderr, "[benchmark] pools: %d, blocks: %d\n", len(pools), numBlocks)
+
+	// Register V4 pools from ExtraData (block-independent)
+	registerV4Pools(pools)
+
+	// Build token overrides (block-independent)
+	overrides := router.BuildTokenOverrides(ROUTER, pools)
+
+	// Profiling flags
+	var cpuProfile, memProfile string
+	for i, arg := range os.Args {
+		if arg == "--cpuprofile" && i+1 < len(os.Args) { cpuProfile = os.Args[i+1] }
+		if arg == "--memprofile" && i+1 < len(os.Args) { memProfile = os.Args[i+1] }
+	}
+	if cpuProfile != "" {
+		f, _ := os.Create(cpuProfile)
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
+	if memProfile != "" {
+		defer func() {
+			f, _ := os.Create(memProfile)
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}()
+	}
+
+	// Run benchmark for each block
+	results := make([]*blockResult, 0, numBlocks)
+	for idx, blockNum := range blocks {
+		if numBlocks > 1 {
+			fmt.Fprintf(os.Stderr, "\n=== Block %d (%d/%d) ===\n", blockNum, idx+1, numBlocks)
+		}
+
+		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		results = append(results, res)
+
+		// Print mismatches for this block
+		for _, line := range res.mismatchLog {
+			fmt.Fprintln(os.Stderr, line)
+		}
+
+		// Print per-type breakdown for this block
+		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _, _ := printTypeTable(res.byType, len(pools))
+		correctPct := 0.0
+		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
+		totalNzPct := 0.0
+		if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+		fmt.Fprintf(os.Stderr, "\n[result] block %d: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
+			blockNum, correctPct, totalMatch, totalMismatch, totalNzPct)
+	}
+
+	// ─── Cross-block aggregation (only when N > 1) ───
+	if numBlocks > 1 {
+		fmt.Fprintf(os.Stderr, "\n=== AGGREGATE (%d blocks) ===\n", numBlocks)
+
+		// A pool+direction is "correct" only if it matched EVM on ALL blocks
+		aggByType := make(map[int]*typeStats)
+		aggGetStats := func(poolType int) *typeStats {
+			if s, ok := aggByType[poolType]; ok { return s }
+			s := &typeStats{}
+			aggByType[poolType] = s
+			return s
+		}
+
+		// Use first block's structure as template for iteration
+		first := results[0]
+		for i := range pools {
+			pool := &pools[i]
+			for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
+				if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
+					continue
+				}
+				key := quoteKey{pool.Address, tokenIdx[0]}
+				ts := aggGetStats(pool.PoolType)
+				ts.Quotes++
+
+				// Check if mismatched on any block
+				anyMismatch := false
+				for _, res := range results {
+					if res.mismatchSet[key] {
+						anyMismatch = true
+						break
+					}
+				}
+				if anyMismatch {
+					ts.Mismatch++
+				} else {
+					ts.Match++
+				}
+
+				// Aggregate non-zero and formula/EVM from first block
+				if firstStats, ok := first.byType[pool.PoolType]; ok {
+					_ = firstStats // NonZero counted per-key below
+				}
+			}
+		}
+
+		// Aggregate NonZero, Formula, EVM, HotMs from first block's byType
+		for pt, fs := range first.byType {
+			ts := aggGetStats(pt)
+			ts.NonZero = fs.NonZero
+			ts.Formula = fs.Formula
+			ts.EVM = fs.EVM
+			ts.HotMs = fs.HotMs
+		}
+
+		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _, _ := printTypeTable(aggByType, len(pools))
+		correctPct := 0.0
+		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
+		totalNzPct := 0.0
+		if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+		fmt.Fprintf(os.Stderr, "\n[result] AGGREGATE: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
+			correctPct, totalMatch, totalMismatch, totalNzPct)
+	}
+
+	// ─── JSON output ───
+	// Use first block's stats for single-block backward compat
+	first := results[0]
+	firstQ, firstMatch, firstMismatch, firstNonZero, firstFmla, firstEvm, firstHotMs := 0, 0, 0, 0, 0, 0, 0.0
+	for _, s := range first.byType {
+		firstQ += s.Quotes
+		firstMatch += s.Match
+		firstMismatch += s.Mismatch
+		firstNonZero += s.NonZero
+		firstFmla += s.Formula
+		firstEvm += s.EVM
+		firstHotMs += s.HotMs
+	}
+	firstCorrectPct := 0.0
+	if firstMatch+firstMismatch > 0 { firstCorrectPct = float64(firstMatch) / float64(firstMatch+firstMismatch) * 100 }
+	firstNzPct := 0.0
+	if firstQ > 0 { firstNzPct = float64(firstNonZero) / float64(firstQ) * 100 }
+	msPerPool := firstHotMs / float64(len(pools))
+
+	jsonResult := map[string]interface{}{
+		"pools":       len(pools),
+		"quotes":      firstQ,
+		"formula":     firstFmla,
+		"evm":         firstEvm,
+		"totalMs":     fmt.Sprintf("%.1f", firstHotMs),
+		"msPerPool":   fmt.Sprintf("%.4f", msPerPool),
+		"match":       firstMatch,
+		"mismatch":    firstMismatch,
+		"correctness": fmt.Sprintf("%.1f", firstCorrectPct),
+		"nonZeroPct":  fmt.Sprintf("%.1f", firstNzPct),
+	}
+
+	if numBlocks > 1 {
+		jsonResult["blocks"] = numBlocks
+
+		// Per-block array
+		perBlock := make([]map[string]interface{}, 0, numBlocks)
+		for _, res := range results {
+			bq, bm, bmm, bnz, bf, be, bms := 0, 0, 0, 0, 0, 0, 0.0
+			for _, s := range res.byType {
+				bq += s.Quotes
+				bm += s.Match
+				bmm += s.Mismatch
+				bnz += s.NonZero
+				bf += s.Formula
+				be += s.EVM
+				bms += s.HotMs
+			}
+			bc := 0.0
+			if bm+bmm > 0 { bc = float64(bm) / float64(bm+bmm) * 100 }
+			bnzp := 0.0
+			if bq > 0 { bnzp = float64(bnz) / float64(bq) * 100 }
+			perBlock = append(perBlock, map[string]interface{}{
+				"block":       res.blockNum,
+				"match":       bm,
+				"mismatch":    bmm,
+				"correctness": fmt.Sprintf("%.1f", bc),
+				"nonZeroPct":  fmt.Sprintf("%.1f", bnzp),
+				"totalMs":     fmt.Sprintf("%.1f", bms),
+			})
+		}
+		jsonResult["perBlock"] = perBlock
+
+		// Aggregate correctness
+		aggMatch, aggMismatch := 0, 0
+		for i := range pools {
+			pool := &pools[i]
+			for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
+				if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
+					continue
+				}
+				key := quoteKey{pool.Address, tokenIdx[0]}
+				anyMismatch := false
+				for _, res := range results {
+					if res.mismatchSet[key] {
+						anyMismatch = true
+						break
+					}
+				}
+				if anyMismatch {
+					aggMismatch++
+				} else {
+					aggMatch++
+				}
+			}
+		}
+		aggPct := 0.0
+		if aggMatch+aggMismatch > 0 { aggPct = float64(aggMatch) / float64(aggMatch+aggMismatch) * 100 }
+		jsonResult["aggregateMatch"] = aggMatch
+		jsonResult["aggregateMismatch"] = aggMismatch
+		jsonResult["aggregateCorrectness"] = fmt.Sprintf("%.1f", aggPct)
+	}
+
+	out, _ := json.MarshalIndent(jsonResult, "", "  ")
 	fmt.Println(string(out))
 
 	// Append to benchmark_results/benchmark.log
@@ -593,8 +780,8 @@ func main() {
 			gitHash = strings.TrimSpace(string(gitOut))
 		}
 		logTs := time.Now().Format("2006-01-02_15:04")
-		line := fmt.Sprintf("time=%s git=%s ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d evm=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
-			logTs, gitHash, msPerPool, totalMs, len(pools), totalFmla, totalEvm, totalMatch, totalMismatch, correctPct, totalNzPct)
+		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d evm=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
+			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstEvm, firstMatch, firstMismatch, firstCorrectPct, firstNzPct)
 		os.MkdirAll("benchmark_results", 0o755)
 		logF, logErr := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if logErr == nil {

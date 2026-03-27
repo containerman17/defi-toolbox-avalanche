@@ -59,9 +59,20 @@ func (pm *PoolManager) SetEVMCaller(fn EVMCaller) {
 }
 
 // SetBlockTimestamp sets the block timestamp used for LFJ V2 volatility reference
-// updates. Must be called before Get() to ensure correct fee calculation.
+// updates. Updates both the PoolManager's default (for new pool construction) and
+// all cached LFJ V2 pool structs (no rebuild needed — just updates the field).
 func (pm *PoolManager) SetBlockTimestamp(ts uint64) {
 	pm.blockTimestamp = ts
+	for _, q := range pm.pools {
+		// Unwrap fotPoolQuoter if present
+		inner := q
+		if fot, ok := inner.(*fotPoolQuoter); ok {
+			inner = fot.inner
+		}
+		if lfj, ok := inner.(*LFJV2Pool); ok {
+			lfj.SetBlockTimestamp(ts)
+		}
+	}
 }
 
 // SetPoolType registers the pool type and DEX provider for a pool (from pools.txt).

@@ -83,6 +83,10 @@ func (p *LFJV2Pool) Address() common.Address {
 	return p.addr
 }
 
+func (p *LFJV2Pool) SetBlockTimestamp(ts uint64) {
+	p.blockTimestamp = ts
+}
+
 func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint256.Int, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {

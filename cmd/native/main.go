@@ -37,6 +37,7 @@ type wsFetcher struct {
 	gasLimit     uint64
 	cacheMisses  int64 // counts state server fetches (cache misses)
 	onSlotChange func(addr common.Address, slot common.Hash) // called on block_diff storage changes
+	onBlock      func(timestamp uint64)                       // called after block_diff is fully processed
 }
 
 type jsonRPCRequest struct {
@@ -208,6 +209,9 @@ func (f *wsFetcher) readLoop(state *statedb.StateDB) {
 						}
 					}
 				}
+			}
+			if f.onBlock != nil {
+				f.onBlock(m.Timestamp)
 			}
 			// Notify JS of new block via stdout
 			note, _ := json.Marshal(map[string]interface{}{
@@ -547,6 +551,9 @@ func main() {
 	if fetcher != nil {
 		fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
 			pm.InvalidateBySlot(addr, slot)
+		}
+		fetcher.onBlock = func(timestamp uint64) {
+			pm.SetBlockTimestamp(timestamp)
 		}
 	}
 	fmt.Fprintf(os.Stderr, "[native] pool manager ready for %d pools\n", len(embeddedPools))

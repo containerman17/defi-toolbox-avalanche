@@ -12,12 +12,19 @@ import (
 // PoolQuoter is implemented by each pool type's struct.
 // Quote() is pure math — no state access, no keccak, no map lookups.
 type PoolQuoter interface {
-	// Quote returns the output amount for a given input. Pure math, no state access.
-	Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool)
+	// Quote returns the output amount for a given input. Zero = no output.
+	Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int
 
 	// Address returns the pool's contract address.
 	Address() common.Address
 }
+
+// zeroQuoter is a PoolQuoter that always returns zero.
+// Used for blacklisted/unknown pools so Get() never returns nil.
+type zeroQuoter struct{ addr common.Address }
+
+func (z *zeroQuoter) Address() common.Address                          { return z.addr }
+func (z *zeroQuoter) Quote(_ *uint256.Int, _ bool) uint256.Int { return uint256.Int{} }
 
 // EVMCaller executes a view call against the current EVM state.
 // Returns (result, true) on success, (nil, false) on revert or error.
@@ -27,8 +34,7 @@ type EVMCaller func(to common.Address, data []byte) ([]byte, bool)
 type quoteCacheEntry struct {
 	amountIn   uint256.Int
 	zeroForOne bool
-	out        uint256.Int // valid only when ok==true
-	ok         bool        // false = revert/zero
+	out        uint256.Int // zero = no output
 	occupied   bool
 }
 
@@ -39,27 +45,21 @@ type QuoteCache struct {
 	next    uint8
 }
 
-func (c *QuoteCache) Lookup(amountIn *uint256.Int, zeroForOne bool) (out *uint256.Int, ok bool, hit bool) {
+func (c *QuoteCache) Lookup(amountIn *uint256.Int, zeroForOne bool) (out uint256.Int, hit bool) {
 	for i := range c.entries {
 		e := &c.entries[i]
 		if e.occupied && e.zeroForOne == zeroForOne && e.amountIn.Eq(amountIn) {
-			if !e.ok {
-				return nil, false, true // cached negative result
-			}
-			return &e.out, true, true
+			return e.out, true
 		}
 	}
-	return nil, false, false
+	return uint256.Int{}, false
 }
 
-func (c *QuoteCache) Store(amountIn *uint256.Int, zeroForOne bool, out *uint256.Int, ok bool) {
+func (c *QuoteCache) Store(amountIn *uint256.Int, zeroForOne bool, out uint256.Int) {
 	e := &c.entries[c.next&15]
 	e.amountIn.Set(amountIn)
 	e.zeroForOne = zeroForOne
-	if out != nil {
-		e.out.Set(out)
-	}
-	e.ok = ok
+	e.out = out
 	e.occupied = true
 	c.next++
 }
@@ -136,22 +136,24 @@ func (pm *PoolManager) SetPoolTokens(pool common.Address, token0, token1 common.
 }
 
 // Get returns a PoolQuoter for the given pool, building it if needed.
-// Returns nil if the pool has no formula in the registry (→ EVM fallback).
-// The registry is authoritative: -1 means EVM, positive means formula.
-// If the pool has FoT tokens, the returned quoter adjusts input/output automatically.
-func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
+// Never returns nil — unknown/blacklisted pools get a zeroQuoter.
+func (pm *PoolManager) Get(pool common.Address) PoolQuoter {
 	if q, ok := pm.pools[pool]; ok {
 		return q
 	}
 
 	formulaID, known := pm.registry.GetFormulaID(pool)
 	if !known || formulaID < 0 {
-		return nil // not in registry or marked invalid → EVM fallback
+		z := &zeroQuoter{addr: pool}
+		pm.pools[pool] = z
+		return z
 	}
 
 	result := pm.buildQuoter(pool, formulaID)
 	if result == nil {
-		fmt.Fprintf(os.Stderr, "V3DEBUG: buildQuoter returned nil for %s fid=%d\n", pool.Hex(), formulaID)
+		z := &zeroQuoter{addr: pool}
+		pm.pools[pool] = z
+		return z
 	}
 	return result
 }
@@ -159,23 +161,19 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 // Quote returns the output for a pool swap, using both pool cache and quote cache.
 // The pool struct is lazily built and cached. Quote results are cached in a 16-slot
 // ring buffer per pool (skipped for LFJ V2 which is time-dependent).
-func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	// Check quote cache
 	if !pm.noQuoteCache[pool] {
 		if cache, ok := pm.quoteCaches[pool]; ok {
-			if out, ok, hit := cache.Lookup(amountIn, zeroForOne); hit {
-				return out, ok
+			if out, hit := cache.Lookup(amountIn, zeroForOne); hit {
+				return out
 			}
 		}
 	}
 
 	// Get/build pool struct (pool cache)
 	quoter := pm.Get(pool)
-	if quoter == nil {
-		return nil, false
-	}
-
-	out, ok := quoter.Quote(amountIn, zeroForOne)
+	out := quoter.Quote(amountIn, zeroForOne)
 
 	// Store in quote cache
 	if !pm.noQuoteCache[pool] {
@@ -184,20 +182,16 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 			cache = &QuoteCache{}
 			pm.quoteCaches[pool] = cache
 		}
-		cache.Store(amountIn, zeroForOne, out, ok)
+		cache.Store(amountIn, zeroForOne, out)
 	}
 
-	return out, ok
+	return out
 }
 
 // QuoteBypassQuoteCache uses the pool cache but skips the quote cache.
 // Use in benchmarks to measure actual formula speed.
-func (pm *PoolManager) QuoteBypassQuoteCache(pool common.Address, amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
-	quoter := pm.Get(pool)
-	if quoter == nil {
-		return nil, false
-	}
-	return quoter.Quote(amountIn, zeroForOne)
+func (pm *PoolManager) QuoteBypassQuoteCache(pool common.Address, amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+	return pm.Get(pool).Quote(amountIn, zeroForOne)
 }
 
 // BuildQuoterForFormulaID builds a PoolQuoter for a pool using the given formula ID,
@@ -382,7 +376,7 @@ func (f *fotPoolQuoter) Address() common.Address {
 	return f.inner.Address()
 }
 
-func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	var modelIn, modelOut TokenModel
 	if zeroForOne {
 		modelIn = f.model0
@@ -394,31 +388,28 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.
 
 	// Adjust input: if tokenIn is FoT, pool receives less.
 	// Skip if this pool is exempt on the input side (token's transfer skips fee when to==pool).
-	var effectiveIn *uint256.Int
+	var effectiveIn uint256.Int
 	if f.inputExempt {
-		effectiveIn = amountIn
+		effectiveIn = *amountIn
 	} else {
 		effectiveIn = modelIn.AdjustInput(amountIn)
-		if effectiveIn == nil {
-			return nil, false
+		if effectiveIn.IsZero() {
+			return uint256.Int{}
 		}
 	}
 
-	out, ok := f.inner.Quote(effectiveIn, zeroForOne)
-	if !ok {
-		return nil, false
+	out := f.inner.Quote(&effectiveIn, zeroForOne)
+	if out.IsZero() {
+		return uint256.Int{}
 	}
 
 	// Adjust output: if tokenOut is FoT, user receives less.
 	// Skip if this pool is exempt on the output side (token skips fee when pool is sender).
 	if !f.outputExempt {
-		out = modelOut.AdjustOutput(out)
-		if out == nil {
-			return nil, false
-		}
+		out = modelOut.AdjustOutput(&out)
 	}
 
-	return out, true
+	return out
 }
 
 // Exported wrappers for experiments

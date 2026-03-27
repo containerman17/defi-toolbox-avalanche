@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-03-27 — Simplify Quote: value return + remove EVM fallback
+
+### Quote return type: `(*uint256.Int, bool)` → `uint256.Int`
+- Every pool formula now returns `uint256.Int` by value. Zero = no output.
+- No more `nil` pointer checks, no more `bool ok` pattern.
+- `QuoteCache` simplified: no more `ok` field, just stores the value.
+- `PoolManager.Get()` never returns nil — unknown/blacklisted pools get `zeroQuoter`.
+
+### EVM fallback removed
+- Benchmark no longer falls back to EVM when formula can't answer.
+- Pathfinder `quotePool` uses formula only (EVM verification of top-10 stays).
+- `--debug-coverage` flag removed (no more fallback to categorize).
+- Single metric: **mismatches** (formula != EVM ground truth).
+- Benchmark: 2000/2000 formula, 36.5ms total (was ~1300ms with EVM fallback).
+
+### Files changed
+- `formulas/pool_quoter.go` — interface, cache, PoolManager, zeroQuoter, fotPoolQuoter
+- `formulas/token_model.go` — AdjustInput/AdjustOutput return types
+- All `formulas/pool_*.go` — Quote signature (10 implementations)
+- `pathfinder/bfs.go` — removed EVM fallback, simplified quotePool
+- `cmd/benchmark/main.go` — removed EVM fallback, simplified hot pass
+- `arb/rates.go`, `arb/scanner.go`, `arb/cycles.go` — adapted to value returns
+- `formulas/registry.go` — removed unused `IsInvalid()`
+
 ## 2026-03-27 — WAVAX cyclic arbitrage scanner
 
 ### New `arb/` package + `cmd/arb` binary

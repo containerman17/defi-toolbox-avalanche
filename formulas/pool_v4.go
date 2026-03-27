@@ -129,9 +129,9 @@ func (p *V4Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Determine swap fee per-direction using stored lpFee and protocolFee.
@@ -228,12 +228,7 @@ func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		amountOut.Sub(&amountOut, &feeAmt)
 	}
 
-	if amountOut.IsZero() {
-		return nil, false
-	}
-
-	result := new(uint256.Int).Set(&amountOut)
-	return result, true
+	return amountOut
 }
 
 // nextInitializedTick scans one pre-loaded bitmap word (same as V3Pool).

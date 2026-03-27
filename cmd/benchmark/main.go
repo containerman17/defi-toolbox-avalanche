@@ -251,12 +251,11 @@ type quoteKey struct {
 
 type typeStats struct {
 	Quotes   int     // total quotes (2 per pool)
-	HotMs    float64 // hot pass execution time (formula or EVM)
+	HotMs    float64 // hot pass execution time
 	Match    int     // result == EVM ground truth
 	Mismatch int     // result != EVM ground truth
 	NonZero  int     // EVM ground truth was non-zero
 	Formula  int     // quotes handled by formula
-	EVM      int     // quotes handled by EVM fallback
 }
 
 type blockResult struct {
@@ -264,7 +263,6 @@ type blockResult struct {
 	byType      map[int]*typeStats
 	mismatchSet map[quoteKey]bool // true = mismatched on this block
 	mismatchLog []string
-	coverageLog []string // debug: why each pool fell back to EVM
 }
 
 var typeNames = map[int]string{
@@ -283,7 +281,6 @@ func runBlockBenchmark(
 	pools []pathfinder.Pool,
 	overrides []pathfinder.ParsedOverride,
 	skipFormulas bool,
-	debugCoverage bool,
 ) (*blockResult, error) {
 	stateServerURL := fmt.Sprintf("ws://localhost:7449/debug/%d", blockNum)
 
@@ -363,15 +360,9 @@ func runBlockBenchmark(
 			zeroForOne := tokenIn.Cmp(tokenOut) < 0
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
-			quoted := false
 			if !skipFormulas {
-				if quoter := pm.Get(pool.Address); quoter != nil {
-					if out, ok := quoter.Quote(amountIn, zeroForOne); ok && out != nil && !out.IsZero() {
-						quoted = true
-					}
-				}
-			}
-			if !quoted {
+				pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+			} else {
 				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 				cs.Reset()
 				evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
@@ -395,7 +386,6 @@ func runBlockBenchmark(
 
 	mismatchSet := make(map[quoteKey]bool)
 	var mismatchLog []string
-	var coverageLog []string
 	t0 := time.Now()
 
 	for i := range pools {
@@ -417,44 +407,9 @@ func runBlockBenchmark(
 				ts.NonZero++
 			}
 
-			var result uint256.Int
 			qt0 := time.Now()
-			quoted := false
-			quoterNil := true
-			if !skipFormulas {
-				if quoter := pm.Get(pool.Address); quoter != nil {
-					quoterNil = false
-					if out, ok := quoter.Quote(amountIn, zeroForOne); ok && out != nil {
-						result = *out
-						quoted = true
-						ts.Formula++
-					} else if debugCoverage && tokenIdx[0] == 0 {
-						coverageLog = append(coverageLog, fmt.Sprintf("  EVM_FALLBACK %s type=%d(%s) reason=quote_fail",
-							pool.Address.Hex(), pool.PoolType, typeNames[pool.PoolType]))
-					}
-				}
-			}
-			if !quoted {
-				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
-				cs.Reset()
-				ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
-				if evmErr == nil && len(ret) >= 32 {
-					result.SetBytes(ret[:32])
-				}
-				ts.EVM++
-				// Debug: log why formula was not used (dir=0 only to avoid dups)
-				if debugCoverage && tokenIdx[0] == 0 && quoterNil {
-					fid, known := registry.GetFormulaID(pool.Address)
-					reason := "not_in_registry"
-					if known && fid < 0 {
-						reason = "blacklisted"
-					} else if known {
-						reason = fmt.Sprintf("builder_nil(fid=%d)", fid)
-					}
-					coverageLog = append(coverageLog, fmt.Sprintf("  EVM_FALLBACK %s type=%d(%s) reason=%s",
-						pool.Address.Hex(), pool.PoolType, typeNames[pool.PoolType], reason))
-				}
-			}
+			result := pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+			ts.Formula++
 			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
 
 			if result.Eq(&evmResult) {
@@ -495,15 +450,14 @@ func runBlockBenchmark(
 		byType:      byType,
 		mismatchSet: mismatchSet,
 		mismatchLog: mismatchLog,
-		coverageLog: coverageLog,
 	}, nil
 }
 
 // printTypeTable prints the per-type breakdown table to stderr and returns totals.
-func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla, totalEvm int, totalHotMs float64) {
-	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %6s %8s %6s %6s %8s\n",
-		"TYPE", "POOLS", "QUOTES", "FMLA", "EVM", "MS", "MATCH", "MISS", "NONZERO%")
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
+func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla int, totalHotMs float64) {
+	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %8s %6s %6s %8s\n",
+		"TYPE", "POOLS", "QUOTES", "FMLA", "MS", "MATCH", "MISS", "NONZERO%")
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 74))
 
 	type sortEntry struct {
 		poolType int
@@ -530,22 +484,21 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 		pc := s.Quotes / 2
 		nzPct := 0.0
 		if s.Quotes > 0 { nzPct = float64(s.NonZero) / float64(s.Quotes) * 100 }
-		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
-			name, pc, s.Quotes, s.Formula, s.EVM, s.HotMs, s.Match, s.Mismatch, nzPct)
+		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
+			name, pc, s.Quotes, s.Formula, s.HotMs, s.Match, s.Mismatch, nzPct)
 		totalQuotes += s.Quotes
 		totalMatch += s.Match
 		totalMismatch += s.Mismatch
 		totalNonZero += s.NonZero
 		totalFmla += s.Formula
-		totalEvm += s.EVM
 		totalHotMs += s.HotMs
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 74))
 	totalNzPct := 0.0
 	if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
-	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %6d %8.1f %6d %6d %7.1f%%\n",
-		"TOTAL", poolCount, totalQuotes, totalFmla, totalEvm, totalHotMs, totalMatch, totalMismatch, totalNzPct)
+	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
+		"TOTAL", poolCount, totalQuotes, totalFmla, totalHotMs, totalMatch, totalMismatch, totalNzPct)
 	return
 }
 
@@ -555,14 +508,12 @@ func main() {
 	poolLimit := 4000
 	skipFormulas := false
 	numBlocks := 1
-	debugCoverage := false
 	var singlePool string
 
 	for i, arg := range os.Args {
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
 		if arg == "--skip-formulas" { skipFormulas = true }
 		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
-		if arg == "--debug-coverage" { debugCoverage = true }
 		if arg == "--pool" && i+1 < len(os.Args) { singlePool = os.Args[i+1] }
 	}
 	if numBlocks < 1 { numBlocks = 1 }
@@ -629,7 +580,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "\n=== Block %d (%d/%d) ===\n", blockNum, idx+1, numBlocks)
 		}
 
-		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas, debugCoverage)
+		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
@@ -640,13 +591,9 @@ func main() {
 		for _, line := range res.mismatchLog {
 			fmt.Fprintln(os.Stderr, line)
 		}
-		// Print coverage debug info
-		for _, line := range res.coverageLog {
-			fmt.Fprintln(os.Stderr, line)
-		}
 
 		// Print per-type breakdown for this block
-		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _, _ := printTypeTable(res.byType, len(pools))
+		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(res.byType, len(pools))
 		correctPct := 0.0
 		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
 		totalNzPct := 0.0
@@ -701,16 +648,15 @@ func main() {
 			}
 		}
 
-		// Aggregate NonZero, Formula, EVM, HotMs from first block's byType
+		// Aggregate NonZero, Formula, HotMs from first block's byType
 		for pt, fs := range first.byType {
 			ts := aggGetStats(pt)
 			ts.NonZero = fs.NonZero
 			ts.Formula = fs.Formula
-			ts.EVM = fs.EVM
 			ts.HotMs = fs.HotMs
 		}
 
-		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _, _ := printTypeTable(aggByType, len(pools))
+		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(aggByType, len(pools))
 		correctPct := 0.0
 		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
 		totalNzPct := 0.0
@@ -722,14 +668,13 @@ func main() {
 	// ─── JSON output ───
 	// Use first block's stats for single-block backward compat
 	first := results[0]
-	firstQ, firstMatch, firstMismatch, firstNonZero, firstFmla, firstEvm, firstHotMs := 0, 0, 0, 0, 0, 0, 0.0
+	firstQ, firstMatch, firstMismatch, firstNonZero, firstFmla, firstHotMs := 0, 0, 0, 0, 0, 0.0
 	for _, s := range first.byType {
 		firstQ += s.Quotes
 		firstMatch += s.Match
 		firstMismatch += s.Mismatch
 		firstNonZero += s.NonZero
 		firstFmla += s.Formula
-		firstEvm += s.EVM
 		firstHotMs += s.HotMs
 	}
 	firstCorrectPct := 0.0
@@ -742,7 +687,6 @@ func main() {
 		"pools":       len(pools),
 		"quotes":      firstQ,
 		"formula":     firstFmla,
-		"evm":         firstEvm,
 		"totalMs":     fmt.Sprintf("%.1f", firstHotMs),
 		"msPerPool":   fmt.Sprintf("%.4f", msPerPool),
 		"match":       firstMatch,
@@ -757,14 +701,12 @@ func main() {
 		// Per-block array
 		perBlock := make([]map[string]interface{}, 0, numBlocks)
 		for _, res := range results {
-			bq, bm, bmm, bnz, bf, be, bms := 0, 0, 0, 0, 0, 0, 0.0
+			bq, bm, bmm, bnz, bms := 0, 0, 0, 0, 0.0
 			for _, s := range res.byType {
 				bq += s.Quotes
 				bm += s.Match
 				bmm += s.Mismatch
 				bnz += s.NonZero
-				bf += s.Formula
-				be += s.EVM
 				bms += s.HotMs
 			}
 			bc := 0.0
@@ -829,8 +771,8 @@ func main() {
 			gitHash = strings.TrimSpace(string(gitOut))
 		}
 		logTs := time.Now().Format("2006-01-02_15:04")
-		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d evm=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
-			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstEvm, firstMatch, firstMismatch, firstCorrectPct, firstNzPct)
+		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
+			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstMatch, firstMismatch, firstCorrectPct, firstNzPct)
 		os.MkdirAll("benchmark_results", 0o755)
 		logF, logErr := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if logErr == nil {

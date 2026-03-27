@@ -305,9 +305,9 @@ func (p *V3Pool) TickCount() int {
 	return len(p.tickLiquidityNet)
 }
 
-func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	var sqrtPriceX96, liquidity, amountRemaining, amountOut uint256.Int
@@ -327,8 +327,7 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		nextTick, initialized, outOfRange := p.nextInitializedTick(tick, zeroForOne)
 		if outOfRange {
 			// Swap pushed price beyond the pre-loaded bitmap range.
-			// Return (nil, false) so the caller falls back to EVM.
-			return nil, false
+			return uint256.Int{}
 		}
 
 		if nextTick < algebraMinTick {
@@ -407,12 +406,7 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bo
 		}
 	}
 
-	if amountOut.IsZero() {
-		return nil, false
-	}
-
-	result := new(uint256.Int).Set(&amountOut)
-	return result, true
+	return amountOut
 }
 
 // nextInitializedTick scans ONE pre-loaded bitmap word (exact same as Solidity).

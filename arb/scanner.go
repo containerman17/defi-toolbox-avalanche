@@ -286,11 +286,11 @@ func (s *Scanner) OnBlock(
 func (s *Scanner) sequentialQuote(c *Cycle, amountIn *uint256.Int) *uint256.Int {
 	current := new(uint256.Int).Set(amountIn)
 	for i := 0; i < int(c.Hops); i++ {
-		out, ok := s.pm.Quote(s.pt.Addr(c.Pools[i]), current, c.Dirs[i])
-		if !ok || out == nil || out.IsZero() {
+		out := s.pm.Quote(s.pt.Addr(c.Pools[i]), current, c.Dirs[i])
+		if out.IsZero() {
 			return nil
 		}
-		current = out
+		current = new(uint256.Int).Set(&out)
 	}
 	return current
 }

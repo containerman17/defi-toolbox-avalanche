@@ -214,9 +214,9 @@ func (p *BalancerV3Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256.Int, bool) {
+func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	if amountIn.IsZero() {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Determine token indices from zeroForOne.
@@ -230,7 +230,7 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	// and the fact that pools.txt stores them in address-sorted order.
 
 	if len(p.info.Tokens) < 2 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// For 2-token pools: token0 < token1 in address ordering = registration order for Balancer
@@ -250,7 +250,7 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 		// Multi-token pools: need to know actual tokenIn/Out addresses.
 		// The PoolQuoter interface only gives us zeroForOne, which is insufficient
 		// for >2 tokens. Skip these for now.
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Scale amountIn to 18 decimals: toScaled18ApplyRateRoundDown
@@ -267,7 +267,7 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	amountInAfterFee := new(big.Int).Sub(amountInScaled18, feeAmount)
 
 	if amountInAfterFee.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Compute amountOutScaled18 using pool-type-specific math
@@ -286,7 +286,7 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	case BalV3Stable:
 		invariant := StableComputeInvariant(p.info.Amp, p.balancesLiveScaled18)
 		if invariant.Sign() == 0 {
-			return nil, false
+			return uint256.Int{}
 		}
 		amountOutScaled18 = StableComputeOutGivenExactIn(
 			p.info.Amp,
@@ -297,11 +297,11 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 		)
 
 	default:
-		return nil, false
+		return uint256.Int{}
 	}
 
 	if amountOutScaled18 == nil || amountOutScaled18.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	// Scale back to raw: toRawUndoRateRoundDown
@@ -321,15 +321,15 @@ func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (*uint256
 	}
 
 	if amountOutRaw.Sign() <= 0 {
-		return nil, false
+		return uint256.Int{}
 	}
 
 	result, overflow := uint256.FromBig(amountOutRaw)
 	if overflow {
-		return nil, false
+		return uint256.Int{}
 	}
 
-	return result, true
+	return *result
 }
 
 // ── Storage slot helpers ──

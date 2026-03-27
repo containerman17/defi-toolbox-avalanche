@@ -55,23 +55,17 @@ func (rt *RateTable) Update(pool common.Address, pm *formulas.PoolManager) bool 
 		return false
 	}
 
-	// Check if pool can be built at all (one cheap Get() check)
-	if pm.Get(pool) == nil {
-		rt.deadPools[pool] = true
-		return false
-	}
-
 	r := &poolRate{}
 	anyOk := false
 
 	for dir := 0; dir < 2; dir++ {
 		zeroForOne := dir == 0
 		for s := 0; s < NumSizeBuckets; s++ {
-			out, ok := pm.Quote(pool, SizeBuckets[s], zeroForOne)
-			if ok && out != nil && !out.IsZero() {
+			out := pm.Quote(pool, SizeBuckets[s], zeroForOne)
+			if !out.IsZero() {
 				// Rate = out / in as float64
 				inF := float64FromU256(SizeBuckets[s])
-				outF := float64FromU256(out)
+				outF := float64FromU256(&out)
 				if inF > 0 {
 					r[dir][s] = outF / inF
 					anyOk = true
@@ -80,10 +74,12 @@ func (rt *RateTable) Update(pool common.Address, pm *formulas.PoolManager) bool 
 		}
 	}
 
-	if anyOk {
-		rt.rates[pool] = r
+	if !anyOk {
+		rt.deadPools[pool] = true
+		return false
 	}
-	return anyOk
+	rt.rates[pool] = r
+	return true
 }
 
 // Get returns the rate for a pool, direction, and size bucket.

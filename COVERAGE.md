@@ -3,16 +3,48 @@
 Living document for investigating and fixing formula coverage gaps.
 Agents investigating coverage should read this first, and append findings/tools below.
 
+## Running the Benchmark
+
+**Prerequisites**: The state server must be running at `ws://localhost:7449`.
+
+```bash
+# Full benchmark (1000 pools, ~2 minutes)
+timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1
+
+# Single pool (< 1 second) — use this when debugging a formula
+timeout 30 go run ./cmd/benchmark/ --pool 0xADDRESS 2>&1
+
+# With coverage debug (shows WHY each pool falls back to EVM)
+timeout 120 go run ./cmd/benchmark/ --limit 1000 --debug-coverage 2>&1
+
+# Multi-block validation (prevents single-block overfitting)
+timeout 600 go run ./cmd/benchmark/ --limit 1000 --blocks 3 2>&1
+
+# Wider pool set
+timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
+```
+
+**Flags:**
+| Flag | Description |
+|------|-------------|
+| `--limit N` | Number of pools to test (default 4000) |
+| `--pool 0x...` | Test a single pool only (fastest iteration) |
+| `--blocks N` | Test across N blocks (default 1) |
+| `--debug-coverage` | Log why each pool falls back to EVM |
+| `--skip-formulas` | EVM-only mode (no formula quotes) |
+| `--cpuprofile FILE` | Write CPU profile |
+| `--memprofile FILE` | Write memory profile |
+
 ## Current State (2026-03-27)
 
-1586 formula / 414 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
-**79.3% formula coverage, 100% correctness** (0 mismatches).
+7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools x 2 directions).
+**93.9% formula coverage, 97.5% correctness** (50 mismatches, 1950 match on 1000-pool benchmark).
 
 ### EVM Fallback Breakdown
 
 | Reason | Count | Description |
 |--------|-------|-------------|
-| blacklisted | 143 | Registry says -1; many are false positives from tooling bugs |
+| blacklisted | 61 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
 | quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — bitmap exhaustion, zero sqrtPrice, etc. |
 | not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
 | builder_nil(fid=2) V3 | 6 | Zombie pools: non-zero liquidity but no initialized ticks in bitmap |
@@ -28,11 +60,12 @@ Agents investigating coverage should read this first, and append findings/tools 
 
 | Type | Count | Notes |
 |------|-------|-------|
-| lfj_v2 | 45 | Many are FoT or discover tool couldn't test |
-| lfj_v1 | 6 | 285 un-blacklisted, 11 remain (missing token overrides) |
-| v2 | 25 | hookContract overrides not applied in Go |
-| uniswap_v4 | 24 | Various |
-| algebra | 23 | buildQuoter missing Algebra case |
+| uniswap_v4 (type=9) | 24 | Formula returns non-zero, EVM returns 0 |
+| lfj_v1 (type=2) | 11 | Missing token overrides |
+| v2 family (type=8) | 11 | vapordex(4), hurricane(4), swapsicle(2), pangolin(1) |
+| uniswap_v3/pharaoh_v3 (type=0) | 6 | Token-drained pools, formula can't detect zero ERC20 balances |
+| algebra (type=1) | 4 | pluginConfig=2 dynamic fee via beforeSwap() hook |
+| lfj_v2 (type=3) | 4 | One-sided liquidity or missing overrides |
 | uniswap_v3 | 8 | 4 drained pools (ERC20 balance=0, unfixable); 4 others |
 | pharaoh_v1 | 5 | Various |
 | balancer_v3 | 5 | GyroECLP unsupported |
@@ -54,7 +87,18 @@ Agents investigating coverage should read this first, and append findings/tools 
 **Mechanism:** `formulas/pool_quoter.go` `buildQuoter()` has no case for `FormulaAlgebra = 4`. The formula exists via the legacy `dispatchFormula` path, but the PoolManager path returns nil.
 **Fix:** Add `case FormulaAlgebra:` to the switch in `buildQuoter()` (line 266). This is the single highest-impact fix.
 
-### 4. V3 pools with quote_fail or builder_nil
+### 4. Algebra tick struct layout bug (FIXED)
+**Impact:** All Algebra pools with multi-tick swaps returned wrong results.
+**Mechanism:** `algebraReadTick` in `formulas/algebra.go` incorrectly read the tick struct layout. It assumed `liquidityTotal` (uint128) and `liquidityDelta` (int128) were packed in slot+0 (128 bits each). In reality, Algebra Integral uses `uint256 liquidityTotal` (full slot+0) and `int128 liquidityDelta` in the lower 128 bits of slot+1 (packed with `prevTick` and `nextTick`). The old code read `liquidityDelta` from the upper 128 bits of slot+0, which was always 0 for pools with `liquidityTotal < 2^128`.
+**Symptom:** dir=0 had tiny errors (0.002% from rounding with wrong liquidity deltas), dir=1 could be wildly off (37x) due to incorrect liquidity tracking across tick crossings.
+**Fix:** Changed `algebraReadTick` to read only slot+1: `liquidityDelta` from bits [0:128], `prevTick` from bits [128:152], `nextTick` from bits [152:176]. Slot+0 (`liquidityTotal`) is not needed for quoting.
+
+### 5. Algebra dynamic fee plugin investigation
+**Finding:** The 28 Algebra pools with `pluginConfig=2` do NOT have `BEFORE_SWAP_FLAG` (bit 0) set. `pluginConfig=2` is `AFTER_SWAP_FLAG` only. This means `beforeSwap()` is never called and the pool uses `lastFee` from globalState directly. No dynamic fee adjustment occurs at swap time.
+**Plugin type:** The plugin at `0x50e692a68a91127b5dd11836d721274d266fa1d5` is an `AlgebraBasePluginV2` (sliding fee plugin). Its `beforeSwap()` would compute a direction-dependent fee using `_getFeeAndUpdateFactors()`, but since `BEFORE_SWAP_FLAG` is not in `pluginConfig`, it's never invoked.
+**Conclusion:** No formula change needed for dynamic fees. The existing `lastFee` from globalState is the correct fee to use.
+
+### 6. V3 pools with quote_fail or builder_nil
 **Impact:** 6 builder_nil + ~20 quote_fail V3 pools (was reported as 38 builder_nil due to debug logging bug).
 **Root cause investigation:** All V3 pools ARE in `v3PoolFees` map — the registry is NOT the issue.
 - **19 Pharaoh V3 pools** use ERC-7201 namespaced storage. These pools have zero on-chain state at block 81300000 (uninitialized). Layout detection correctly fails, returning an empty V3Pool. Quote returns (nil, false). No fix needed.
@@ -198,18 +242,39 @@ During bulk un-blacklisting trial (all 43 → formula=3), 29 pools mismatched:
 
 All 29 reverted to formula=-1. Root cause: one-sided liquidity. The LFJ V2 tree structure marks bins as non-empty even if they only have one-side reserves. The formula traverses these "phantom" bins and produces non-zero output, but the on-chain swap correctly reverts.
 
+### Zero-output formula should return (zero, true) not (nil, false)
+
+**Pool:** `0x864d4e5Ee7318e97483DB7EB0912E09F161516EA` (LFJ V2, WAVAX/USDC, binStep=10)
+**Symptom:** dir=1 (USDC->WAVAX) — formula returns 0 (matching EVM revert), but `Quote()` treated zero as failure, falling through to an expensive EVM call (4.8M gas, ~11ms) that also reverts.
+**Root cause:** `LFJV2Pool.Quote()` returned `(nil, false)` when `QuoteLFJV2Fast` computed zero output (out-of-liquidity). The benchmark interpreted `ok=false` as "formula can't handle this" and fell back to EVM. The 1e18 amountIn = 1 trillion USDC (6 decimals) exhausts all bins.
+**Fix:** Changed `Quote()` to return `(new(uint256.Int), true)` when the formula computes zero output. This correctly signals "the formula knows the answer is zero" and avoids the EVM fallback.
+**Impact:** +90 formula quotes (7418→7508), -90 EVM calls (582→492), +5 matches (7680→7685), correctness 96.0%→96.1%. Per-pool time improved for affected pools (12.4ms→1.2ms for this pool).
+
+### Pool `0xf0Ef15733904131Eb39790E64Fa3C7575B41AbFE` — EVM revert investigation
+
+**Pool:** LFJ V2, XAUt/USDT (binStep=5), both tokens are 6-decimal Tether proxy contracts.
+**Symptom:** EVM swap reverts in both directions, gasUsed=4,846,645 (~5M limit).
+**Investigation:**
+1. **Token balance overrides verified correct.** Both tokens (`0x2775...dd32` XAUt, `0x9702...a8c7` USDT) use `slot: 51` for the ERC20 `_balances` mapping. Verified empirically: keccak256(abi.encode(holder, 51)) matches on-chain `balanceOf()` for known holders.
+2. **Pool has valid liquidity.** activeId=8405406 (not sentinel 0x800000). Active bin reserves: reserveX=40338, reserveY=18871738. Adjacent bins populated in both directions.
+3. **Root cause: swap amount vs pool liquidity.** The benchmark uses amountIn=1e18 (fixed for all pools). For 6-decimal tokens, 1e18 = 10^12 tokens. Pool total reserves: ~23 XAUt + ~17,605 USDT. The swap exhausts all bins and the LFJ V2 contract reverts with `LBPair__OutOfLiquidity()`.
+4. **Not a balance override bug.** The IERC20.transfer(pool, amountIn) inside `_swapLFJV2` succeeds (confirmed by high gas usage — a failed transfer would revert at ~50k gas). The revert happens inside the pool's `swap()` function after traversing all bins.
+5. **Formula matches correctly.** Since commit `b34bbb0`, `Quote()` returns `(zero, true)` on out-of-liquidity. Both formula=0 and EVM=0. 100% correct.
+
+**Resolution:** Pool correctly at formula=3. No fix needed — low liquidity at the benchmark's standard test amount is expected behavior, not a bug.
+
 ### Final State
 
 | Formula | Count | Notes |
 |---------|-------|-------|
-| formula=3 (active) | 214 | Benchmarked clean: 0 mismatches across 3 blocks |
-| formula=-1 (blacklisted) | ~70 | One-sided liquidity, not in lfjV2Registry, or other issues |
+| formula=3 (active) | ~260 | Benchmarked clean: 0 mismatches from un-blacklisted pools |
+| formula=-1 (blacklisted) | ~139 | One-sided liquidity, not in lfjV2Registry, missing overrides, or other issues |
 
-### Verification (3-block benchmark)
+### Verification
 ```
-lfj_v2 134 pools  96 formula  172 EVM  0 MISS (formula=3 pools)
+pool 0xf0Ef...bFE: FMLA=2 EVM=0 MATCH=2 MISS=0 100.0% correct, 0.0% non-zero
 ```
-Note: The benchmark `lfj_v2` row shows pool_type=3 pools, which includes both formula=3 and EVM-fallback pools. Formula=3 pools show 0 mismatches.
+Formula handles this pool, no EVM fallback. Both directions return 0 (out-of-liquidity at 1e18 amountIn).
 
 ### Key Files Modified
 - `formulas/pool_lfj_v2.go` — Added `lfjV2NullBinID = 0x800000` constant and sentinel check in `Quote()`
@@ -473,7 +538,7 @@ without closing positions. The formula cannot distinguish this from a live pool.
 - All ~895 positional struct literals `{N, bool}` updated to `{N, bool, false}` to work with the 3-field `LFJV2Immutables` struct
 
 **Updated coverage breakdown (accurate after fix):**
-- 143 blacklisted
+- 61 blacklisted
 - 49 quote_fail (pool builds, Quote fails — bitmap exhaustion, zero sqrtPrice, etc.)
 - 10 not_in_registry
 - 6 builder_nil(fid=2) — actual V3 zombie pools
@@ -580,3 +645,23 @@ time and add it to `amountIn` during `Quote()` for the appropriate swap directio
 LFJ V2 pool (one-time cost during warm-up).
 
 **Result:** 2000/2000 quotes match (0 mismatches), 100% correctness.
+
+### LFJ V2 pool 0xb3dC87Bd un-blacklisting (2026-03-27)
+
+**Pool:** `0xb3dC87Bd570d8dEAa960763234Ef3d93Cc789E6c` (LFJ V2, type=3)
+**Tokens:** token0=WAVAX (`0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7`), token1=FolksToken (`0xff7f8f301f7a706e3cfd3d2275f5dc0b9ee8009b`)
+
+**Investigation:** Pool was blacklisted (formula=-1). The user suspected token1's balance override slot was wrong because dir=1 (token1->token0) reverts while dir=0 works.
+
+**Findings:**
+1. Token1 is a UUPS proxy (`ERC1967Proxy`) with implementation at `0x82fd247d884e8b8195cacf329682b61639aa6a78` (FolksToken contract).
+2. FolksToken uses OpenZeppelin ERC20Upgradeable v5 with ERC-7201 namespaced storage. The `_balances` mapping is at base `0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00` -- this matches the override in `token_overrides.json`.
+3. The balance slot computation was verified correct: `keccak256(abi.encode(poolAddress, erc7201Base))` produces a slot whose on-chain storage matches `balanceOf(pool)`.
+4. The dir=1 EVM revert is `LBPair__OutOfLiquidity()` (selector `0xd36bfd88`), meaning the pool genuinely has no liquidity in that direction. This is NOT a token override issue.
+5. The formula correctly returns 0 for dir=1 (matching the EVM revert), and returns a non-zero value for dir=0 (matching EVM). 100% correctness.
+6. The token has 6 decimals and a cap of 50M tokens. The 1e21 balance override (1e15 tokens at 6 decimals) exceeds the cap but this doesn't matter because `ERC20CappedUpgradeable._update` only checks the cap on mints (from == address(0)), not transfers.
+
+**Fix:** Changed pool from formula=-1 to formula=3 in `formulas/registry.txt`. Benchmark confirms 100% correctness (2 quotes, 2 match, 0 mismatch).
+
+**Files changed:**
+- `formulas/registry.txt` -- Changed `0xb3dc87bd570d8deaa960763234ef3d93cc789e6c:-1` to `:3`

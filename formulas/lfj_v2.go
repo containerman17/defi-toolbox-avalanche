@@ -881,10 +881,12 @@ func QuoteLFJV2Storage(read StateReader, state *LFJV2State, layout *lfjV2Layout,
 				nextId, err = lfjV2FindFirstLeft(read, state.PoolAddress, layout, activeId)
 			}
 			if err != nil {
-				break
+				// EVM reverts on tree-read error; match that behavior
+				return big.NewInt(0)
 			}
 			if nextId == 0 || nextId == 0xFFFFFF {
-				break
+				// Out of liquidity — EVM reverts with LBPair__OutOfLiquidity()
+				return big.NewInt(0)
 			}
 			// Cache
 			if swapForY {

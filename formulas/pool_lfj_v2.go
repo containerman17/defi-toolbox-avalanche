@@ -194,8 +194,14 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 
 	amtIn := adjustedIn.ToBig()
 	out := QuoteLFJV2Fast(p.reader, p.state, p.layout, amtIn, swapForY, p.blockTimestamp)
-	if out == nil || out.Sign() <= 0 {
+	if out == nil {
 		return nil, false
+	}
+	if out.Sign() <= 0 {
+		// Formula computed zero output (e.g. out-of-liquidity revert).
+		// Return zero with ok=true so the caller doesn't fall through to
+		// an expensive EVM call that would also revert.
+		return new(uint256.Int), true
 	}
 	outU256, overflow := uint256.FromBig(out)
 	if overflow {

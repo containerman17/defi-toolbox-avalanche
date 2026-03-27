@@ -19,6 +19,49 @@
 - `arb/verify.go` — EVM verification via multi-hop executeSwap encoding
 - `cmd/arb/main.go` — standalone binary entry point
 
+## 2026-03-27 — Bulk un-blacklist: 78 of 139 blacklisted pools
+
+### Tested all 139 blacklisted pools by mapping pool types to formula IDs
+- Mapped pool types from pools.txt to correct formula IDs:
+  - type=0 (uniswap_v3/pharaoh_v3) -> formula 2: 10 pools, 6 succeeded
+  - type=1 (algebra) -> formula 4: 5 pools, 1 succeeded
+  - type=2 (lfj_v1) -> formula 0: 18 pools, 7 succeeded
+  - type=3 (lfj_v2) -> formula 3: 4 pools, 0 succeeded
+  - type=8 (v2 variants) -> formula 0: 66 pools, 54 succeeded
+  - type=9 (uniswap_v4) -> formula 6: 36 pools, 12 succeeded (24 reverted)
+- 78 pools pass correctly, 61 reverted back to -1 (formula returns non-zero, EVM returns zero).
+- Blacklisted pool count reduced from 139 to 61.
+- Benchmark: 100.0% correct (2000 match, 0 mismatch), 86.2% non-zero.
+- Remaining 61 blacklisted pools: 24 uniswap_v4, 11 lfj_v1, 4 vapordex, 4 hurricane,
+  4 lfj_v2, 4 algebra, 4 uniswap_v3, 2 pharaoh_v3, 2 swapsicle, 1 sushiswap_v2, 1 pangolin_v2.
+
+## 2026-03-27 — LFJ V2 zero-output formula should signal success
+
+### Fixed `LFJV2Pool.Quote()` returning (nil, false) for zero-output swaps
+- When `QuoteLFJV2Fast` computed zero output (e.g. out-of-liquidity because 1e18 USDC =
+  1 trillion USDC exceeds all bin reserves), `Quote()` treated it as a formula failure
+  and returned `(nil, false)`. The benchmark then fell through to an expensive EVM call
+  (~4.8M gas, ~11ms) that also reverted with `LBPair__OutOfLiquidity`.
+- Fix: return `(new(uint256.Int), true)` for zero output — "the formula knows the answer
+  is zero" — avoiding the EVM fallback entirely.
+- Investigated pool `0x864d4e5Ee7318e97483DB7EB0912E09F161516EA` (WAVAX/USDC, binStep=10):
+  dir=0 works fine, dir=1 correctly returns 0 (amount too large for available liquidity).
+- Impact: +90 formula quotes (7418->7508), -90 EVM calls (582->492), correctness 96.0%->96.1%.
+
+## 2026-03-27 — Fix Algebra tick struct layout bug
+
+### Fixed incorrect tick data reading in `algebraReadTick`
+- The function read `liquidityDelta` from the upper 128 bits of tick slot+0, but Algebra Integral
+  stores `uint256 liquidityTotal` in all 256 bits of slot+0. The actual `int128 liquidityDelta`
+  lives in the lower 128 bits of slot+1 (packed with `prevTick` and `nextTick`).
+- This caused `liquidityDelta` to always be 0 for normal pools, breaking liquidity tracking
+  across tick crossings. dir=0 had tiny errors (~0.002%), dir=1 could be off by 37x.
+- Fix: read only slot+1 for all three values (liquidityDelta, prevTick, nextTick).
+- Enabled pool `0x1ABe428146795BC754170AF24CFd78663f257D29` (WETH.e/USDt) in registry.
+- Investigated Algebra dynamic fee plugins: pools with `pluginConfig=2` only have
+  `AFTER_SWAP_FLAG` set, not `BEFORE_SWAP_FLAG`. No dynamic fee override happens at swap time;
+  `lastFee` from globalState is the correct fee.
+
 ## 2026-03-27 — LFJ V2.0 pool support
 
 ### Added V2.0 storage layout for LFJ V2 (Liquidity Book) pools

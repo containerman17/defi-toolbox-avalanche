@@ -335,12 +335,15 @@ func runBlockBenchmark(
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 			cs.Reset()
-			ret, _, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+			ret, gasUsed, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
 			key := quoteKey{pool.Address, tokenIdx[0]}
 			if evmErr == nil && len(ret) >= 32 {
 				var out uint256.Int
 				out.SetBytes(ret[:32])
 				evmGround[key] = out
+			}
+			if len(pools) == 1 {
+				fmt.Fprintf(os.Stderr, "\n  [DEBUG] pool=%s dir=%d evmErr=%v retLen=%d gasUsed=%d ret=%x", pool.Address.Hex(), tokenIdx[0], evmErr, len(ret), gasUsed, ret)
 			}
 		}
 	}

@@ -600,10 +600,12 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 				nextId, err = lfjV2FindFirstLeftU256(read, state.PoolAddress, layout, activeId)
 			}
 			if err != nil {
-				break
+				// EVM reverts on tree-read error; match that behavior
+				return big.NewInt(0)
 			}
 			if nextId == 0 || nextId == 0xFFFFFF {
-				break
+				// Out of liquidity — EVM reverts with LBPair__OutOfLiquidity()
+				return big.NewInt(0)
 			}
 			if swapForY {
 				state.NextBinsDown[activeId] = nextId

@@ -23,6 +23,13 @@ type LFJV2Pool struct {
 	reader         StateReader
 	tokenXIsToken0 bool   // true if tokenX is the lower-address token (token0)
 	blockTimestamp uint64 // block.timestamp for volatility reference updates
+	// Rebasing token surplus: extra tokens the pool holds beyond _reserves.
+	// For rebasing tokens (e.g., aWAVAX), balanceOf(pool) > _reserves because
+	// interest accrues. The LBPair.swap() function detects this surplus as
+	// additional input via receivedX/receivedY. We pre-compute the surplus
+	// at pool construction time and add it to amountIn during quoting.
+	surplusX *uint256.Int // extra tokenX beyond _reserves.X
+	surplusY *uint256.Int // extra tokenY beyond _reserves.Y
 }
 
 // nullLFJV2Pool is a stub quoter for LFJ V2 pools that cannot be quoted by formula
@@ -40,10 +47,13 @@ func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) (*uint256.Int, bool) {
 	return nil, false
 }
 
+// balanceOfSelector is the ERC20 balanceOf(address) function selector.
+var balanceOfSelector = [4]byte{0x70, 0xa0, 0x82, 0x31}
+
 // newLFJV2Pool builds a PoolQuoter for an LFJ V2 pool.
 // Returns a nullLFJV2Pool (not nil) for pools that cannot be quoted by formula,
 // ensuring the caller never falls back to EVM for LFJ V2 pools.
-func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address, blockTimestamp uint64) PoolQuoter {
+func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address, blockTimestamp uint64, caller EVMCaller) PoolQuoter {
 	poolAddress := strings.ToLower(addr.Hex())
 
 	// Check if pool is in lfjV2Registry (has immutable data: binStep + tokenX ordering).
@@ -74,6 +84,29 @@ func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 comm
 		return &nullLFJV2Pool{addr: addr}
 	}
 
+	// Compute rebasing token surplus: the difference between actual token
+	// balances and the pool's tracked _reserves. For rebasing tokens (e.g.,
+	// Aave aTokens), interest accrues continuously, causing balanceOf(pool)
+	// to exceed _reserves. The LBPair.swap() function sees this surplus as
+	// additional input via its receivedX/receivedY check, so we must account
+	// for it to match the EVM swap result.
+	var surplusX, surplusY *uint256.Int
+
+	// Determine tokenX and tokenY addresses
+	var tokenXAddr, tokenYAddr common.Address
+	if imm.TokenXIsToken0 {
+		tokenXAddr = common.HexToAddress(token0Hex)
+		tokenYAddr = common.HexToAddress(token1Hex)
+	} else {
+		tokenXAddr = common.HexToAddress(token1Hex)
+		tokenYAddr = common.HexToAddress(token0Hex)
+	}
+
+	if caller != nil && state.GlobalReserveX != nil && state.GlobalReserveY != nil {
+		surplusX = lfjV2ComputeSurplus(caller, tokenXAddr, addr, state.GlobalReserveX)
+		surplusY = lfjV2ComputeSurplus(caller, tokenYAddr, addr, state.GlobalReserveY)
+	}
+
 	return &LFJV2Pool{
 		addr:           addr,
 		state:          state,
@@ -81,7 +114,36 @@ func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 comm
 		reader:         stateReader,
 		tokenXIsToken0: imm.TokenXIsToken0,
 		blockTimestamp: blockTimestamp,
+		surplusX:       surplusX,
+		surplusY:       surplusY,
 	}
+}
+
+// lfjV2ComputeSurplus computes the rebasing surplus for a token:
+// surplus = balanceOf(pool) - globalReserve. Returns nil if no surplus.
+func lfjV2ComputeSurplus(caller EVMCaller, token, pool common.Address, globalReserve *big.Int) *uint256.Int {
+	// Encode balanceOf(pool) call
+	calldata := make([]byte, 36)
+	copy(calldata[:4], balanceOfSelector[:])
+	copy(calldata[16:36], pool[:]) // address left-padded to 32 bytes
+
+	result, ok := caller(token, calldata)
+	if !ok || len(result) < 32 {
+		return nil
+	}
+
+	var balance uint256.Int
+	balance.SetBytes(result[:32])
+
+	var reserve uint256.Int
+	reserve.SetFromBig(globalReserve)
+
+	if balance.Gt(&reserve) {
+		var surplus uint256.Int
+		surplus.Sub(&balance, &reserve)
+		return &surplus
+	}
+	return nil
 }
 
 func (p *LFJV2Pool) Address() common.Address {
@@ -118,7 +180,19 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 		swapForY = !zeroForOne
 	}
 
-	amtIn := amountIn.ToBig()
+	// Add rebasing token surplus to amountIn. In the LBPair.swap() function,
+	// the pool detects received tokens via balanceOf(pool) - _reserves, which
+	// includes any surplus from rebasing. Our formula must include this surplus
+	// to match the EVM swap result.
+	var adjustedIn uint256.Int
+	adjustedIn.Set(amountIn)
+	if swapForY && p.surplusX != nil {
+		adjustedIn.Add(&adjustedIn, p.surplusX)
+	} else if !swapForY && p.surplusY != nil {
+		adjustedIn.Add(&adjustedIn, p.surplusY)
+	}
+
+	amtIn := adjustedIn.ToBig()
 	out := QuoteLFJV2Fast(p.reader, p.state, p.layout, amtIn, swapForY, p.blockTimestamp)
 	if out == nil || out.Sign() <= 0 {
 		return nil, false

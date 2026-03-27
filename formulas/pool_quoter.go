@@ -297,7 +297,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	case FormulaLFJV2:
 		pm.noQuoteCache[pool] = true // time-dependent: skip quote cache
 		if hasTokens {
-			return wrapAndCache(newLFJV2Pool(pool, trackedReader, tokens[0], tokens[1], pm.blockTimestamp))
+			return wrapAndCache(newLFJV2Pool(pool, trackedReader, tokens[0], tokens[1], pm.blockTimestamp, pm.evmCaller))
 		}
 	case FormulaV4:
 		if p := newV4Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }

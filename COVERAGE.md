@@ -5,8 +5,8 @@ Agents investigating coverage should read this first, and append findings/tools 
 
 ## Current State (2026-03-27)
 
-1584 formula / 416 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
-**79.2% formula coverage, 100% correctness** (0 mismatches).
+1586 formula / 414 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
+**79.3% formula coverage, 100% correctness** (0 mismatches).
 
 ### EVM Fallback Breakdown
 
@@ -541,3 +541,42 @@ Three categories:
 3. **Intentional null stubs (5 LFJ V2):** V2.0 pools without registry entries get `nullLFJV2Pool`.
 
 **No code changes needed.** These are not coverage gaps -- the formulas correctly identify that these pools cannot produce output for the given inputs.
+
+---
+
+## LFJ V2 Rebasing Token Surplus Fix (2026-03-27)
+
+**Pool:** `0x50a0778BFF861f94473676C1CDf8709379906D43` (LFJ V2, binStep=100, aWAVAX/WAVAX)
+
+**Symptom:** Formula=982178217821782178, EVM=982232678623391575 for dir=0, amountIn=1e18.
+Difference of 54460801609397 (~0.005%).
+
+**Root cause:** Token0 (aWAVAX, `0x6d80113e533a2c0fe82eabd35f1875dcea89ea97`) is an Aave
+interest-bearing rebasing token. Its `balanceOf(pool)` continuously increases as interest
+accrues, but the LBPair's `_reserves` storage slot is only updated on actual swaps/deposits.
+This creates a surplus:
+
+- `_reserves.X` (slot 4) = 231997106535670044042
+- `balanceOf(pool)` = 231997161984671682642
+- surplus = 55449001638600
+
+When `LBPair.swap()` is called, it computes received tokens as:
+```
+amountsLeft = tokenX.balanceOf(pool) - _reserves.X = amountIn + surplus
+```
+So the pool processes `1000055449001638600` as input (not `1e18`), producing more output.
+
+**Fix:** In `newLFJV2Pool`, read `_reserves` from storage (slot = parametersSlot + 1) and
+call `balanceOf(pool)` via EVMCaller for both tokens. Pre-compute the surplus at construction
+time and add it to `amountIn` during `Quote()` for the appropriate swap direction.
+
+**Files changed:**
+- `formulas/lfj_v2.go` — Added `GlobalReserveX/Y` fields to `LFJV2State`; read `_reserves` slot in `FetchLFJV2StateStorage`
+- `formulas/pool_lfj_v2.go` — Added `surplusX/Y` to `LFJV2Pool`; compute surplus in constructor via EVMCaller `balanceOf`; add surplus to amountIn in `Quote()`
+- `formulas/pool_quoter.go` — Pass `pm.evmCaller` to `newLFJV2Pool`
+- `formulas/registry.txt` — Changed pool from -1 to formula 3
+
+**Performance:** Hot-path unchanged (1.72ms/pool). Construction adds 2 EVM balanceOf calls per
+LFJ V2 pool (one-time cost during warm-up).
+
+**Result:** 2000/2000 quotes match (0 mismatches), 100% correctness.

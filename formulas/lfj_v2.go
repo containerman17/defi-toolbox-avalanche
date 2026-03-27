@@ -63,6 +63,9 @@ type LFJV2State struct {
 	VariableFeeParams LFJV2VariableFeeParams
 	IsV20            bool   // true if this is a V2.0 (old interface) pool
 	PoolAddress      string // pool address for on-demand bin fetching
+	// Global reserves from _reserves slot (used for rebasing token surplus)
+	GlobalReserveX *big.Int // total reserveX tracked by the pool
+	GlobalReserveY *big.Int // total reserveY tracked by the pool
 	// Bins: map from bin ID to reserves (cached, fetched on demand)
 	Bins map[uint32]LFJV2BinReserves
 	// NextBins: cached next non-empty bin for traversal (fetched on demand)
@@ -718,6 +721,16 @@ func FetchLFJV2StateStorage(read StateReader, poolAddress string, token0, token1
 		tokenX = strings.ToLower(token1)
 	}
 
+	// Read _reserves slot (immediately after _parameters in storage layout)
+	reservesSlot := new(big.Int).Add(layout.parametersSlot, big.NewInt(1))
+	reservesVal, err := read(poolAddress, reservesSlot)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read _reserves: %w", err)
+	}
+	reservesPacked := new(big.Int).SetBytes(reservesVal[:])
+	globalReserveX := new(big.Int).And(reservesPacked, mask128)
+	globalReserveY := new(big.Int).Rsh(reservesPacked, 128)
+
 	state := &LFJV2State{
 		ActiveID:          activeId,
 		BinStep:           imm.BinStep,
@@ -726,6 +739,8 @@ func FetchLFJV2StateStorage(read StateReader, poolAddress string, token0, token1
 		VariableFeeParams: varParams,
 		IsV20:             false,
 		PoolAddress:       poolAddress,
+		GlobalReserveX:    globalReserveX,
+		GlobalReserveY:    globalReserveY,
 		Bins:              make(map[uint32]LFJV2BinReserves),
 		NextBinsDown:      make(map[uint32]uint32),
 		NextBinsUp:        make(map[uint32]uint32),

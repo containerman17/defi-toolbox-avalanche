@@ -85,12 +85,13 @@ export async function createQuoter(opts) {
             child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
         });
     }
-    async function findRoute(tokenIn, tokenOut, amountIn) {
+    async function findRoute(tokenIn, tokenOut, amountIn, opts) {
         const result = await request("find_route", {
             tokenIn: tokenIn.toLowerCase(),
             tokenOut: tokenOut.toLowerCase(),
             amountIn: "0x" + amountIn.toString(16),
             maxHops: 2,
+            ...(opts?.formulaOnly && { formulaOnly: true }),
         });
         if (!result || result.route === null || !result.steps) {
             return null;

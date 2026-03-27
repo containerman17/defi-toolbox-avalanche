@@ -217,18 +217,31 @@ All 29 reverted to formula=-1. Root cause: one-sided liquidity. The LFJ V2 tree 
 **Fix:** Changed `Quote()` to return `(new(uint256.Int), true)` when the formula computes zero output. This correctly signals "the formula knows the answer is zero" and avoids the EVM fallback.
 **Impact:** +90 formula quotes (7418→7508), -90 EVM calls (582→492), +5 matches (7680→7685), correctness 96.0%→96.1%. Per-pool time improved for affected pools (12.4ms→1.2ms for this pool).
 
+### Pool `0xf0Ef15733904131Eb39790E64Fa3C7575B41AbFE` — EVM revert investigation
+
+**Pool:** LFJ V2, XAUt/USDT (binStep=5), both tokens are 6-decimal Tether proxy contracts.
+**Symptom:** EVM swap reverts in both directions, gasUsed=4,846,645 (~5M limit).
+**Investigation:**
+1. **Token balance overrides verified correct.** Both tokens (`0x2775...dd32` XAUt, `0x9702...a8c7` USDT) use `slot: 51` for the ERC20 `_balances` mapping. Verified empirically: keccak256(abi.encode(holder, 51)) matches on-chain `balanceOf()` for known holders.
+2. **Pool has valid liquidity.** activeId=8405406 (not sentinel 0x800000). Active bin reserves: reserveX=40338, reserveY=18871738. Adjacent bins populated in both directions.
+3. **Root cause: swap amount vs pool liquidity.** The benchmark uses amountIn=1e18 (fixed for all pools). For 6-decimal tokens, 1e18 = 10^12 tokens. Pool total reserves: ~23 XAUt + ~17,605 USDT. The swap exhausts all bins and the LFJ V2 contract reverts with `LBPair__OutOfLiquidity()`.
+4. **Not a balance override bug.** The IERC20.transfer(pool, amountIn) inside `_swapLFJV2` succeeds (confirmed by high gas usage — a failed transfer would revert at ~50k gas). The revert happens inside the pool's `swap()` function after traversing all bins.
+5. **Formula matches correctly.** Since commit `b34bbb0`, `Quote()` returns `(zero, true)` on out-of-liquidity. Both formula=0 and EVM=0. 100% correct.
+
+**Resolution:** Pool correctly at formula=3. No fix needed — low liquidity at the benchmark's standard test amount is expected behavior, not a bug.
+
 ### Final State
 
 | Formula | Count | Notes |
 |---------|-------|-------|
-| formula=3 (active) | 214 | Benchmarked clean: 0 mismatches across 3 blocks |
-| formula=-1 (blacklisted) | ~70 | One-sided liquidity, not in lfjV2Registry, or other issues |
+| formula=3 (active) | ~260 | Benchmarked clean: 0 mismatches from un-blacklisted pools |
+| formula=-1 (blacklisted) | ~139 | One-sided liquidity, not in lfjV2Registry, missing overrides, or other issues |
 
-### Verification (3-block benchmark)
+### Verification
 ```
-lfj_v2 134 pools  96 formula  172 EVM  0 MISS (formula=3 pools)
+pool 0xf0Ef...bFE: FMLA=2 EVM=0 MATCH=2 MISS=0 100.0% correct, 0.0% non-zero
 ```
-Note: The benchmark `lfj_v2` row shows pool_type=3 pools, which includes both formula=3 and EVM-fallback pools. Formula=3 pools show 0 mismatches.
+Formula handles this pool, no EVM fallback. Both directions return 0 (out-of-liquidity at 1e18 amountIn).
 
 ### Key Files Modified
 - `formulas/pool_lfj_v2.go` — Added `lfjV2NullBinID = 0x800000` constant and sentinel check in `Quote()`

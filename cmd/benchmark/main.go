@@ -264,6 +264,7 @@ type blockResult struct {
 	byType      map[int]*typeStats
 	mismatchSet map[quoteKey]bool // true = mismatched on this block
 	mismatchLog []string
+	coverageLog []string // debug: why each pool fell back to EVM
 }
 
 var typeNames = map[int]string{
@@ -282,6 +283,7 @@ func runBlockBenchmark(
 	pools []pathfinder.Pool,
 	overrides []pathfinder.ParsedOverride,
 	skipFormulas bool,
+	debugCoverage bool,
 ) (*blockResult, error) {
 	stateServerURL := fmt.Sprintf("ws://localhost:7449/debug/%d", blockNum)
 
@@ -390,6 +392,7 @@ func runBlockBenchmark(
 
 	mismatchSet := make(map[quoteKey]bool)
 	var mismatchLog []string
+	var coverageLog []string
 	t0 := time.Now()
 
 	for i := range pools {
@@ -420,6 +423,9 @@ func runBlockBenchmark(
 						result = *out
 						quoted = true
 						ts.Formula++
+					} else if debugCoverage && tokenIdx[0] == 0 {
+						coverageLog = append(coverageLog, fmt.Sprintf("  EVM_FALLBACK %s type=%d(%s) reason=quote_fail",
+							pool.Address.Hex(), pool.PoolType, typeNames[pool.PoolType]))
 					}
 				}
 			}
@@ -431,6 +437,18 @@ func runBlockBenchmark(
 					result.SetBytes(ret[:32])
 				}
 				ts.EVM++
+				// Debug: log why formula was not used (dir=0 only to avoid dups)
+				if debugCoverage && tokenIdx[0] == 0 {
+					fid, known := registry.GetFormulaID(pool.Address)
+					reason := "not_in_registry"
+					if known && fid < 0 {
+						reason = "blacklisted"
+					} else if known {
+						reason = fmt.Sprintf("builder_nil(fid=%d)", fid)
+					}
+					coverageLog = append(coverageLog, fmt.Sprintf("  EVM_FALLBACK %s type=%d(%s) reason=%s",
+						pool.Address.Hex(), pool.PoolType, typeNames[pool.PoolType], reason))
+				}
 			}
 			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
 
@@ -472,6 +490,7 @@ func runBlockBenchmark(
 		byType:      byType,
 		mismatchSet: mismatchSet,
 		mismatchLog: mismatchLog,
+		coverageLog: coverageLog,
 	}, nil
 }
 
@@ -531,11 +550,13 @@ func main() {
 	poolLimit := 4000
 	skipFormulas := false
 	numBlocks := 1
+	debugCoverage := false
 
 	for i, arg := range os.Args {
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
 		if arg == "--skip-formulas" { skipFormulas = true }
 		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
+		if arg == "--debug-coverage" { debugCoverage = true }
 	}
 	if numBlocks < 1 { numBlocks = 1 }
 
@@ -584,7 +605,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "\n=== Block %d (%d/%d) ===\n", blockNum, idx+1, numBlocks)
 		}
 
-		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas)
+		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas, debugCoverage)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
@@ -593,6 +614,10 @@ func main() {
 
 		// Print mismatches for this block
 		for _, line := range res.mismatchLog {
+			fmt.Fprintln(os.Stderr, line)
+		}
+		// Print coverage debug info
+		for _, line := range res.coverageLog {
 			fmt.Fprintln(os.Stderr, line)
 		}
 

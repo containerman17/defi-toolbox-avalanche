@@ -44,7 +44,7 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 
 | Reason | Count | Description |
 |--------|-------|-------------|
-| blacklisted | 61 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
+| blacklisted | 60 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
 | quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — bitmap exhaustion, zero sqrtPrice, etc. |
 | not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
 | builder_nil(fid=2) V3 | 6 | Zombie pools: non-zero liquidity but no initialized ticks in bitmap |

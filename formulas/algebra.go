@@ -225,6 +225,10 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 			}
 
 			currentLiquidity = new(big.Int).Add(currentLiquidity, liquidityDelta)
+			if currentLiquidity.Sign() <= 0 {
+				// Out of liquidity — EVM would revert
+				return big.NewInt(0), nil
+			}
 		} else if resultPrice.Cmp(currentPrice) != 0 {
 			break
 		}

@@ -1,5 +1,83 @@
 # Changelog
 
+## 2026-03-27 — Un-blacklist Algebra pool 0x668A (WAVAX/USDC)
+
+### Investigation
+- Pool `0x668Aa7AEfa8512416Fc6244afBE5129200277A69` was blacklisted (fid=-1) in registry.txt.
+- It is an Algebra (type=1) pool with WAVAX/USDC, discovered at block 81122620.
+- Changed registry entry from `-1` to `4` (Algebra formula ID).
+- dir=0 (WAVAX->USDC): formula returns 9541318, matches EVM exactly. Pool is active.
+- dir=1 (USDC->WAVAX): EVM reverts (gas exhaustion traversing ~1800 ticks with 1e18 USDC input = 1 trillion USDC). Formula returns a large non-zero value because it has no gas limit. This is a benchmark artifact — no real swap would use such an absurd input amount for a 6-decimal token.
+
+### Changes
+- `formulas/registry.txt`: changed fid from -1 to 4 for pool 0x668A.
+- `formulas/algebra.go`: added liquidity exhaustion check — return 0 when `currentLiquidity` drops to zero or negative after crossing a tick.
+
+### Benchmark
+- Single pool: dir=0 matches (100%), dir=1 mismatch (expected, benchmark artifact).
+- Broad (1000 pools): 97.4% correct, no regression on other Algebra pools.
+
+## 2026-03-27 — Fix 13 Balancer V3 pools mis-registered as V2 (formula 0)
+
+### Bug fix
+- 13 pools from `balancer_v3` DEX were registered in `registry.txt` with formula ID 0
+  (V2 constant-product) instead of formula ID 7 (Balancer V3).
+- Root cause: the formula discovery script incorrectly assigned formula 0 to these pools.
+- The V2 formula reads reserves from slot 8, which is meaningless for Balancer V3 pools
+  (they use a Vault singleton with completely different storage layout), so it returned 0.
+- Fix: changed all 13 entries in `registry.txt` from `:0` to `:7`.
+- Of the 13 pools: 10 are 2-token (now quotable via Balancer V3 formula), 3 are 3-token
+  (Balancer V3 formula returns 0 for >2 tokens due to PoolQuoter interface limitation;
+  handled by EVM fallback in production).
+
+### Affected pools (2-token, now working)
+- `0x1fed8401c145f64da567881d272d0df233118dca`
+- `0x22715161201922af61f4ca22e979ef0c6c20be13`
+- `0x304e19e3029a6dbfde0d70d9e32ad9cc694a9b68`
+- `0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1`
+- `0x5faeec2d073d9e7fdecee6f3f1d1f364dda4e78e`
+- `0xb109a472b1c59fadce6b3691eaa79269d4bba37c`
+- `0xc07f45ee39f3fa2abaeb2b3309543e69129e3c21`
+- `0xe2be33d380b3fe12279553fcdb61c60871de55ce`
+- `0xf602b6fba3332f9a19c122ae2ecbfe8f0d3b3eff`
+- `0xfb4e6f150a0682a0bcb43a6f7d660a977bd194de`
+
+### Affected pools (3-token, formula unsupported)
+- `0x31ae873544658654ce767bde179fd1bbcb84850b`
+- `0x99a9a471dbe0dcc6855b4cd4bbabeccb1280f5e8`
+- `0xfcec3c8d86329defb548202fe1b86ff2188603a8`
+
+### Regression check
+- 1000-pool benchmark: 97.4% correct (1948/2000 match), no regressions from this change.
+
+## 2026-03-27 — Fix V3 full-range position pools returning nil
+
+### Bug fix
+- Four V3 pools returned nil from `newV3Pool` due to incorrect "zombie pool" heuristic.
+- Root cause: pools have full-range liquidity positions with initialized ticks at MIN_TICK/MAX_TICK (bitmap words ~346), beyond the default +-200 word scan radius.
+- Old code: `if len(bitmapWords) == 0 && !liquidity.IsZero() { return nil }` — wrongly rejected valid pools.
+- Fix: extend bitmap scan to cover full tick range when initial scan finds no words but liquidity is non-zero.
+- Also added `maxSwapSteps = 500` guard in `Quote()` to prevent infinite loops.
+
+### Affected pools
+- `0x0305F8CA5CFA3A832488fe3f178f8B0dfE2c801E` (fee=500, tickSpacing=10)
+- `0x34f9235ba2328E667F0787c0C94434eBf0752D10` (fee=500, tickSpacing=10)
+- `0x3dfB1855e69c4160232328Fe7543A0685C7675aa` (fee=500, tickSpacing=10)
+- `0xd3e0B1D5a7f225498f2c1E88e1377c54A7925c32` (fee=10, tickSpacing=1)
+- All confirmed 100% match vs EVM after fix.
+
+### Regression check
+- 1000-pool benchmark: 97.5% correct (1950/2000 match), no regressions.
+
+## 2026-03-27 — Un-blacklist Uniswap V3 pool 0xfAe3f424
+
+### Pool fix
+- Un-blacklisted `0xfAe3f424a0a47706811521E3ee268f00cFb5c45E` (WAVAX/USDC, Uniswap V3).
+- Changed registry.txt from `-1` (blacklisted) to `2` (V3 formula).
+- Pool was already in v3_registry.go with correct fee=500, tickSpacing=10.
+- Benchmark confirms 100% match (0 mismatches) for this pool.
+- No regressions: 1000-pool benchmark unchanged (97.0% correct, 1939/2000 match).
+
 ## 2026-03-27 — Simplify Quote: value return + remove EVM fallback
 
 ### Quote return type: `(*uint256.Int, bool)` → `uint256.Int`

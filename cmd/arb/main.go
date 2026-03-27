@@ -343,12 +343,17 @@ func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash {
 
 func main() {
 	stateServerURL := "ws://localhost:7449/live"
+	rpcURL := ""
 	maxHops := 4
-	poolLimit := 7500
+	poolLimit := 1500
+	dryRun := true
 
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) {
 			stateServerURL = os.Args[i+1]
+		}
+		if arg == "--rpc" && i+1 < len(os.Args) {
+			rpcURL = os.Args[i+1]
 		}
 		if arg == "--max-hops" && i+1 < len(os.Args) {
 			fmt.Sscanf(os.Args[i+1], "%d", &maxHops)
@@ -356,11 +361,19 @@ func main() {
 		if arg == "--pool-limit" && i+1 < len(os.Args) {
 			fmt.Sscanf(os.Args[i+1], "%d", &poolLimit)
 		}
+		if arg == "--execute" {
+			dryRun = false
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "[arb] WAVAX cyclic arb scanner starting...\n")
 	fmt.Fprintf(os.Stderr, "[arb] state server: %s, max hops: %d, pool limit: %d\n",
 		stateServerURL, maxHops, poolLimit)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "[arb] mode: DRY RUN (pass --execute --rpc <url> and set ARB_PRIVATE_KEY to go live)\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "[arb] mode: LIVE EXECUTION\n")
+	}
 
 	// Load formula registry
 	registry := formulas.LoadEmbeddedRegistry()
@@ -428,6 +441,33 @@ func main() {
 		}
 	}
 
+	// Set up executor if live mode
+	var executor *arb.Executor
+	if !dryRun {
+		privKey := os.Getenv("ARB_PRIVATE_KEY")
+		if privKey == "" {
+			fmt.Fprintf(os.Stderr, "[arb] ERROR: ARB_PRIVATE_KEY env var required for --execute\n")
+			os.Exit(1)
+		}
+		if rpcURL == "" {
+			fmt.Fprintf(os.Stderr, "[arb] ERROR: --rpc <url> required for --execute\n")
+			os.Exit(1)
+		}
+		var err error
+		executor, err = arb.NewExecutor(privKey, rpcURL, router.DeployedRouter, pt, WAVAX)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb] ERROR: %v\n", err)
+			os.Exit(1)
+		}
+		nonce, err := executor.FetchNonce()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb] ERROR fetching nonce: %v\n", err)
+			os.Exit(1)
+		}
+		executor.SetNonce(nonce)
+		fmt.Fprintf(os.Stderr, "[arb] executor ready, nonce=%d\n", nonce)
+	}
+
 	// Initial rate sweep (all pools dirty)
 	fmt.Fprintf(os.Stderr, "[arb] running initial rate sweep...\n")
 	scanner.InitRates()
@@ -476,7 +516,6 @@ func main() {
 			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
 
 		if opp != nil && opp.EVMVerified && opp.EVMProfit > 0 {
-			// Log profitable opportunity as JSON to stdout
 			poolAddrs := opp.Cycle.ExpandPoolAddrs(pt)
 			out, _ := json.Marshal(map[string]interface{}{
 				"type":          "opportunity",
@@ -491,6 +530,22 @@ func main() {
 				"pools":         poolsHex(poolAddrs),
 			})
 			fmt.Println(string(out))
+
+			// Execute if live mode
+			if executor != nil {
+				txHash, err := executor.Execute(opp, bi.baseFee)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)
+				} else {
+					execOut, _ := json.Marshal(map[string]interface{}{
+						"type":   "tx_sent",
+						"block":  bi.block,
+						"txHash": txHash.Hex(),
+						"profit": opp.EVMProfit / 1e18,
+					})
+					fmt.Println(string(execOut))
+				}
+			}
 		}
 	}
 }

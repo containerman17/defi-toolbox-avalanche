@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-03-27 — Fix Algebra tick struct layout bug
+
+### Fixed incorrect tick data reading in `algebraReadTick`
+- The function read `liquidityDelta` from the upper 128 bits of tick slot+0, but Algebra Integral
+  stores `uint256 liquidityTotal` in all 256 bits of slot+0. The actual `int128 liquidityDelta`
+  lives in the lower 128 bits of slot+1 (packed with `prevTick` and `nextTick`).
+- This caused `liquidityDelta` to always be 0 for normal pools, breaking liquidity tracking
+  across tick crossings. dir=0 had tiny errors (~0.002%), dir=1 could be off by 37x.
+- Fix: read only slot+1 for all three values (liquidityDelta, prevTick, nextTick).
+- Enabled pool `0x1ABe428146795BC754170AF24CFd78663f257D29` (WETH.e/USDt) in registry.
+- Investigated Algebra dynamic fee plugins: pools with `pluginConfig=2` only have
+  `AFTER_SWAP_FLAG` set, not `BEFORE_SWAP_FLAG`. No dynamic fee override happens at swap time;
+  `lastFee` from globalState is the correct fee.
+
 ## 2026-03-27 — LFJ V2.0 pool support
 
 ### Added V2.0 storage layout for LFJ V2 (Liquidity Book) pools

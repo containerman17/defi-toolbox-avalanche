@@ -111,29 +111,26 @@ func algebraReadTick(read StateReader, poolAddress string, tickIdx int32) (*big.
 	algebraSlotTicksMap.FillBytes(keyBytes[32:64])
 	baseSlot := new(big.Int).SetBytes(crypto.Keccak256(keyBytes))
 
-	// Read slot+0: liquidityTotal(128 low) | liquidityDelta(128 high)
-	data0, err := read(poolAddress, baseSlot)
-	if err != nil {
-		return nil, 0, 0, fmt.Errorf("tick %d slot+0: %w", tickIdx, err)
-	}
-	val0 := new(big.Int).SetBytes(data0[:])
-	// liquidityDelta is upper 128 bits of slot+0
-	liquidityDelta := new(big.Int).Rsh(val0, 128)
-	mask128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
-	liquidityDelta.And(liquidityDelta, mask128)
-	// Sign extend int128
-	if liquidityDelta.Bit(127) == 1 {
-		liquidityDelta.Sub(liquidityDelta, new(big.Int).Lsh(big.NewInt(1), 128))
-	}
-
-	// Read slot+1: prevTick and nextTick packed in upper bits
-	// Layout: bits [0:128] = some fee data, [128:152] = prevTick, [152:176] = nextTick
+	// Algebra Integral tick struct layout (TickManagement.sol):
+	//   slot+0: uint256 liquidityTotal       (full 256 bits, not needed for quoting)
+	//   slot+1: int128  liquidityDelta [0:128] | int24 prevTick [128:152] | int24 nextTick [152:176]
+	//   slot+2: uint256 outerFeeGrowth0Token
+	//   slot+3: uint256 outerFeeGrowth1Token
+	// We only need slot+1.
 	slot1 := new(big.Int).Add(baseSlot, big.NewInt(1))
 	data1, err := read(poolAddress, slot1)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("tick %d slot+1: %w", tickIdx, err)
 	}
 	val1 := new(big.Int).SetBytes(data1[:])
+
+	// liquidityDelta = lower 128 bits of slot+1
+	mask128 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
+	liquidityDelta := new(big.Int).And(new(big.Int).Set(val1), mask128)
+	// Sign extend int128
+	if liquidityDelta.Bit(127) == 1 {
+		liquidityDelta.Sub(liquidityDelta, new(big.Int).Lsh(big.NewInt(1), 128))
+	}
 
 	// prevTick at bits [128:152]
 	prevRaw := int32(new(big.Int).Rsh(val1, 128).Int64() & 0xFFFFFF)

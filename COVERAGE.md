@@ -54,7 +54,18 @@ Agents investigating coverage should read this first, and append findings/tools 
 **Mechanism:** `formulas/pool_quoter.go` `buildQuoter()` has no case for `FormulaAlgebra = 4`. The formula exists via the legacy `dispatchFormula` path, but the PoolManager path returns nil.
 **Fix:** Add `case FormulaAlgebra:` to the switch in `buildQuoter()` (line 266). This is the single highest-impact fix.
 
-### 4. V3 pools with quote_fail or builder_nil
+### 4. Algebra tick struct layout bug (FIXED)
+**Impact:** All Algebra pools with multi-tick swaps returned wrong results.
+**Mechanism:** `algebraReadTick` in `formulas/algebra.go` incorrectly read the tick struct layout. It assumed `liquidityTotal` (uint128) and `liquidityDelta` (int128) were packed in slot+0 (128 bits each). In reality, Algebra Integral uses `uint256 liquidityTotal` (full slot+0) and `int128 liquidityDelta` in the lower 128 bits of slot+1 (packed with `prevTick` and `nextTick`). The old code read `liquidityDelta` from the upper 128 bits of slot+0, which was always 0 for pools with `liquidityTotal < 2^128`.
+**Symptom:** dir=0 had tiny errors (0.002% from rounding with wrong liquidity deltas), dir=1 could be wildly off (37x) due to incorrect liquidity tracking across tick crossings.
+**Fix:** Changed `algebraReadTick` to read only slot+1: `liquidityDelta` from bits [0:128], `prevTick` from bits [128:152], `nextTick` from bits [152:176]. Slot+0 (`liquidityTotal`) is not needed for quoting.
+
+### 5. Algebra dynamic fee plugin investigation
+**Finding:** The 28 Algebra pools with `pluginConfig=2` do NOT have `BEFORE_SWAP_FLAG` (bit 0) set. `pluginConfig=2` is `AFTER_SWAP_FLAG` only. This means `beforeSwap()` is never called and the pool uses `lastFee` from globalState directly. No dynamic fee adjustment occurs at swap time.
+**Plugin type:** The plugin at `0x50e692a68a91127b5dd11836d721274d266fa1d5` is an `AlgebraBasePluginV2` (sliding fee plugin). Its `beforeSwap()` would compute a direction-dependent fee using `_getFeeAndUpdateFactors()`, but since `BEFORE_SWAP_FLAG` is not in `pluginConfig`, it's never invoked.
+**Conclusion:** No formula change needed for dynamic fees. The existing `lastFee` from globalState is the correct fee to use.
+
+### 6. V3 pools with quote_fail or builder_nil
 **Impact:** 6 builder_nil + ~20 quote_fail V3 pools (was reported as 38 builder_nil due to debug logging bug).
 **Root cause investigation:** All V3 pools ARE in `v3PoolFees` map — the registry is NOT the issue.
 - **19 Pharaoh V3 pools** use ERC-7201 namespaced storage. These pools have zero on-chain state at block 81300000 (uninitialized). Layout detection correctly fails, returning an empty V3Pool. Quote returns (nil, false). No fix needed.

@@ -123,6 +123,12 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		}
 	}
 
+	// Zombie pool detection: return nil for pools with non-zero liquidity but empty
+	// bitmap (tokens were removed without proper accounting). Falls back to EVM.
+	if len(bitmapWords) == 0 && !liquidity.IsZero() {
+		return nil
+	}
+
 	// Pre-load liquidityNet for all initialized ticks
 	tickLiquidityNet := make(map[int32]uint256.Int)
 	for wordPos, word := range bitmapWords {

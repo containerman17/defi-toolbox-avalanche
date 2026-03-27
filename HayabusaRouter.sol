@@ -339,6 +339,29 @@ contract HayabusaRouter {
         uint256[] calldata amountsIn,
         bytes[] calldata extraDatas
     ) external payable returns (uint256) {
+        return _swap(pools, poolTypes, tokens, amountsIn, extraDatas, 0);
+    }
+
+    /// @notice Same as swap() but reverts if amountOut < minOutput.
+    function swapWithMinOutput(
+        address[] calldata pools,
+        uint8[] calldata poolTypes,
+        address[] calldata tokens,
+        uint256[] calldata amountsIn,
+        bytes[] calldata extraDatas,
+        uint256 minOutput
+    ) external payable returns (uint256) {
+        return _swap(pools, poolTypes, tokens, amountsIn, extraDatas, minOutput);
+    }
+
+    function _swap(
+        address[] calldata pools,
+        uint8[] calldata poolTypes,
+        address[] calldata tokens,
+        uint256[] calldata amountsIn,
+        bytes[] calldata extraDatas,
+        uint256 minOutput
+    ) internal returns (uint256) {
         // Pull input token from caller
         address tokenIn = tokens[0];
         uint256 totalIn = amountsIn[0];
@@ -347,6 +370,9 @@ contract HayabusaRouter {
 
         // Execute
         uint256 amountOut = executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
+
+        // Check minimum output
+        if (amountOut < minOutput) revert("swap: insufficient output");
 
         // Send output to caller
         address tokenOut = tokens[pools.length * 2 - 1];

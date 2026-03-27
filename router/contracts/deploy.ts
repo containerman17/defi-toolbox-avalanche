@@ -6,15 +6,15 @@ import { avalanche } from 'viem/chains'
 import { privateKeyToAccount } from 'viem/accounts'
 import { config } from "dotenv"
 
-const rootEnv = path.join(import.meta.dirname, '../../../../../../.env')
-config({ path: rootEnv })
+config({ path: path.join(import.meta.dirname, '../../.env') })
 
 const RPC = 'https://api.avax.network/ext/bc/C/rpc'
-const privateKey = process.env.PRIVATE_KEY
+let privateKey = process.env.ARB_PRIVATE_KEY
 if (!privateKey) {
-    console.error('Set PRIVATE_KEY in .env')
+    console.error('Set ARB_PRIVATE_KEY in .env')
     process.exit(1)
 }
+if (!privateKey.startsWith('0x')) privateKey = '0x' + privateKey
 
 // Compile
 console.log('Compiling HayabusaRouter.sol...')
@@ -56,12 +56,15 @@ console.log(`\nDeploying from ${account.address}...`)
 const nonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' })
 console.log(`Nonce: ${nonce}`)
 
+const baseFee = await publicClient.getGasPrice()
+console.log(`Base fee: ${baseFee} wei`)
+
 const hash = await walletClient.deployContract({
     abi, bytecode, args: [],
     nonce,
     gas: 5_000_000n,
-    maxFeePerGas: 50_000_000_000n,
-    maxPriorityFeePerGas: 1_000_000_000n,
+    maxFeePerGas: baseFee * 2n,
+    maxPriorityFeePerGas: 0n,
 })
 console.log(`TX: ${hash}`)
 
@@ -71,5 +74,10 @@ const receipt = await publicClient.waitForTransactionReceipt({
     timeout: 60_000,
 })
 const routerAddress = receipt.contractAddress!
-console.log(`\nDeployed at: ${routerAddress}`)
-console.log(`\nUpdate ROUTER_ADDRESS in types.ts to: "${routerAddress}"`)
+const deployBlock = Number(receipt.blockNumber)
+console.log(`\nDeployed at: ${routerAddress} (block ${deployBlock})`)
+
+// Update address.json
+const addressJson = JSON.stringify({ address: routerAddress, block: deployBlock }) + '\n'
+writeFileSync(path.join(import.meta.dirname, 'address.json'), addressJson)
+console.log('Updated router/contracts/address.json')

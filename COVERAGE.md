@@ -37,14 +37,14 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 
 ## Current State (2026-03-27)
 
-7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools × 2 directions).
-**93.9% formula coverage, 96.1% correctness** (315 mismatches, 7685 match).
+7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools x 2 directions).
+**93.9% formula coverage, 97.5% correctness** (50 mismatches, 1950 match on 1000-pool benchmark).
 
 ### EVM Fallback Breakdown
 
 | Reason | Count | Description |
 |--------|-------|-------------|
-| blacklisted | 143 | Registry says -1; many are false positives from tooling bugs |
+| blacklisted | 61 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
 | quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — bitmap exhaustion, zero sqrtPrice, etc. |
 | not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
 | builder_nil(fid=2) V3 | 6 | Zombie pools: non-zero liquidity but no initialized ticks in bitmap |
@@ -60,11 +60,12 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 
 | Type | Count | Notes |
 |------|-------|-------|
-| lfj_v2 | 45 | Many are FoT or discover tool couldn't test |
-| lfj_v1 | 6 | 285 un-blacklisted, 11 remain (missing token overrides) |
-| v2 | 25 | hookContract overrides not applied in Go |
-| uniswap_v4 | 24 | Various |
-| algebra | 23 | buildQuoter missing Algebra case |
+| uniswap_v4 (type=9) | 24 | Formula returns non-zero, EVM returns 0 |
+| lfj_v1 (type=2) | 11 | Missing token overrides |
+| v2 family (type=8) | 11 | vapordex(4), hurricane(4), swapsicle(2), pangolin(1) |
+| uniswap_v3/pharaoh_v3 (type=0) | 6 | Token-drained pools, formula can't detect zero ERC20 balances |
+| algebra (type=1) | 4 | pluginConfig=2 dynamic fee via beforeSwap() hook |
+| lfj_v2 (type=3) | 4 | One-sided liquidity or missing overrides |
 | uniswap_v3 | 8 | 4 drained pools (ERC20 balance=0, unfixable); 4 others |
 | pharaoh_v1 | 5 | Various |
 | balancer_v3 | 5 | GyroECLP unsupported |
@@ -537,7 +538,7 @@ without closing positions. The formula cannot distinguish this from a live pool.
 - All ~895 positional struct literals `{N, bool}` updated to `{N, bool, false}` to work with the 3-field `LFJV2Immutables` struct
 
 **Updated coverage breakdown (accurate after fix):**
-- 143 blacklisted
+- 61 blacklisted
 - 49 quote_fail (pool builds, Quote fails — bitmap exhaustion, zero sqrtPrice, etc.)
 - 10 not_in_registry
 - 6 builder_nil(fid=2) — actual V3 zombie pools

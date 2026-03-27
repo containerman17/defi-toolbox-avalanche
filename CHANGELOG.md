@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-27 — Pool struct caching with slot-precision cache busting
+
+### Switched pathfinder from stateless TryQuote to PoolManager
+- Old path: `registry.TryQuote()` → `dispatchFormula()` — reconstructed pool state from storage
+  on every single quote call. 50-300ms formula time per search.
+- New path: `PoolManager.Get()` → cached `PoolQuoter.Quote()` — pure math after first construction.
+  15ms formula time per search (warm).
+- Now also covers V4, Balancer V3, Balancer V2 (had no `dispatchFormula` case before).
+- FoT (fee-on-transfer) adjustments now applied in pathfinder (via `fotPoolQuoter` wrapper).
+
+### Slot-precision reverse map for cache busting
+- `depSlots map[contractAddr]map[slot]poolAddr` — tracks which storage slots each pool read
+  during construction via a slot-tracking reader wrapper.
+- `InvalidateBySlot(addr, slot)` — looks up exactly which pool depends on that slot.
+  V4 pools derive unique slots from their poolId, so a swap in V4 pool A only invalidates
+  pool A — not all 486 V4 pools.
+- Block diff callback: `onSlotChange` in wsFetcher calls `pm.InvalidateBySlot` for each
+  changed storage slot (~60-110 per block → ~5-20 pool invalidations).
+
+---
+
 ## 2026-03-26 — Simple 2-hop pathfinder, state-server race fixes, registry cleanup
 
 ### Replaced BFS pathfinder with simple 2-hop router

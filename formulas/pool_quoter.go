@@ -32,6 +32,10 @@ type PoolManager struct {
 	poolDex        map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
 	tokenModels    *TokenModelRegistry
 	blockTimestamp uint64 // block.timestamp for volatility reference updates (LFJ V2)
+
+	// depSlots: reverse map from (contractAddr, slot) → poolAddr for cache busting.
+	// Populated automatically during pool construction via slot-tracking reader.
+	depSlots map[common.Address]map[common.Hash]common.Address
 }
 
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
@@ -44,6 +48,7 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		poolTypes:   make(map[common.Address]int),
 		poolDex:     make(map[common.Address]string),
 		tokenModels: NewTokenModelRegistry(reader),
+		depSlots:    make(map[common.Address]map[common.Hash]common.Address),
 	}
 }
 
@@ -106,6 +111,17 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		}
 	}()
 
+	// Slot-tracking reader: records (addr, slot) accessed during construction
+	type slotAccess struct {
+		addr common.Address
+		slot common.Hash
+	}
+	var accessed []slotAccess
+	trackedReader := func(addr common.Address, slot common.Hash) common.Hash {
+		accessed = append(accessed, slotAccess{addr, slot})
+		return pm.reader(addr, slot)
+	}
+
 	// Build inner pool struct (concrete type checks to avoid nil-interface issue)
 	poolExempt := hasTokens && IsFotExemptPool(strings.ToLower(pool.Hex()))
 	var model0, model1 TokenModel
@@ -117,7 +133,19 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	}
 	wantFot := model0 != nil && model1 != nil && (model0.IsFoT() || model1.IsFoT())
 
+	registerSlots := func() {
+		for _, a := range accessed {
+			m := pm.depSlots[a.addr]
+			if m == nil {
+				m = make(map[common.Hash]common.Address)
+				pm.depSlots[a.addr] = m
+			}
+			m[a.slot] = pool
+		}
+	}
+
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
+		registerSlots()
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
 			wrapped := &fotPoolQuoter{
@@ -139,51 +167,85 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		var p *V2Pool
 		switch pm.poolDex[pool] {
 		case "hurricane":
-			p = newHurricanePool(pool, pm.reader)
+			p = newHurricanePool(pool, trackedReader)
 		case "fraxswap":
-			p = newFraxswapPool(pool, pm.reader)
+			p = newFraxswapPool(pool, trackedReader)
 		default:
-			p = newV2Pool(pool, pm.reader)
+			p = newV2Pool(pool, trackedReader)
 		}
 		if p != nil { return wrapAndCache(p) }
 	case FormulaPharaohV1:
-		if p := newPharaohV1Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		if p := newPharaohV1Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:
-		if p := newV3Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		if p := newV3Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaDODO:
 		var token0 common.Address
 		if hasTokens {
 			token0 = tokens[0]
 		}
-		if p := newDODOPool(pool, pm.reader, token0); p != nil { return wrapAndCache(p) }
+		if p := newDODOPool(pool, trackedReader, token0); p != nil { return wrapAndCache(p) }
 	case FormulaLFJV2:
 		if hasTokens {
-			// newLFJV2Pool always returns a non-nil PoolQuoter (nullLFJV2Pool for
-			// pools that cannot be formula-quoted), preventing EVM fallback for all
-			// LFJ V2 pools regardless of whether they are in lfjV2Registry or not.
-			return wrapAndCache(newLFJV2Pool(pool, pm.reader, tokens[0], tokens[1], pm.blockTimestamp))
+			return wrapAndCache(newLFJV2Pool(pool, trackedReader, tokens[0], tokens[1], pm.blockTimestamp))
 		}
 	case FormulaV4:
-		if p := newV4Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		if p := newV4Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV3:
-		if p := newBalancerV3Pool(pool, pm.reader, pm.evmCaller); p != nil { return wrapAndCache(p) }
+		if p := newBalancerV3Pool(pool, trackedReader, pm.evmCaller); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV2:
-		if p := newBalancerV2Pool(pool, pm.reader); p != nil { return wrapAndCache(p) }
+		if p := newBalancerV2Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	}
-	// Construction failed — return nil for EVM fallback.
-	// The registry verified this formula works via multi-amount testing,
-	// so failure here is transient (empty pool, missing state).
 	return nil
 }
 
 // Invalidate drops the cached pool struct for a given address.
+// Also cleans up depSlots entries that point to this pool.
 func (pm *PoolManager) Invalidate(addr common.Address) {
 	delete(pm.pools, addr)
+	// Clean up depSlots: remove entries pointing to this pool.
+	// On next Get(), buildQuoter will re-record the slots.
+	for contract, slots := range pm.depSlots {
+		for slot, poolAddr := range slots {
+			if poolAddr == addr {
+				delete(slots, slot)
+			}
+		}
+		if len(slots) == 0 {
+			delete(pm.depSlots, contract)
+		}
+	}
 }
 
-// InvalidateAll drops all cached pool structs.
+// InvalidateBySlot invalidates the pool that depends on a specific (contract, slot).
+// Returns the invalidated pool address, or zero if no pool was affected.
+func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common.Hash) common.Address {
+	slots, ok := pm.depSlots[contractAddr]
+	if !ok {
+		return common.Address{}
+	}
+	poolAddr, ok := slots[slot]
+	if !ok {
+		return common.Address{}
+	}
+	delete(pm.pools, poolAddr)
+	// Remove all depSlots entries for this pool so they get re-recorded on rebuild
+	for c, s := range pm.depSlots {
+		for sl, pa := range s {
+			if pa == poolAddr {
+				delete(s, sl)
+			}
+		}
+		if len(s) == 0 {
+			delete(pm.depSlots, c)
+		}
+	}
+	return poolAddr
+}
+
+// InvalidateAll drops all cached pool structs and slot tracking.
 func (pm *PoolManager) InvalidateAll() {
 	pm.pools = make(map[common.Address]PoolQuoter)
+	pm.depSlots = make(map[common.Address]map[common.Hash]common.Address)
 }
 
 // poolHex returns the lowercase hex string for a pool address.

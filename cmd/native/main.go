@@ -36,6 +36,7 @@ type wsFetcher struct {
 	baseFee      uint64
 	gasLimit     uint64
 	cacheMisses  int64 // counts state server fetches (cache misses)
+	onSlotChange func(addr common.Address, slot common.Hash) // called on block_diff storage changes
 }
 
 type jsonRPCRequest struct {
@@ -202,6 +203,9 @@ func (f *wsFetcher) readLoop(state *statedb.StateDB) {
 						slot := common.HexToHash(parts[2])
 						val := common.HexToHash(value)
 						state.SetStorageSlot(addr, slot, val)
+						if f.onSlotChange != nil {
+							f.onSlotChange(addr, slot)
+						}
 					}
 				}
 			}
@@ -514,6 +518,25 @@ func main() {
 		state = statedb.NewStateDB(nil)
 	}
 
+	// Create PoolManager backed by state, register pools
+	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
+		return state.GetState(addr, slot)
+	}
+	pm := formulas.NewPoolManager(registry, stateReader)
+	for _, p := range embeddedPools {
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+		}
+		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+	}
+	pm.SetBlockTimestamp(currentTimestamp)
+	if fetcher != nil {
+		fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
+			pm.InvalidateBySlot(addr, slot)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "[native] pool manager ready for %d pools\n", len(embeddedPools))
+
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 64*1024*1024), 64*1024*1024) // 64MB buffer (large batches)
 
@@ -676,7 +699,8 @@ func main() {
 				maxHops = 4
 			}
 
-			route := pf.FindBestRoute(state, cfg, registry, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
+			pm.SetBlockTimestamp(currentTimestamp)
+			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
 			} else {

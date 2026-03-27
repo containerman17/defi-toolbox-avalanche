@@ -1,6 +1,7 @@
 package pathfinder
 
 import (
+	"bytes"
 	"sort"
 	"time"
 
@@ -39,36 +40,35 @@ type RouteStats struct {
 // DUMMY_SENDER is the from address for EVM calls.
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
-// quotePool quotes a single pool swap: formula first, EVM fallback.
+// quotePool quotes a single pool swap: PoolManager first (cached structs), EVM fallback.
 // Returns nil if the pool returns zero or errors.
 func quotePool(
 	pool *Pool,
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
-	reader func(common.Address, common.Hash) common.Hash,
-	registry *formulas.Registry,
+	pm *formulas.PoolManager,
 	cs *statedb.CallState,
 	evmCtx *statedb.CachedContext,
 	routerAddr common.Address,
 	stats *RouteStats,
 ) *uint256.Int {
 	stats.TotalQuotes++
-	calldata := EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 
-	// Try formula
+	// Try PoolManager (cached struct, pure math after first construction)
 	ft0 := time.Now()
-	if ret, ok := registry.TryQuote(reader, calldata); ok {
+	if quoter := pm.Get(pool.Address); quoter != nil {
+		zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
+		out, ok := quoter.Quote(amountIn, zeroForOne)
 		stats.FormulaQuotes++
 		stats.FormulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
-		var out uint256.Int
-		out.SetBytes(ret)
-		if !out.IsZero() {
-			return &out
+		if ok && out != nil && !out.IsZero() {
+			return out
 		}
 		return nil
 	}
 
-	// EVM fallback
+	// EVM fallback (pool not in registry or construction failed)
+	calldata := EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 	et0 := time.Now()
 	stats.EVMQuotes++
 	cs.Reset()
@@ -115,7 +115,7 @@ func evmQuotePool(
 func FindBestRoute(
 	state *statedb.StateDB,
 	cfg statedb.EVMConfig,
-	registry *formulas.Registry,
+	pm *formulas.PoolManager,
 	overrides []ParsedOverride,
 	routerAddr common.Address,
 	graph *Graph,
@@ -132,9 +132,6 @@ func FindBestRoute(
 	baseWithOverrides := ApplyOverridesFlat(state, overrides)
 	evmCtx := statedb.GetCachedContext(cfg)
 	cs := statedb.NewCallState(baseWithOverrides)
-	reader := func(addr common.Address, key common.Hash) common.Hash {
-		return state.GetState(addr, key)
-	}
 
 	type routeCandidate struct {
 		steps     []RouteStep
@@ -149,7 +146,7 @@ func FindBestRoute(
 			continue
 		}
 		out := quotePool(edge.Pool, tokenIn, tokenOut, amountIn,
-			reader, registry, cs, evmCtx, routerAddr, &stats)
+			pm, cs, evmCtx, routerAddr, &stats)
 		if out != nil {
 			candidates = append(candidates, routeCandidate{
 				steps: []RouteStep{{
@@ -201,7 +198,7 @@ func FindBestRoute(
 		}
 
 		out := quotePool(edge.Pool, tokenIn, mid, amountIn,
-			reader, registry, cs, evmCtx, routerAddr, &stats)
+			pm, cs, evmCtx, routerAddr, &stats)
 		if out == nil {
 			continue
 		}
@@ -232,7 +229,7 @@ func FindBestRoute(
 			seenPool[edge.Pool.Address] = true
 
 			out := quotePool(edge.Pool, mid, tokenOut, hop1.amount,
-				reader, registry, cs, evmCtx, routerAddr, &stats)
+				pm, cs, evmCtx, routerAddr, &stats)
 			if out != nil {
 				candidates = append(candidates, routeCandidate{
 					steps: []RouteStep{

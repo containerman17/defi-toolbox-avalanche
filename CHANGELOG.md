@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-03-28 — Algebra formula: add maxSwapSteps guard for EVM gas exhaustion
+
+### Problem
+- Algebra pools with dense tick distributions (e.g. WAVAX/USDC pool 0xA02E) returned
+  bogus non-zero values for large swaps in one direction. The formula completed the swap
+  (consuming all input across ~100-146 tick crossings) but the EVM quoter reverted after
+  exhausting the 5M gas limit traversing the same ticks.
+- Three pools affected: 0xA02E (145 steps), 0x4110 (98 steps), 0x668A (106 steps).
+
+### Fix
+- Added `maxSwapSteps = 95` guard to `QuoteAlgebraStorage()` in `formulas/algebra.go`.
+  Returns 0 when the loop exceeds 95 iterations, matching EVM gas-exhaustion behavior.
+- Gas per iteration varies by pool (33.6K-49.6K), driven by Algebra's dynamic fee
+  oracle and linked-list tick traversal. Used worst-case 50K/step for the limit
+  calculation: (5M - 200K overhead) / 50K = 96 steps.
+
+### Investigation: other formula types
+- V3 (fid=2): already has `maxSwapSteps = 500` in pool_v3.go.
+- LFJ V2 (fid=7): already handles gas exhaustion.
+- V2 (fid=0), DODO, PharaohV1, BalancerV2/V3: no tick traversal loops, no gas
+  exhaustion risk.
+- Remaining Algebra mismatch (0xf287): different issue — EVM reverts with "ERC20:
+  transfer amount exceeds balance" at only 232K gas, not gas exhaustion.
+
+### Benchmark results
+- All 3 target pools now 100% correct across 3 blocks.
+- Full benchmark (1000 pools, 3 blocks): 97.5% correct, 1950 match, 50 mismatch.
+- Algebra specifically: 65 match, 5 mismatch (down from 8 mismatch before fix).
+
 ## 2026-03-27 — WAVAX cyclic arbitrage bot: first successful on-chain trade
 
 ### First on-chain arb execution

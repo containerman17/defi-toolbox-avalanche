@@ -174,7 +174,21 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	amountRemaining := new(big.Int).Set(amountIn)
 	amountOut := new(big.Int)
 
+	// Guard against EVM gas exhaustion. Algebra Integral pools have variable gas
+	// cost per iteration depending on tick density and fee plugin complexity:
+	//   0xA02E: 4.9M gas / 146 steps = ~33.6K/step
+	//   0x4110: 4.9M gas /  98 steps = ~49.6K/step
+	//   0x668A: 4.9M gas / 106 steps = ~46.1K/step
+	// Use worst-case 50K/step to be conservative. With 5M limit and 200K overhead,
+	// this allows ~96 steps max.
+	const maxSwapSteps = 95
+	steps := 0
 	for amountRemaining.Sign() > 0 && currentPrice.Cmp(limitSqrtPrice) != 0 {
+		steps++
+		if steps > maxSwapSteps {
+			// EVM would revert from gas exhaustion.
+			return big.NewInt(0), nil
+		}
 		var nextTick int32
 		if zeroForOne {
 			nextTick = prevInitializedTick
@@ -238,8 +252,6 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 
 	return amountOut, nil
 }
-
-
 
 
 

@@ -27,6 +27,7 @@ type tokenOverrideEntry struct {
 	Slot         int    `json:"slot"`
 	ERC7201Base  string `json:"erc7201_base,omitempty"`
 	Shift        int    `json:"shift,omitempty"`
+	HookContract string `json:"hookContract,omitempty"`
 	DisableSlots []int  `json:"disableSlots,omitempty"`
 }
 
@@ -125,6 +126,7 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1000), uint256.NewInt(1_000_000_000_000_000_000)) // 1000 * 1e18
 
 	var overrides []pathfinder.ParsedOverride
+	hookSet := make(map[common.Address]bool)
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]
 		if !ok {
@@ -159,6 +161,21 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 		}
 
 		overrides = append(overrides, po)
+
+		// HookContract: replace hook contract code with a no-op so staking hooks
+		// don't interfere with swap execution.
+		if entry.HookContract != "" {
+			hookAddr := common.HexToAddress(entry.HookContract)
+			if !hookSet[hookAddr] {
+				hookSet[hookAddr] = true
+				// STOP opcode (0x00) — any call to this contract returns successfully with no data
+				overrides = append(overrides, pathfinder.ParsedOverride{
+					Addr:    hookAddr,
+					Balance: uint256.NewInt(0),
+					Code:    []byte{0x00},
+				})
+			}
+		}
 	}
 
 	return overrides

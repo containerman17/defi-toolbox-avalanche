@@ -1,6 +1,8 @@
 package formulas
 
 import (
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/ava-labs/libevm/common"
@@ -147,7 +149,11 @@ func (pm *PoolManager) Get(pool common.Address) (pq PoolQuoter) {
 		return nil // not in registry or marked invalid → EVM fallback
 	}
 
-	return pm.buildQuoter(pool, formulaID)
+	result := pm.buildQuoter(pool, formulaID)
+	if result == nil {
+		fmt.Fprintf(os.Stderr, "V3DEBUG: buildQuoter returned nil for %s fid=%d\n", pool.Hex(), formulaID)
+	}
+	return result
 }
 
 // Quote returns the output for a pool swap, using both pool cache and quote cache.
@@ -208,6 +214,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	// Recover from panics during construction
 	defer func() {
 		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "V3DEBUG: PANIC building pool %s fid=%d: %v\n", pool.Hex(), formulaID, r)
 			pq = nil
 		}
 	}()
@@ -278,7 +285,9 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	case FormulaPharaohV1:
 		if p := newPharaohV1Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:
+		fmt.Fprintf(os.Stderr, "V3DEBUG: building V3 pool %s\n", pool.Hex())
 		if p := newV3Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
+		fmt.Fprintf(os.Stderr, "V3DEBUG: newV3Pool returned nil for %s\n", pool.Hex())
 	case FormulaDODO:
 		var token0 common.Address
 		if hasTokens {
@@ -296,6 +305,8 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		if p := newBalancerV3Pool(pool, trackedReader, pm.evmCaller); p != nil { return wrapAndCache(p) }
 	case FormulaBalancerV2:
 		if p := newBalancerV2Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
+	case FormulaAlgebra:
+		if p := newAlgebraPool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	}
 	return nil
 }

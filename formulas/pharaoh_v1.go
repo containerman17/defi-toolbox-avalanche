@@ -153,8 +153,9 @@ func getAmountOutStable(state *PharaohV1State, amountIn *big.Int, zeroForOne boo
 	// y = reserveB - get_y(amountInNorm + reserveA, xy, reserveB)
 	xNew := new(big.Int).Add(amountInNorm, reserveA)
 	yNew := getY(xNew, xy, reserveB, e18)
-	if yNew.Sign() <= 0 {
-		// Newton-Raphson converged to zero or negative — output would equal
+	if yNew == nil || yNew.Sign() <= 0 {
+		// nil: uint256 overflow in Solidity (getAmountOut() reverts)
+		// zero/negative: Newton-Raphson converged to zero — output would equal
 		// the entire reserve, which Solidity's swap() rejects (amount < reserve).
 		return nil
 	}
@@ -163,6 +164,19 @@ func getAmountOutStable(state *PharaohV1State, amountIn *big.Int, zeroForOne boo
 	// De-normalize to output token decimals
 	dy.Mul(dy, decimalsOut)
 	dy.Div(dy, e18)
+
+	// The on-chain swap() requires amountOut < raw reserve (strict less-than).
+	// If the computed output equals or exceeds the raw reserve, the swap will
+	// revert with the K invariant check. Return nil to signal unswappable.
+	var rawReserveOut *big.Int
+	if zeroForOne {
+		rawReserveOut = state.Reserve1
+	} else {
+		rawReserveOut = state.Reserve0
+	}
+	if dy.Cmp(rawReserveOut) >= 0 {
+		return nil
+	}
 
 	return dy
 }
@@ -193,6 +207,7 @@ func kStable(reserve0, reserve1, decimals0, decimals1, e18 *big.Int) *big.Int {
 }
 
 // f computes: f(x0, y) = (x0 * y / 1e18) * (x0² / 1e18 + y² / 1e18) / 1e18
+// Returns nil if a*b would overflow uint256 (mirrors Solidity arithmetic revert).
 func f(x0, y, e18 *big.Int) *big.Int {
 	a := new(big.Int).Mul(x0, y)
 	a.Div(a, e18)
@@ -204,6 +219,10 @@ func f(x0, y, e18 *big.Int) *big.Int {
 	b := new(big.Int).Add(xx, yy)
 
 	result := new(big.Int).Mul(a, b)
+	// Solidity uses uint256; if a*b overflows uint256, getAmountOut() reverts.
+	if result.Cmp(maxUint256) > 0 {
+		return nil
+	}
 	result.Div(result, e18)
 	return result
 }
@@ -282,12 +301,17 @@ func FetchPharaohV1StateStorage(reader StateReader, poolAddress string) (*Pharao
 
 // getY implements Newton-Raphson iteration to find y such that f(x0, y) = xy (the invariant).
 // This mirrors the Solidity _get_y function exactly.
+// Returns nil if the computation would overflow uint256 (Solidity revert behavior).
 func getY(x0, xy, y0, e18 *big.Int) *big.Int {
 	y := new(big.Int).Set(y0)
 
 	for i := 0; i < 255; i++ {
 		yPrev := new(big.Int).Set(y)
 		k := f(x0, y, e18)
+		if k == nil {
+			// uint256 overflow — mirrors Solidity revert
+			return nil
+		}
 
 		if k.Cmp(xy) < 0 {
 			diff := new(big.Int).Sub(xy, k)

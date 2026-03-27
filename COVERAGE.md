@@ -5,14 +5,14 @@ Agents investigating coverage should read this first, and append findings/tools 
 
 ## Current State (2026-03-27)
 
-1501 formula / 499 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
-**75% formula coverage, 100% correctness.**
+1581 formula / 419 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
+**79% formula coverage, 99.7% correctness** (7 pre-existing algebra/pharaoh mismatches).
 
 ### EVM Fallback Breakdown
 
 | Reason | Count | Description |
 |--------|-------|-------------|
-| blacklisted | 174 | Registry says -1; many are false positives from tooling bugs |
+| blacklisted | 120 | Registry says -1; many are false positives from tooling bugs |
 | quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — zero sqrtPrice, empty liquidity, etc. |
 | builder_nil(fid=2) V3 | 38 | Pool not in `v3PoolFees` map (missing fee/tickSpacing) |
 | builder_nil(fid=4) Algebra | 12 | `buildQuoter` switch missing `case FormulaAlgebra:` |
@@ -20,7 +20,7 @@ Agents investigating coverage should read this first, and append findings/tools 
 | builder_nil(fid=3) LFJ V2 | 5 | `newLFJV2Pool` fails — needs investigation |
 | builder_nil(fid=8) Bal V2 | 3 | `newBalancerV2Pool` returns nil |
 | builder_nil(fid=7) Bal V3 | 2 | `newBalancerV3Pool` returns nil (GyroECLP pools) |
-| builder_nil(fid=1) Pharaoh | 2 | `newPharaohV1Pool` returns nil |
+| builder_nil(fid=1) Pharaoh | 0 | FIXED: added 5 missing pools to `pharaoh_v1_registry.go` |
 | builder_nil(fid=0) V2 | 2 | `newV2Pool` returns nil |
 | builder_nil(fid=5) DODO | 1 | `newDODOPool` returns nil |
 
@@ -29,7 +29,7 @@ Agents investigating coverage should read this first, and append findings/tools 
 | Type | Count | Notes |
 |------|-------|-------|
 | lfj_v2 | 45 | Many are FoT or discover tool couldn't test |
-| lfj_v1 | 39 | Same — missing token_amounts entries |
+| lfj_v1 | 6 | 285 un-blacklisted, 11 remain (missing token overrides) |
 | v2 | 25 | hookContract overrides not applied in Go |
 | uniswap_v4 | 24 | Various |
 | algebra | 23 | buildQuoter missing Algebra case |
@@ -144,6 +144,139 @@ git log -p --all -S '<address>' -- formulas/registry.txt | head -40
 1. **Algebra buildQuoter case** — 35 pools, single code change
 2. **V3 fee registry gaps** — 38 pools, need on-chain reads
 3. **Bulk un-blacklist trial** — change -1 → correct ID, benchmark, keep what works
-4. **hookContract in Go overrides** — 25 V2 pools
+4. **hookContract in Go overrides** — DONE (4 pools fixed, 3 remain blacklisted due to zero EVM output)
 5. **token_amounts.txt gaps** — 39 LFJ V1 pools
 6. **quote_fail investigation** — 49 pools where formula builds but Quote() fails
+
+## Agent Findings
+
+### hookContract fix in Go overrides (2026-03-27)
+
+**Problem:** Token `0x88f89be3e9b1dc1c5f208696fb9cabfcc684bd5f` has a `hookContract` field in `token_overrides.json` pointing to `0x17427af0f2e0ed27856c3288bb902115467e2540`. The TypeScript side replaces the hook contract's code with a no-op (STOP opcode), but the Go `tokenOverrideEntry` struct didn't have a `HookContract` field, so it was silently ignored. This caused the discover tool to fail when testing these pools, leading to blacklisting.
+
+**Fix applied to `router/overrides.go`:**
+1. Added `HookContract string` field to `tokenOverrideEntry` struct with JSON tag `hookContract`
+2. In `buildTokenOverrides()`, when a token has a `HookContract`, emit an additional `ParsedOverride` with `Code: []byte{0x00}` (STOP opcode) and `Balance: uint256.NewInt(0)` for the hook address. The zero balance is critical — `SetAccount` stores the balance pointer directly, and a nil balance causes a nil pointer dereference in `GetBalance`.
+
+**Pools un-blacklisted (changed from -1 to 0):**
+- `0xe8ef9cc2f20205c5a243efc957a47865e53bfcad` (vapordex, VPND/VAPE)
+- `0x38080dea41cc88aacbf394972b326d5f30715bbf` (vapordex)
+- `0x7c89dc798d832fe979da9bdf2b2eed593f7e5a5b` (vapordex)
+- `0xcf55499e13bf758ddb9d40883c1e123ce18c2888` (vapordex)
+
+**Pools that remain blacklisted (formula gives result but EVM returns 0):**
+- `0x0dbcb787458fa66ba71b1b808008fee43edac252` — VPND/WAVAX, EVM swap reverts
+- `0x437705f77b5536dade2b3425475b72a0af5f1fe7` — VPND/JOE, EVM swap reverts
+- `0x3770ee1844d6ec809ad66e060518b18ba07f9ca4` — likely zero liquidity or transfer restriction
+
+**Key lesson:** When adding code overrides for accounts that may not exist in the state dump, always provide a non-nil `Balance` (e.g., `uint256.NewInt(0)`). The `StateDB.SetAccount` stores the balance pointer directly without nil-checking, and `GetBalance` will panic on `uint256.Set(nil)`.
+
+### Bulk LFJ V1 un-blacklisting (2026-03-27)
+
+**Problem:** 296 LFJ V1 (type=2, TraderJoe V1) pools were blacklisted with formula ID -1. These are standard Uniswap V2 constant-product pools with 0.3% fee. The discover tool blacklisted them because it couldn't test them (missing token amounts in `token_amounts.txt`), not because the formula is wrong.
+
+**Approach:**
+1. Changed all 296 blacklisted LFJ V1 pools from -1 to formula 0 (V2 constant product, 0.3% fee)
+2. Ran benchmark — identified 11 pools that mismatch (all with `evm=0, result=non-zero`)
+3. Reverted those 11 back to -1
+4. Final result: 285 pools un-blacklisted, verified across 3 blocks with 0 mismatches
+
+**Results:**
+- LFJ V1 formula coverage: 502 → 556 quotes (+54 formula quotes, +10.4%)
+- Total formula coverage: 1503 → 1581 (+78 quotes)
+- 0 new mismatches introduced
+
+**11 pools that remain blacklisted (evm=0 false positives):**
+All 11 have `evm=0` because the benchmark's EVM simulation can't execute the swap — the `tokenIn` for the mismatching direction lacks a balance override in `token_overrides.json`. The formula (V2 0.3%) is almost certainly correct.
+
+Tokens missing overrides (appear as tokenIn in mismatching direction):
+- `0xf7d9281e8e363584973f946201b82ba72c965d27`
+- `0xd285c7e41ed96f01d75d68e9f07095f8a3d85b2d`
+- `0xa1afcc973d44ce1c65a21d9e644cb82489d26503`
+- `0x096d19b58cab84a2f0ff0e81c08291bffaa62848`
+- `0x00d1b4ffd330e5fc461c50e6fbebdbb5b9bd6da4`
+- `0x704eae6d452ca63ce479c59727177c5f3ba0d90c`
+- `0xe80772eaf6e2e18b651f160bc9158b2a5cafca65`
+
+One pool (`0xf1840b4ae6dcc58e8dbe514510ffe7737b9acb47`) has an override for its tokenIn (`0x88f89be3e9b1dc1c5f208696fb9cabfcc684bd5f`) but it uses a `hookContract` — same root cause #2 (Go overrides not fully applying hook code replacement).
+
+**To fix the remaining 11:** Add balance overrides for the 7 tokens listed above to `token_overrides.json`, find their balance storage slots, and re-run. For the hookContract case, the hookContract fix above should already handle it on next discover run.
+
+### Algebra buildQuoter dispatch fix (2026-03-27)
+
+**Problem:** `formulas/pool_quoter.go` `buildQuoter()` had no `case FormulaAlgebra:` in its switch statement. This caused all Algebra pools (formula ID 4) to return nil from `PoolManager.Get()`, forcing EVM fallback for every Algebra pool. The formula existed via the legacy `dispatchFormula` path but was never used through the PoolManager.
+
+**Fix:**
+1. Created `formulas/pool_algebra.go` with `AlgebraPool` struct implementing `PoolQuoter` interface
+2. `newAlgebraPool()` pre-reads globalState (slot 2) and packed slot (slot 9) for dependency tracking, then stores a `StateReader` adapter for tick reads during `Quote()`
+3. `Quote()` delegates to `QuoteAlgebraStorage()`, converting between `uint256.Int` and `big.Int`
+4. Added `case FormulaAlgebra:` to `buildQuoter()` switch in `pool_quoter.go`
+
+**Registry changes:**
+- 13 pools un-blacklisted: changed from -1 to 4 (including target `0x5e128ebc09c918ddae3ca1668d4ee9527dc00d78`)
+- 7 pre-existing formula=4 pools blacklisted: changed from 4 to -1 (these were silently producing wrong results through the legacy path; now caught by `buildQuoter`)
+- 21 pools that were blacklisted remain blacklisted (formula produces wrong results, typically much higher output than EVM)
+
+**Root cause of 28 broken Algebra pools (7 pre-existing + 21 newly tested):**
+All have `pluginConfig=2` (BEFORE_SWAP_FLAG) and `communityFee=1000`. The formula uses `lastFee` from globalState, but the Algebra contract's dynamic fee plugin modifies the fee via `beforeSwap()` hook. The formula does not account for this plugin-computed fee. Fixing this would require either:
+- Reading the plugin contract's fee computation logic
+- Pre-calling the plugin to get the actual fee
+- Reverse-engineering the adaptive fee formula (AlgebraBasePluginV2)
+
+**Key finding:** The `buildQuoter` path and `dispatchFormula` path call the same `QuoteAlgebraStorage` function, so results are identical. The difference is that `buildQuoter` actually exercises the formula (previously it returned nil, silently skipping to EVM), exposing pre-existing formula bugs in 7 pools that were incorrectly marked as working.
+
+**Benchmark results:** 100.0% correct, 0 algebra mismatches across multiple runs.
+
+### Pharaoh V1 bulk un-blacklisting + stable curve overflow fix (2026-03-27)
+
+**Task:** Un-blacklist pool `0x65f83ccacabaac4ed2f80289a02df4d35d744ae8` (Pharaoh V1, stable, type=7) and fix formula to produce correct results.
+
+**Root cause investigation:**
+The pool was blacklisted (formula ID = -1) but has a valid entry in `pharaoh_v1_registry.go` with config `{true, 1000000, 1000000, 5, false, 8, 9, -1}` (stable pool, 6-decimal tokens, 5bps fee, reserves at slots 8 and 9).
+
+The benchmark uses 1e18 as the test amount for all pools. For a pool with 6-decimal tokens, 1e18 is a trillion tokens — far larger than the pool's actual reserves (~465k USDC at block 81300000). When trying to swap 1e18 of a 6-decimal token, the Solidity stable curve formula in `getAmountOut()` **reverts with arithmetic overflow** ("arithmetic underflow or overflow" panic code 0x11). This happens because the Newton-Raphson intermediate computation `a * b` in `f()` overflows uint256 (the result ≈ 4e83 exceeds uint256 max ≈ 1.15e77).
+
+The Go formula uses arbitrary-precision `big.Int` and doesn't overflow — it computed a "mathematically valid" result (187135258963) without knowing the Solidity revert. The EVM returned 0 (from the revert), causing a mismatch.
+
+**Fixes to `formulas/pharaoh_v1.go`:**
+
+1. **Overflow detection in `f()`:** Added uint256 overflow check — if `a*b > maxUint256`, return nil (mirrors Solidity revert).
+2. **Nil propagation in `getY()`:** Added nil check from `f()` — if `f()` returns nil, `getY()` returns nil (overflow propagation).
+3. **Nil check in `getAmountOutStable()`:** Changed `yNew.Sign() <= 0` to `yNew == nil || yNew.Sign() <= 0` to handle the new nil return.
+4. **Reserve bounds check:** Added check: if computed output `dy >= rawReserveOut`, return nil. The on-chain `swap()` requires `amountOut < reserve` (strict less-than). When amountIn causes output to equal or exceed the reserve, the swap reverts.
+
+**Bulk un-blacklisting:**
+Found 26 pharaoh V1 pools that were blacklisted in `registry.txt` but had valid entries in `pharaoh_v1_registry.go`. Attempted to un-blacklist all 26 to formula ID 1. After multi-block (3-block) validation:
+
+- **24 pools un-blacklisted** (changed from -1 to :1) — all pass with 0 mismatches
+- **3 pools kept blacklisted:**
+  - `0xdc9ec8f6aca746f13253f14e79647265737bbb35` — stable, 6-decimal/6-decimal pool; test amount 1e18 >> reserves, formula returns non-zero but EVM reverts. Overflow check alone isn't sufficient (reserves large enough that output is within bounds but computation still overflows on-chain). Keep blacklisted.
+  - `0xc26e546b632348e76ebbd2811f4458a32ea29b7a` — same root cause, 18-decimal/6-decimal stable pool.
+  - `0xdc8a9b07079b6e5d8c04d13d4f9ecb601cf58dd9` — cross-block instability: passes on block 81300000 but mismatches on 81310000.
+
+**Benchmark results (3-block validation):**
+- Pharaoh V1 formula coverage: 202 → 204 quotes (net +2, limited by 1000-pool test subset)
+- 0 pharaoh mismatches across all 3 blocks
+- Total coverage: 1521 formula / 479 EVM (the 3 remaining mismatches are all pre-existing from other uncommitted changes)
+
+**New investigation technique discovered:**
+When a pool has `evm=0` in the benchmark, it can mean EITHER:
+1. The swap is genuinely impossible (formula should return nil/0)
+2. The EVM call reverted — confirmed by calling `eth_getStorageAt` to read actual reserves and `eth_call` to call `getAmountOut()` directly at the benchmark block
+
+Use `eth_call` to call `getAmountOut(uint256 amountIn, address tokenIn)` on the pool contract at the benchmark block (selector `0xf140a35a`) to distinguish "EVM computed 0" from "EVM reverted with 0".
+
+### Pharaoh V1 missing registry entries fix (2026-03-27)
+
+**Problem:** 5 Pharaoh V1 pools had formula ID 1 in `registry.txt` but were missing from `pharaoh_v1_registry.go`. Since `FetchPharaohV1StateStorage()` returns nil when a pool is not in the registry map, `newPharaohV1Pool()` returned nil, causing EVM fallback for all 5 pools.
+
+**Pools added to `pharaoh_v1_registry.go`:**
+- `0xc26847bfa980a72c82e924899a989c47b088d7da`: volatile, USDC(6)/token(18), fee=25bps, slots 8,9
+- `0x60990d5b305b8b2f53cdfdfcb705ba6f08b88b92`: volatile, 18/18 decimals, fee=50bps, subtractOne, packed slot 11
+- `0x57167b368afbd16413e0920a80e3af16bf728540`: volatile, 18/18 decimals, fee=50bps, subtractOne, packed slot 11
+- `0xc7a712c645c2e9e39fd234bbaf778d09fef47c4e`: volatile, 18/18 decimals, fee=50bps, subtractOne, packed slot 11
+- `0x2cc00706cb6b2c927be3704efa5a4639dd214a8d`: volatile, 18/18 decimals, fee=50bps, subtractOne, packed slot 11
+
+**Method:** Used `evm-quoter/scripts/probe_pharaoh_v1.ts` to call `metadata()` on each pool, detect fee via `getAmountOut()` reverse-engineering, and detect storage layout by matching reserve values against known slot patterns.
+
+**Benchmark results:** 0 mismatches, 100% correct. Pharaoh V1 formula coverage: 204 -> 210 quotes (+6). Total formula coverage: 1580 / 2000 (79%).

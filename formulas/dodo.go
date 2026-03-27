@@ -416,7 +416,11 @@ func dodoSellBaseToken(state *DODOState, payBaseAmount *big.Int) *big.Int {
 		} else {
 			// case 2.3: R goes below one
 			remainder := new(big.Int).Sub(payBaseAmount, backToOnePayBase)
-			return new(big.Int).Add(backToOneReceiveQuote, dodoROneSellBaseToken(state, remainder))
+			r := dodoROneSellBaseToken(state, remainder)
+			if r == nil {
+				return nil // on-chain revert
+			}
+			return new(big.Int).Add(backToOneReceiveQuote, r)
 		}
 
 	default:
@@ -448,7 +452,11 @@ func dodoSellQuoteToken(state *DODOState, payQuoteAmount *big.Int) *big.Int {
 			return new(big.Int).Set(backToOneReceiveBase)
 		} else {
 			remainder := new(big.Int).Sub(payQuoteAmount, backToOnePayQuote)
-			return new(big.Int).Add(backToOneReceiveBase, dodoROneSellQuoteToken(state, remainder))
+			r := dodoROneSellQuoteToken(state, remainder)
+			if r == nil {
+				return nil // on-chain revert
+			}
+			return new(big.Int).Add(backToOneReceiveBase, r)
 		}
 	}
 }
@@ -607,8 +615,10 @@ func dodoSolveQuadraticForTrade(V0, V1, delta, i, k *big.Int) *big.Int {
 	var numerator *big.Int
 	if bSig {
 		numerator = new(big.Int).Sub(squareRoot, bAbs)
-		if numerator.Sign() == 0 {
-			panic("DODO: should not be zero")
+		if numerator.Sign() <= 0 {
+			// On-chain: require(numerator > 0) → revert.
+			// Swap is impossible at this size.
+			return nil
 		}
 	} else {
 		numerator = new(big.Int).Add(bAbs, squareRoot)

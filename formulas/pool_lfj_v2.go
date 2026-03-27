@@ -8,6 +8,11 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// lfjV2NullBinID is the sentinel active-bin ID used by LFJ V2 for pools that
+// have no active bin (uninitialized or fully drained). The contract stores 2^23
+// (= 0x800000) as the "null" position in the 24-bit bin ID space.
+const lfjV2NullBinID uint32 = 0x800000
+
 // LFJV2Pool is a pre-loaded LFJ V2 (Liquidity Book) pool.
 // Construction reads the parameters slot to get activeId, binStep, and fee params.
 // Bin reserves and tree traversal are read on demand during Quote via the StateReader.
@@ -95,9 +100,11 @@ func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result *uint2
 		}
 	}()
 
-	// Dead/empty pool: activeId=0 means no active bin. All bins are empty so
-	// there can be no output. Return (nil, false) immediately without traversal.
-	if p.state.ActiveID == 0 {
+	// Dead/empty pool guard: activeId==0 or activeId==lfjV2NullBinID (2^23=0x800000)
+	// means no active bin exists. lfjV2NullBinID is the sentinel used by the LFJ V2
+	// contract for uninitialized or fully-drained pools. Without an active bin, bin
+	// traversal would produce incorrect non-zero results from adjacent tree nodes.
+	if p.state.ActiveID == 0 || p.state.ActiveID == lfjV2NullBinID {
 		return nil, false
 	}
 

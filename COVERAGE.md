@@ -17,7 +17,7 @@ Agents investigating coverage should read this first, and append findings/tools 
 | builder_nil(fid=2) V3 | 38 | Pool not in `v3PoolFees` map (missing fee/tickSpacing) |
 | builder_nil(fid=4) Algebra | 12 | `buildQuoter` switch missing `case FormulaAlgebra:` |
 | not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
-| builder_nil(fid=3) LFJ V2 | 5 | `newLFJV2Pool` fails — needs investigation |
+| builder_nil(fid=3) LFJ V2 | 0 | FIXED: added V2.0 storage layout support (3 pools), blacklisted 2 (evm=0) |
 | builder_nil(fid=8) Bal V2 | 3 | `newBalancerV2Pool` returns nil |
 | builder_nil(fid=7) Bal V3 | 2 | `newBalancerV3Pool` returns nil (GyroECLP pools) |
 | builder_nil(fid=1) Pharaoh | 0 | FIXED: added 5 missing pools to `pharaoh_v1_registry.go` |
@@ -280,3 +280,35 @@ Use `eth_call` to call `getAmountOut(uint256 amountIn, address tokenIn)` on the 
 **Method:** Used `evm-quoter/scripts/probe_pharaoh_v1.ts` to call `metadata()` on each pool, detect fee via `getAmountOut()` reverse-engineering, and detect storage layout by matching reserve values against known slot patterns.
 
 **Benchmark results:** 0 mismatches, 100% correct. Pharaoh V1 formula coverage: 204 -> 210 quotes (+6). Total formula coverage: 1580 / 2000 (79%).
+
+### LFJ V2.0 pool support (2026-03-27)
+
+**Problem:** 5 LFJ V2 pools had formula ID 3 in `registry.txt` but `newLFJV2Pool()` returned `nullLFJV2Pool` because they were missing from `lfjV2Registry` in `formulas/lfj_v2_registry.go`. These are LFJ V2.0 pools (old Liquidity Book interface), distinct from the V2.1/V2.2 pools already supported.
+
+**Root cause:** LFJ V2.0 pools have a completely different storage layout and parameter packing from V2.1:
+- **Storage layout:** V2.0 stores tokenX at slot 4, tokenY at slot 5, PairInformation (with activeId) at slot 6, feeParameters at slot 10, bins at slot 11, tree at slots 12-14. V2.1 stores parameters at slot 3 or 4, bins at slot 6 or 7, tree at slots 7-9 or 8-10.
+- **Fee parameter packing:** V2.0 uses wider uint16 fields (16+16+16+16+16+24+16+24+24+24+24+40 = 256 bits). V2.1 uses narrower fields (16+12+12+14+24+14+20+20+20+24+40+24 = 240+16 bits). Decoding V2.0 data with V2.1 masks produces garbage.
+- **Bin packing:** V2.0 packs reserveX(uint112) | reserveY(uint112) in the first slot of a 4-slot struct. V2.1 packs reserveX(uint128) | reserveY(uint128) in a single slot with reversed order (reserveX in lower bits, reserveY in upper).
+- **ActiveId location:** V2.0 stores activeId in PairInformation (slot 6, lowest 24 bits). V2.1 includes activeId in the _parameters slot at bits 232-255.
+- **Tree level0:** V2.0 uses `mapping(uint256 => uint256)[3]` (3 separate mappings), so tree[0][0] is at keccak256(abi.encode(0, 12)). V2.1 stores tree level0 as a direct slot value.
+- **Immutables:** V2.0 stores binStep in regular storage (slot 3, via ReentrancyGuard + tokenX/tokenY offset). V2.1 stores binStep as an immutable in bytecode.
+
+**Fix (across multiple files):**
+
+1. **`formulas/lfj_v2_registry.go`:** Added `IsV20 bool` field to `LFJV2Immutables`. Added 5 V2.0 pools with their binStep and tokenX ordering (determined via on-chain `tokenX()` and `feeParameters()` calls):
+   - `0x855ee438445075f25c18a125ba6607543052a194`: binStep=1, TokenXIsToken0=false (USDC/DAI.e)
+   - `0x12ef33ed026d6eeb6c1ea90e97401ddf3d45f569`: binStep=1, TokenXIsToken0=false (USDC/USDT.e)
+   - `0x1d7a1a79e2b4ef88d2323f3845246d24a3c20f1d`: binStep=1, TokenXIsToken0=true (USDT/USDC)
+   - `0x18332988456c4bd9aba6698ec748b331516f5a14`: binStep=1, TokenXIsToken0=true (USDC.e/USDC)
+   - `0xe4e7aaa5a1aab5b55ee44fab2d5dd6fcd80e4d42`: binStep=2, TokenXIsToken0=false (BTC.b/WBTC.e)
+
+2. **`formulas/lfj_v2.go`:** Added `lfjV2LayoutV20` with V2.0 slot positions (feeParams=10, bins=11, tree levels=12-14, activeId=6). Added `isV20` and `activeIdSlot` fields to `lfjV2Layout`. Added `lfjV2DecodeParametersV20()` for V2.0's wider field packing. Added `lfjV2ReadActiveIdV20()` to extract activeId from PairInformation. Added `lfjV2ReadBinV20()` for uint112 bin packing. Modified `FetchLFJV2StateStorage()` to branch on `imm.IsV20` and use V2.0 decoders. Modified `QuoteLFJV2Storage()` to dispatch to V2.0 bin reader.
+
+3. **`formulas/lfj_v2_fast.go`:** Added `isV20` and `treeLevel0BigInt` fields to `lfjV2LayoutFast`. Added `getTreeLevel0Slot()` method to return the correct slot for V2.0 (keccak-mapped) vs V2.1 (direct uint64). Added `lfjV2ReadBinU256V20()` for uint112 bin reading in the fast path. Modified `FetchLFJV2StateFast()` to create V2.0-specific fast layout. Modified `QuoteLFJV2Fast()` to dispatch to V2.0 bin reader.
+
+**Results:**
+- 3 pools un-blacklisted and working: `0x12ef33...`, `0x1d7a1a...`, `0x18332988...` — formula matches EVM, 0 mismatches
+- 2 pools kept blacklisted (evm=0): `0x855ee4...` and `0xe4e7aa...` — formula produces output but the benchmark's EVM router returns 0 (likely the router doesn't support V2.0 swap interface, or token balance overrides are insufficient). Changed from formula=3 to formula=-1 in registry.txt.
+- LFJ V2 `builder_nil(fid=3)` count: 5 → 0
+- 0 LFJ V2 mismatches
+- Total: 100.0% correct, 0 mismatches

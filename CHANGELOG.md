@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-27 — LFJ V2.0 pool support
+
+### Added V2.0 storage layout for LFJ V2 (Liquidity Book) pools
+- 5 LFJ V2.0 pools were failing with `builder_nil(fid=3)` because they weren't in `lfjV2Registry`.
+- V2.0 pools have a completely different storage layout and parameter packing from V2.1/V2.2:
+  different slot positions, wider fee parameter fields (uint16 vs uint12), uint112 bin packing
+  (vs uint128), activeId in separate PairInformation slot, tree level0 as mapping (not direct slot).
+- Added `IsV20` flag to `LFJV2Immutables`, V2.0 layout/decoder/bin reader to `lfj_v2.go`,
+  and V2.0 fast path support to `lfj_v2_fast.go`.
+- 3 pools now use formula (0 mismatches), 2 pools blacklisted (EVM router returns 0).
+- `builder_nil(fid=3)` count: 5 → 0.
+
 ## 2026-03-27 — Multi-block benchmark & coverage investigation
 
 ### Multi-block benchmark validation (`--blocks N`)

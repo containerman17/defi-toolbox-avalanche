@@ -1,5 +1,9 @@
 # DeFi Toolbox — Avalanche C-Chain
 
+## Changelog
+
+Keep [CHANGELOG.md](CHANGELOG.md) updated after every significant change, investigation, or dead-end. Add entries at the top in the existing format (date header + subsections with bullet points).
+
 ## Coverage Investigation
 
 When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), read [COVERAGE.md](COVERAGE.md) first. It contains:

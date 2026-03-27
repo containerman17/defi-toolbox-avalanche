@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-27 — Multi-block benchmark & coverage investigation
+
+### Multi-block benchmark validation (`--blocks N`)
+- Refactored benchmark into `runBlockBenchmark()` + block loop so formulas can be validated
+  across multiple blocks. Blocks computed as `DeployedBlock + i*10000`.
+- Cross-block aggregation: a pool+direction is "correct" only if it matched EVM on ALL blocks.
+  Aggregate correctness ≤ per-block correctness (stricter).
+- Per-block output with `=== Block 81300000 (1/3) ===` headers.
+- JSON output adds `"blocks"`, `"perBlock"` array, and `"aggregateCorrectness"` when N > 1.
+- Log file includes `blocks=N`.
+- WebSocket cleanup: `defer f.conn.Close()` prevents connection leaks between blocks.
+
+### Blacklisted 5 cross-block mismatches → 100% correctness
+- Multi-block run (3 blocks) revealed 5 pools with intermittent mismatches.
+- Set all 5 to -1 in `registry.txt`. Benchmark now shows 100.0% correct.
+
+### Coverage investigation & playbook
+- Added `--debug-coverage` flag: prints why each pool falls back to EVM
+  (blacklisted, builder_nil, quote_fail, not_in_registry).
+- Current state: 1501 formula / 499 EVM fallback (75% coverage, 100% correctness).
+- 174 blacklisted pools — investigated 3 across V2, LFJ V1, Algebra types.
+  All three were tooling/discovery bugs, not actual formula failures:
+  - V2: Go `tokenOverrideEntry` missing `hookContract` field
+  - LFJ V1: Missing token amounts in `token_amounts.txt`
+  - Algebra: `buildQuoter` switch missing `case FormulaAlgebra:`
+- Created `COVERAGE.md` playbook with root causes, investigation tools, key files,
+  and priority fix order. Agents working on coverage update this file.
+
+---
+
 ## 2026-03-27 — Block subscription callbacks (onBlock)
 
 ### Added onBlock callback to all SDK backends

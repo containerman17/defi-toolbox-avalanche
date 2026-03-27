@@ -209,6 +209,11 @@ func (f *wsFetcher) readLoop(state *statedb.StateDB) {
 					}
 				}
 			}
+			// Notify JS of new block via stdout
+			note, _ := json.Marshal(map[string]interface{}{
+				"type": "block", "blockNumber": m.BlockNumber, "timestamp": m.Timestamp,
+			})
+			writeStdout(note)
 			continue
 		}
 
@@ -467,7 +472,16 @@ var (
 	currentTimestamp  uint64
 	currentBaseFee   uint64
 	currentGasLimit  uint64
+	stdoutMu         sync.Mutex
 )
+
+// writeStdout writes a line to stdout, safe for concurrent use from readLoop and main.
+func writeStdout(data []byte) {
+	stdoutMu.Lock()
+	os.Stdout.Write(data)
+	os.Stdout.Write([]byte("\n"))
+	stdoutMu.Unlock()
+}
 
 func main() {
 	counter := &statedb.Counter{}
@@ -712,7 +726,7 @@ func main() {
 		}
 
 		out, _ := json.Marshal(resp)
-		fmt.Println(string(out))
+		writeStdout(out)
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {

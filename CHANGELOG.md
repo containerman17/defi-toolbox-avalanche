@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-03-27 — Block subscription callbacks (onBlock)
+
+### Added onBlock callback to all SDK backends
+- Native backend: Go harness emits `{"type":"block","blockNumber":N,"timestamp":T}` on stdout
+  after processing each `block_diff`. JS stdout parser fires `onBlock` callback.
+- WASM backend: JS `block_diff` handler fires `onBlock` after updating storage.
+- Hayabusa npm package: same pattern via stdout parser in `quoter.ts`.
+- Added stdout write mutex (`stdoutMu`) in Go harness to prevent concurrent writes
+  from the main loop (JSON-RPC responses) and readLoop (block notifications).
+
+### Verified: 20 consecutive blocks delivered with zero gaps
+- Avalanche C-Chain ~1050ms block time
+- Warm quotes complete in 280-300ms, well within budget
+- No skips, no duplicates, no out-of-order delivery
+
+---
+
 ## 2026-03-27 — Pool struct caching with slot-precision cache busting
 
 ### Switched pathfinder from stateless TryQuote to PoolManager

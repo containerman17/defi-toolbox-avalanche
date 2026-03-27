@@ -1,6 +1,12 @@
+export interface BlockInfo {
+    number: number;
+    timestamp: number;
+}
 export interface QuoterOptions {
     /** WebSocket URL of the state server (e.g. "ws://localhost:7449/live") */
     stateServerUrl: string;
+    /** Called when a new block arrives. Use this to re-quote on each block. */
+    onBlock?: (block: BlockInfo) => void;
 }
 export interface FindRouteResult {
     steps: {

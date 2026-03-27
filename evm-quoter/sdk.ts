@@ -142,7 +142,7 @@ function stateServerRequest(ws, method, params) {
 
 // ── Native backend ──────────────────────────────────────────────────
 
-function createNativeBackend(stateServerUrl) {
+function createNativeBackend(stateServerUrl, onBlock?) {
   const args = stateServerUrl ? ["--state-server", stateServerUrl] : [];
   // Pass formula registry path
   const registryPath = join(__dirname, "go/formulas/registry.txt");
@@ -165,6 +165,10 @@ function createNativeBackend(stateServerUrl) {
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
+        if (msg.type === "block" && onBlock) {
+          onBlock({ number: msg.blockNumber, timestamp: msg.timestamp });
+          continue;
+        }
         const p = pending.get(msg.id);
         if (p) {
           pending.delete(msg.id);
@@ -222,7 +226,7 @@ function createNativeBackend(stateServerUrl) {
 
 // ── WASM backend ────────────────────────────────────────────────────
 
-async function createWasmBackend(stateServerUrl) {
+async function createWasmBackend(stateServerUrl, onBlock?) {
   // Load wasm_exec.js
   const execPath = join(BIN, "wasm_exec.js");
   const execSrc = await readFile(execPath, "utf-8");
@@ -343,6 +347,9 @@ async function createWasmBackend(stateServerUrl) {
             }
           }
         }
+        if (onBlock) {
+          onBlock({ number: msg.blockNumber, timestamp: msg.timestamp });
+        }
       }
     });
   }
@@ -386,12 +393,14 @@ async function createWasmBackend(stateServerUrl) {
 export async function createQuoter(mode, opts = {}) {
   const stateServerUrl = opts.stateServerUrl || null;
 
+  const onBlock = opts.onBlock || null;
+
   let backend;
   if (mode === "native") {
-    backend = createNativeBackend(stateServerUrl);
+    backend = createNativeBackend(stateServerUrl, onBlock);
     await backend.readyPromise;
   } else if (mode === "wasm") {
-    backend = await createWasmBackend(stateServerUrl);
+    backend = await createWasmBackend(stateServerUrl, onBlock);
   } else {
     throw new Error(`Unknown mode: ${mode}. Use "native" or "wasm".`);
   }

@@ -1,4 +1,4 @@
-export { createQuoter, type Quoter, type QuoterOptions, type FindRouteResult } from "./quoter.js";
+export { createQuoter, type Quoter, type QuoterOptions, type FindRouteResult, type BlockInfo } from "./quoter.js";
 export { loadPools, parsePools } from "./pools.js";
 export { buildStateOverrides, getBalanceOverride } from "./overrides.js";
 export { POOL_TYPE, type StoredPool, type RouteStep, type RouteResult, type PoolType } from "./types.js";

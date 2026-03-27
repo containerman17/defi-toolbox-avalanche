@@ -38,6 +38,11 @@ export async function createQuoter(opts) {
                 continue;
             try {
                 const msg = JSON.parse(line);
+                // Block notification from Go harness (not a JSON-RPC response)
+                if (msg.type === "block" && opts.onBlock) {
+                    opts.onBlock({ number: msg.blockNumber, timestamp: msg.timestamp });
+                    continue;
+                }
                 const p = pending.get(msg.id);
                 if (p) {
                     pending.delete(msg.id);

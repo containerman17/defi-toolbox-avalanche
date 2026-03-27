@@ -6,9 +6,16 @@ import type { NativeRouteResult } from "./types.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN_DIR = join(__dirname, "..", "bin");
 
+export interface BlockInfo {
+  number: number;
+  timestamp: number;
+}
+
 export interface QuoterOptions {
   /** WebSocket URL of the state server (e.g. "ws://localhost:7449/live") */
   stateServerUrl: string;
+  /** Called when a new block arrives. Use this to re-quote on each block. */
+  onBlock?: (block: BlockInfo) => void;
 }
 
 export interface FindRouteResult {
@@ -71,6 +78,11 @@ export async function createQuoter(opts: QuoterOptions): Promise<Quoter> {
       if (!line) continue;
       try {
         const msg = JSON.parse(line);
+        // Block notification from Go harness (not a JSON-RPC response)
+        if (msg.type === "block" && opts.onBlock) {
+          opts.onBlock({ number: msg.blockNumber, timestamp: msg.timestamp });
+          continue;
+        }
         const p = pending.get(msg.id);
         if (p) {
           pending.delete(msg.id);

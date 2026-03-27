@@ -325,6 +325,40 @@ func (p *V3Pool) precomputeSteps() {
 	}
 }
 
+// evmWouldComplete estimates whether the EVM would complete a full-range
+// swap without reverting from gas exhaustion. This is used when the formula
+// exhausts liquidity within the bitmap window to decide whether to return
+// partial output (EVM completes) or zero (EVM reverts).
+func (p *V3Pool) evmWouldComplete(zeroForOne bool) bool {
+	// Estimate EVM gas for a directional swap through bitmap words.
+	// Each swap loop iteration costs ~7000 gas (empirically calibrated):
+	//   SLOAD + getSqrtRatio + computeSwapStep + state management overhead.
+	// Each initialized tick crossing adds ~15K gas (SLOAD tick info + liquidity update).
+	const gasPerTick = 15000
+	const gasPerWord = 7000
+	const gasLimit = 5_000_000
+	const overheadGas = 200_000 // base cost + quoter overhead
+
+	// Direction-specific word count: from current tick to the range boundary.
+	var rangeWords int64
+	if zeroForOne {
+		// Going down: from current tick to MIN_TICK
+		rangeWords = (int64(p.tick) + int64(algebraMaxTick)) / int64(p.tickSpacing) / 256
+	} else {
+		// Going up: from current tick to MAX_TICK
+		rangeWords = (int64(algebraMaxTick) - int64(p.tick)) / int64(p.tickSpacing) / 256
+	}
+	if rangeWords < 0 {
+		rangeWords = 0
+	}
+
+	tickGas := int64(len(p.tickLiquidityNet)) * gasPerTick
+	wordGas := rangeWords * gasPerWord
+	totalGas := tickGas + wordGas + overheadGas
+
+	return totalGas < gasLimit
+}
+
 func (p *V3Pool) Address() common.Address {
 	return p.addr
 }
@@ -363,6 +397,14 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 		nextTick, initialized, outOfRange := p.nextInitializedTick(tick, zeroForOne)
 		if outOfRange {
 			// Swap pushed price beyond the pre-loaded bitmap range.
+			// If liquidity is zero (all initialized ticks crossed) and the EVM
+			// would complete the remaining empty-word traversal without running
+			// out of gas, return the accumulated partial output. This handles
+			// the out-of-liquidity pattern where the swap exhausts all available
+			// liquidity but the remaining input exceeds what the pool can absorb.
+			if liquidity.IsZero() && p.evmWouldComplete(zeroForOne) {
+				return amountOut
+			}
 			return uint256.Int{}
 		}
 

@@ -5,8 +5,8 @@ Agents investigating coverage should read this first, and append findings/tools 
 
 ## Current State (2026-03-27)
 
-1586 formula / 414 EVM fallback out of 2000 quotes (1000 pools × 2 directions).
-**79.3% formula coverage, 100% correctness** (0 mismatches).
+7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools × 2 directions).
+**93.9% formula coverage, 96.1% correctness** (315 mismatches, 7685 match).
 
 ### EVM Fallback Breakdown
 
@@ -208,6 +208,14 @@ During bulk un-blacklisting trial (all 43 → formula=3), 29 pools mismatched:
 - 5 additional identified in subsequent runs (benchmark uses random block sampling)
 
 All 29 reverted to formula=-1. Root cause: one-sided liquidity. The LFJ V2 tree structure marks bins as non-empty even if they only have one-side reserves. The formula traverses these "phantom" bins and produces non-zero output, but the on-chain swap correctly reverts.
+
+### Zero-output formula should return (zero, true) not (nil, false)
+
+**Pool:** `0x864d4e5Ee7318e97483DB7EB0912E09F161516EA` (LFJ V2, WAVAX/USDC, binStep=10)
+**Symptom:** dir=1 (USDC->WAVAX) — formula returns 0 (matching EVM revert), but `Quote()` treated zero as failure, falling through to an expensive EVM call (4.8M gas, ~11ms) that also reverts.
+**Root cause:** `LFJV2Pool.Quote()` returned `(nil, false)` when `QuoteLFJV2Fast` computed zero output (out-of-liquidity). The benchmark interpreted `ok=false` as "formula can't handle this" and fell back to EVM. The 1e18 amountIn = 1 trillion USDC (6 decimals) exhausts all bins.
+**Fix:** Changed `Quote()` to return `(new(uint256.Int), true)` when the formula computes zero output. This correctly signals "the formula knows the answer is zero" and avoids the EVM fallback.
+**Impact:** +90 formula quotes (7418→7508), -90 EVM calls (582→492), +5 matches (7680→7685), correctness 96.0%→96.1%. Per-pool time improved for affected pools (12.4ms→1.2ms for this pool).
 
 ### Final State
 

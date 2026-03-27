@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-27 — LFJ V2 zero-output formula should signal success
+
+### Fixed `LFJV2Pool.Quote()` returning (nil, false) for zero-output swaps
+- When `QuoteLFJV2Fast` computed zero output (e.g. out-of-liquidity because 1e18 USDC =
+  1 trillion USDC exceeds all bin reserves), `Quote()` treated it as a formula failure
+  and returned `(nil, false)`. The benchmark then fell through to an expensive EVM call
+  (~4.8M gas, ~11ms) that also reverted with `LBPair__OutOfLiquidity`.
+- Fix: return `(new(uint256.Int), true)` for zero output — "the formula knows the answer
+  is zero" — avoiding the EVM fallback entirely.
+- Investigated pool `0x864d4e5Ee7318e97483DB7EB0912E09F161516EA` (WAVAX/USDC, binStep=10):
+  dir=0 works fine, dir=1 correctly returns 0 (amount too large for available liquidity).
+- Impact: +90 formula quotes (7418->7508), -90 EVM calls (582->492), correctness 96.0%->96.1%.
+
 ## 2026-03-27 — Fix Algebra tick struct layout bug
 
 ### Fixed incorrect tick data reading in `algebraReadTick`

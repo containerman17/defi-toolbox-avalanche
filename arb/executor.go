@@ -63,12 +63,44 @@ func NewExecutor(privKeyHex string, rpcURL string, routerAddr common.Address, pt
 		hub:           hub,
 		signer:        signer,
 		MinProfitWei:  big.NewInt(1_000_000_000_000), // 0.000001 AVAX default
-		PriorityFee:   1_500_000_000,                 // 1.5 gwei
+		PriorityFee:   0,                             // no tip — low-competition arbs
 		GasMultiplier: 1.3,
 	}, nil
 }
 
 func (e *Executor) Address() common.Address { return e.addr }
+
+// FetchBalance fetches the AVAX balance of the wallet.
+func (e *Executor) FetchBalance() (*big.Int, error) {
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_getBalance",
+		"params":  []interface{}{e.addr.Hex(), "latest"},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(resp, &rpcResp); err != nil {
+		return nil, err
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
+	}
+
+	bal := new(big.Int)
+	bal.SetString(strings.TrimPrefix(rpcResp.Result, "0x"), 16)
+	return bal, nil
+}
 
 // SetNonce sets the initial nonce (fetch from chain at startup).
 func (e *Executor) SetNonce(n uint64) {
@@ -77,13 +109,96 @@ func (e *Executor) SetNonce(n uint64) {
 	e.mu.Unlock()
 }
 
+// Approve sends an ERC-20 approve(router, maxUint256) transaction.
+func (e *Executor) Approve(token common.Address, baseFee uint64) (common.Hash, error) {
+	// approve(address,uint256) = 0x095ea7b3
+	data := make([]byte, 68)
+	data[0], data[1], data[2], data[3] = 0x09, 0x5e, 0xa7, 0xb3
+	copy(data[4+12:4+32], e.routerAddr[:])
+	// 1,000,000 AVAX (1e6 * 1e18 = 1e24)
+	approveAmt := new(big.Int).Mul(big.NewInt(1_000_000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+	amtBytes := approveAmt.Bytes()
+	copy(data[68-len(amtBytes):68], amtBytes)
+
+	maxPriorityFee := new(big.Int).SetUint64(e.PriorityFee)
+	maxFee := new(big.Int).SetUint64(baseFee*2 + e.PriorityFee + 1_000_000_000) // +1 gwei for approval to go through
+
+	e.mu.Lock()
+	nonce := e.nonce
+	e.nonce++
+	e.mu.Unlock()
+
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   chainID,
+		Nonce:     nonce,
+		GasTipCap: maxPriorityFee,
+		GasFeeCap: maxFee,
+		Gas:       60_000,
+		To:        &token,
+		Value:     big.NewInt(0),
+		Data:      data,
+	})
+
+	signedTx, err := types.SignTx(tx, e.signer, e.key)
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("sign approve: %w", err)
+	}
+
+	rawTx, err := signedTx.MarshalBinary()
+	if err != nil {
+		return common.Hash{}, fmt.Errorf("marshal approve: %w", err)
+	}
+
+	txHash := signedTx.Hash()
+	fmt.Fprintf(os.Stderr, "[arb/exec] APPROVE %s for router, nonce=%d tx=%s\n",
+		token.Hex()[:10], nonce, txHash.Hex()[:14])
+
+	if err := e.sendRawTx(rawTx); err != nil {
+		e.mu.Lock()
+		if e.nonce == nonce+1 {
+			e.nonce = nonce
+		}
+		e.mu.Unlock()
+		return common.Hash{}, err
+	}
+
+	return txHash, nil
+}
+
+// CheckAllowance checks the ERC-20 allowance of the wallet for the router.
+func (e *Executor) CheckAllowance(token common.Address) (*big.Int, error) {
+	// allowance(owner, spender) = 0xdd62ed3e
+	data := "0xdd62ed3e" +
+		"000000000000000000000000" + hex.EncodeToString(e.addr[:]) +
+		"000000000000000000000000" + hex.EncodeToString(e.routerAddr[:])
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params":  []interface{}{map[string]string{"to": token.Hex(), "data": data}, "latest"},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return nil, err
+	}
+	var rpcResp struct {
+		Result string `json:"result"`
+	}
+	json.Unmarshal(resp, &rpcResp)
+	val := new(big.Int)
+	val.SetString(strings.TrimPrefix(rpcResp.Result, "0x"), 16)
+	return val, nil
+}
+
 // Execute builds, signs, and sends an arb transaction for a verified opportunity.
 func (e *Executor) Execute(opp *Opportunity, baseFee uint64) (common.Hash, error) {
 	if !opp.EVMVerified {
 		return common.Hash{}, fmt.Errorf("opportunity not EVM-verified")
 	}
 
-	calldata := encodeMultiHopSwap(opp.Cycle, e.pt, e.hub, opp.AmountIn)
+	calldata := EncodeSwapCalldata(opp.Cycle, e.pt, e.hub, opp.AmountIn)
 
 	gasLimit := uint64(float64(opp.EVMGasUsed) * e.GasMultiplier)
 	if gasLimit < 100_000 {
@@ -138,6 +253,44 @@ func (e *Executor) Execute(opp *Opportunity, baseFee uint64) (common.Hash, error
 
 	fmt.Fprintf(os.Stderr, "[arb/exec] SENT tx=%s\n", txHash.Hex())
 	return txHash, nil
+}
+
+// FetchERC20Balance fetches the balance of an ERC-20 token for the wallet.
+func (e *Executor) FetchERC20Balance(token common.Address) (*big.Int, error) {
+	// balanceOf(address) selector = 0x70a08231
+	data := "0x70a08231000000000000000000000000" + hex.EncodeToString(e.addr[:])
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []interface{}{
+			map[string]string{"to": token.Hex(), "data": data},
+			"latest",
+		},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(resp, &rpcResp); err != nil {
+		return nil, err
+	}
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("rpc error: %s", rpcResp.Error.Message)
+	}
+
+	bal := new(big.Int)
+	bal.SetString(strings.TrimPrefix(rpcResp.Result, "0x"), 16)
+	return bal, nil
 }
 
 // FetchNonce fetches the current nonce from the RPC endpoint.

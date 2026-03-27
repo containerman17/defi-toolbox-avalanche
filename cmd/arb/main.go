@@ -424,23 +424,6 @@ func main() {
 		}
 	}
 
-	// Track dirty pools per block
-	var dirtyMu sync.Mutex
-	var dirtyPools []common.Address
-	dirtySet := make(map[common.Address]bool)
-
-	fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
-		poolAddr := pm.InvalidateBySlot(addr, slot)
-		if poolAddr != (common.Address{}) {
-			dirtyMu.Lock()
-			if !dirtySet[poolAddr] {
-				dirtySet[poolAddr] = true
-				dirtyPools = append(dirtyPools, poolAddr)
-			}
-			dirtyMu.Unlock()
-		}
-	}
-
 	// Set up executor if live mode
 	var executor *arb.Executor
 	if !dryRun {
@@ -465,19 +448,82 @@ func main() {
 			os.Exit(1)
 		}
 		executor.SetNonce(nonce)
+
+		// Query WAVAX (ERC-20) balance — this is what we trade
+		wavaxBal, err := executor.FetchERC20Balance(WAVAX)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb] WARNING: could not fetch WAVAX balance: %v\n", err)
+		} else {
+			balF := new(big.Float).Quo(new(big.Float).SetInt(wavaxBal), new(big.Float).SetFloat64(1e18))
+			fmt.Fprintf(os.Stderr, "[arb] WAVAX balance: %s\n", balF.Text('f', 6))
+		}
+		// Also show native AVAX (for gas)
+		nativeBal, err := executor.FetchBalance()
+		if err == nil {
+			balF := new(big.Float).Quo(new(big.Float).SetInt(nativeBal), new(big.Float).SetFloat64(1e18))
+			fmt.Fprintf(os.Stderr, "[arb] native AVAX (gas): %s\n", balF.Text('f', 6))
+		}
+		// Check WAVAX approval for router, approve if needed
+		allowance, err := executor.CheckAllowance(WAVAX)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb] WARNING: could not check allowance: %v\n", err)
+		} else {
+			// Need at least 1000 WAVAX allowance to be useful
+			minAllowance := new(big.Int).Mul(big.NewInt(1000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
+			if allowance.Cmp(minAllowance) < 0 {
+				fmt.Fprintf(os.Stderr, "[arb] WAVAX allowance too low (%s), approving router...\n", allowance.String())
+				txHash, err := executor.Approve(WAVAX, fetcher.baseFee)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[arb] ERROR: approve failed: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Fprintf(os.Stderr, "[arb] approve tx: %s (waiting 3s for confirmation)\n", txHash.Hex())
+				time.Sleep(3 * time.Second)
+				// Re-fetch nonce after approval
+				nonce, _ = executor.FetchNonce()
+				executor.SetNonce(nonce)
+			} else {
+				fmt.Fprintf(os.Stderr, "[arb] WAVAX allowance OK\n")
+			}
+		}
+
 		fmt.Fprintf(os.Stderr, "[arb] executor ready, nonce=%d\n", nonce)
 	}
 
-	// Initial rate sweep (all pools dirty)
+	// Cap trade size to WAVAX balance (the token we trade, not native AVAX)
+	if executor != nil {
+		wavaxBal, err := executor.FetchERC20Balance(WAVAX)
+		if err == nil && wavaxBal.Sign() > 0 {
+			u, _ := uint256.FromBig(wavaxBal)
+			scanner.MaxSize = u
+			balF := new(big.Float).Quo(new(big.Float).SetInt(wavaxBal), new(big.Float).SetFloat64(1e18))
+			fmt.Fprintf(os.Stderr, "[arb] max trade size: %s WAVAX\n", balF.Text('f', 6))
+		}
+	}
+
+	// Initial rate sweep BEFORE wiring callbacks (PoolManager is not thread-safe)
 	fmt.Fprintf(os.Stderr, "[arb] running initial rate sweep...\n")
 	scanner.InitRates()
 	fmt.Fprintf(os.Stderr, "[arb] ready. Waiting for blocks...\n")
 
-	// Block handler
+	// Buffer slot changes from readLoop goroutine, apply on main goroutine.
+	// PoolManager is NOT thread-safe — all access must be on the main goroutine.
+	type slotChange struct {
+		addr common.Address
+		slot common.Hash
+	}
+	var slotMu sync.Mutex
+	var pendingSlots []slotChange
+
+	fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
+		slotMu.Lock()
+		pendingSlots = append(pendingSlots, slotChange{addr, slot})
+		slotMu.Unlock()
+	}
+
 	blockCh := make(chan blockInfo, 4)
 
 	fetcher.onBlock = func(block, timestamp, baseFee, gasLimit uint64) {
-		pm.SetBlockTimestamp(timestamp)
 		select {
 		case blockCh <- blockInfo{block, timestamp, baseFee, gasLimit}:
 		default:
@@ -488,11 +534,22 @@ func main() {
 
 	// Process blocks
 	for bi := range blockCh {
-		dirtyMu.Lock()
-		dp := dirtyPools
-		dirtyPools = nil
-		dirtySet = make(map[common.Address]bool)
-		dirtyMu.Unlock()
+		// Drain pending slot changes on main goroutine (PoolManager not thread-safe)
+		slotMu.Lock()
+		slots := pendingSlots
+		pendingSlots = nil
+		slotMu.Unlock()
+
+		pm.SetBlockTimestamp(bi.timestamp)
+		dirtySet := make(map[common.Address]bool)
+		var dp []common.Address
+		for _, sc := range slots {
+			poolAddr := pm.InvalidateBySlot(sc.addr, sc.slot)
+			if poolAddr != (common.Address{}) && !dirtySet[poolAddr] {
+				dirtySet[poolAddr] = true
+				dp = append(dp, poolAddr)
+			}
+		}
 
 		if len(dp) == 0 {
 			continue
@@ -506,8 +563,16 @@ func main() {
 			GasLimit:    bi.gasLimit,
 		}
 
-		// Create verifier for this block
-		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, pt, WAVAX)
+		// Create verifier — wallet balance override so swap() simulation works
+		caller := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+		var walletBal *uint256.Int
+		if executor != nil {
+			caller = executor.Address()
+		}
+		if scanner.MaxSize != nil {
+			walletBal = scanner.MaxSize
+		}
+		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX, walletBal)
 		verifier.SetVerbose(true)
 
 		opp := scanner.OnBlock(dp, verifier, bi.baseFee)
@@ -537,6 +602,9 @@ func main() {
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)
 				} else {
+					fmt.Fprintf(os.Stderr, "\n[arb] *** TRADE EXECUTED ***\n")
+					fmt.Fprintf(os.Stderr, "[arb] tx: %s\n", txHash.Hex())
+					fmt.Fprintf(os.Stderr, "[arb] snowtrace: https://snowtrace.io/tx/%s\n\n", txHash.Hex())
 					execOut, _ := json.Marshal(map[string]interface{}{
 						"type":   "tx_sent",
 						"block":  bi.block,
@@ -544,6 +612,9 @@ func main() {
 						"profit": opp.EVMProfit / 1e18,
 					})
 					fmt.Println(string(execOut))
+					// Exit after first trade
+					fmt.Fprintf(os.Stderr, "[arb] exiting after first trade\n")
+					os.Exit(0)
 				}
 			}
 		}

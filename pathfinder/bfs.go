@@ -51,6 +51,7 @@ func quotePool(
 	evmCtx *statedb.CachedContext,
 	routerAddr common.Address,
 	stats *RouteStats,
+	formulaOnly bool,
 ) *uint256.Int {
 	stats.TotalQuotes++
 
@@ -65,6 +66,11 @@ func quotePool(
 		if ok && out != nil && !out.IsZero() {
 			return out
 		}
+		return nil
+	}
+
+	// Skip EVM fallback when formula-only mode is enabled
+	if formulaOnly {
 		return nil
 	}
 
@@ -123,6 +129,7 @@ func FindBestRoute(
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
 	maxHops int,
+	formulaOnly bool,
 ) *Route {
 	if tokenIn == tokenOut {
 		return nil
@@ -147,7 +154,7 @@ func FindBestRoute(
 			continue
 		}
 		out := quotePool(edge.Pool, tokenIn, tokenOut, amountIn,
-			pm, cs, evmCtx, routerAddr, &stats)
+			pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
 		if out != nil {
 			candidates = append(candidates, routeCandidate{
 				steps: []RouteStep{{
@@ -199,7 +206,7 @@ func FindBestRoute(
 		}
 
 		out := quotePool(edge.Pool, tokenIn, mid, amountIn,
-			pm, cs, evmCtx, routerAddr, &stats)
+			pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
 		if out == nil {
 			continue
 		}
@@ -230,7 +237,7 @@ func FindBestRoute(
 			seenPool[edge.Pool.Address] = true
 
 			out := quotePool(edge.Pool, mid, tokenOut, hop1.amount,
-				pm, cs, evmCtx, routerAddr, &stats)
+				pm, cs, evmCtx, routerAddr, &stats, formulaOnly)
 			if out != nil {
 				candidates = append(candidates, routeCandidate{
 					steps: []RouteStep{
@@ -249,6 +256,18 @@ func FindBestRoute(
 
 	if len(candidates) == 0 {
 		return nil
+	}
+
+	// ── Formula-only: skip EVM verification, return best candidate ────
+	if formulaOnly {
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].amountOut.Gt(candidates[j].amountOut)
+		})
+		return &Route{
+			Steps:     candidates[0].steps,
+			AmountOut: candidates[0].amountOut,
+			Stats:     stats,
+		}
 	}
 
 	// ── EVM verification ───────────────────────────────────────────────

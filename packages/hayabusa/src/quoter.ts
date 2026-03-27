@@ -32,7 +32,7 @@ export interface FindRouteResult {
 
 export interface Quoter {
   /** Find the best route from tokenIn to tokenOut */
-  findRoute(tokenIn: string, tokenOut: string, amountIn: bigint): Promise<FindRouteResult | null>;
+  findRoute(tokenIn: string, tokenOut: string, amountIn: bigint, opts?: { formulaOnly?: boolean }): Promise<FindRouteResult | null>;
 
   /** Send a raw JSON-RPC request to the native harness */
   request(method: string, params: any): Promise<any>;
@@ -129,12 +129,14 @@ export async function createQuoter(opts: QuoterOptions): Promise<Quoter> {
     tokenIn: string,
     tokenOut: string,
     amountIn: bigint,
+    opts?: { formulaOnly?: boolean },
   ): Promise<FindRouteResult | null> {
     const result = await request("find_route", {
       tokenIn: tokenIn.toLowerCase(),
       tokenOut: tokenOut.toLowerCase(),
       amountIn: "0x" + amountIn.toString(16),
       maxHops: 2,
+      ...(opts?.formulaOnly && { formulaOnly: true }),
     });
 
     if (!result || result.route === null || !result.steps) {

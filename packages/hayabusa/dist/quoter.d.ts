@@ -26,7 +26,9 @@ export interface FindRouteResult {
 }
 export interface Quoter {
     /** Find the best route from tokenIn to tokenOut */
-    findRoute(tokenIn: string, tokenOut: string, amountIn: bigint): Promise<FindRouteResult | null>;
+    findRoute(tokenIn: string, tokenOut: string, amountIn: bigint, opts?: {
+        formulaOnly?: boolean;
+    }): Promise<FindRouteResult | null>;
     /** Send a raw JSON-RPC request to the native harness */
     request(method: string, params: any): Promise<any>;
     /** Close the harness process */

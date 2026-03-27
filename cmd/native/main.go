@@ -688,10 +688,11 @@ func main() {
 
 		case "find_route":
 			var params struct {
-				TokenIn  string `json:"tokenIn"`
-				TokenOut string `json:"tokenOut"`
-				AmountIn string `json:"amountIn"`
-				MaxHops  int    `json:"maxHops"`
+				TokenIn     string `json:"tokenIn"`
+				TokenOut    string `json:"tokenOut"`
+				AmountIn    string `json:"amountIn"`
+				MaxHops     int    `json:"maxHops"`
+				FormulaOnly bool   `json:"formulaOnly"`
 			}
 			if err := json.Unmarshal(req.Params, &params); err != nil {
 				resp.Error = fmt.Sprintf("invalid params: %v", err)
@@ -721,7 +722,7 @@ func main() {
 			}
 
 			pm.SetBlockTimestamp(currentTimestamp)
-			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
+			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops, params.FormulaOnly)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
 			} else {

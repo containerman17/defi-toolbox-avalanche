@@ -171,22 +171,50 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	}
 
 	// Gas-based step limit: estimate accumulated EVM gas and bail before 5M limit.
-	// Observed gas-per-step is ~22K across all Algebra pools regardless of pluginConfig.
-	// The AFTER_SWAP plugin hook (pluginConfig & 0x02) fires once per swap call, not
-	// per step, so it doesn't affect per-step cost.
-	// Examples (all ~22K/step):
-	//   Pool 0xA02E (plugin=0x00): 4.9M gas / ~217 steps ≈ 22.6K/step (EVM reverts)
-	//   Pool 0xC13F (plugin=0x02): 3.3M gas / ~147 steps ≈ 22.4K/step (EVM succeeds)
-	//   Pool 0x4110 (plugin=0x02): 4.9M gas / ~211 steps ≈ 22.6K/step (EVM reverts)
-	// With gasPerStep=22K, baseGas=200K, gasLimit=4.8M → maxSteps=209.
+	// The swap loop costs ~22K gas per step (tick crossing) regardless of pool config.
+	// However, the AFTER_SWAP plugin hook can add significant one-time overhead when
+	// the pool has accumulated pending community fees — the plugin triggers fee
+	// transfers + TWAP oracle updates that can cost 2-3M gas.
+	//
+	// We estimate afterSwap overhead by reading slot 4 (communityFeePending0).
+	// When the pool has AFTER_SWAP enabled and pending fees > threshold, we
+	// deduct an afterSwap penalty from the gas budget.
+	//
+	// Examples:
+	//   Pool 0xA02E: 217 steps, 4.9M gas, afterSwap=cheap (pending=191B) → REVERTS
+	//   Pool 0xC13F: 147 steps, 3.3M gas, afterSwap=cheap (pending=0)   → SUCCEEDS
+	//   Pool 0x4110: 102 steps, 4.9M gas, afterSwap=2.6M (pending=29T)  → REVERTS
+	const gasPerStep int64 = 22_000
 	const algebraBaseGas int64 = 200_000
 	const algebraGasLimit int64 = 4_800_000
-	const gasPerStep int64 = 22_000
+
+	// Estimate afterSwap overhead from pending community fees in slot 4.
+	// Slot 4 layout (Algebra V2 Integral AlgebraPoolBase):
+	//   bits [0:104]   = communityFeePending0 (uint104)
+	//   bits [104:208] = communityFeePending1 (uint104)
+	//   bits [208:240] = lastFeeTransferTimestamp (uint32)
+	var afterSwapGas int64
+	if pluginConfig&0x02 != 0 { // AFTER_SWAP_FLAG
+		data4, err4 := read(poolAddress, big.NewInt(4))
+		if err4 == nil {
+			val4 := new(big.Int).SetBytes(data4[:])
+			mask104 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 104), big.NewInt(1))
+			feePending0 := new(big.Int).And(val4, mask104)
+			// When pending fees exceed ~1e12 wei (1 µToken), the afterSwap
+			// triggers expensive fee transfers + TWAP oracle catch-up.
+			// Observed overhead: ~2.6M gas for pools with high pending fees.
+			if feePending0.Cmp(big.NewInt(1_000_000_000_000)) > 0 {
+				afterSwapGas = 2_600_000
+			}
+		}
+	}
+	effectiveGasLimit := algebraGasLimit - afterSwapGas
 
 	if algebraDebug {
-		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d plugin=0x%02x gasPerStep=%dK maxSteps=%d\n",
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d plugin=0x%02x gasPerStep=%dK afterSwap=%dK maxSteps=%d\n",
 			poolAddress, zeroForOne, amountIn.String(), currentPrice.String(), currentLiquidity.String(),
-			prevInitializedTick, nextInitializedTick, fee, pluginConfig, gasPerStep/1000, (algebraGasLimit-algebraBaseGas)/gasPerStep)
+			prevInitializedTick, nextInitializedTick, fee, pluginConfig, gasPerStep/1000, afterSwapGas/1000,
+			(effectiveGasLimit-algebraBaseGas)/gasPerStep)
 	}
 
 	var limitSqrtPrice *big.Int
@@ -201,10 +229,10 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	steps := 0
 	for amountRemaining.Sign() > 0 && currentPrice.Cmp(limitSqrtPrice) != 0 {
 		steps++
-		if int64(steps)*gasPerStep+algebraBaseGas > algebraGasLimit {
+		if int64(steps)*gasPerStep+algebraBaseGas > effectiveGasLimit {
 			if algebraDebug {
-				fmt.Fprintf(os.Stderr, "[ALGEBRA] gas estimate %dK exceeds limit at step %d (gasPerStep=%dK), out=%s rem=%s\n",
-					(int64(steps)*gasPerStep+algebraBaseGas)/1000, steps, gasPerStep/1000, amountOut.String(), amountRemaining.String())
+				fmt.Fprintf(os.Stderr, "[ALGEBRA] gas estimate %dK exceeds limit %dK at step %d (gasPerStep=%dK afterSwap=%dK), out=%s rem=%s\n",
+					(int64(steps)*gasPerStep+algebraBaseGas)/1000, effectiveGasLimit/1000, steps, gasPerStep/1000, afterSwapGas/1000, amountOut.String(), amountRemaining.String())
 			}
 			return big.NewInt(0), nil
 		}

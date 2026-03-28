@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-03-28 — Algebra formula: gas-based step limit with afterSwap overhead estimation
+
+### Problem
+- The fixed `maxSwapSteps=500` was too generous. Pool 0xA02E completes 217 steps in the
+  formula but EVM reverts at 4.9M gas (217 × 22K ≈ 4.8M, exceeding 5M with overhead).
+- The previous fix of `maxSwapSteps=95` was too low — pool 0xC13F needs 147 steps and
+  EVM succeeds at 3.3M gas.
+- A fixed step count can't handle the variation: some pools have ~22K gas/step with cheap
+  afterSwap (0xA02E, 0xC13F), while others have ~22K/step but expensive afterSwap plugin
+  overhead of ~2.6M gas (0x4110, 0x668A).
+
+### Root cause investigation
+- All Algebra pools have ~22K gas per swap step (tick crossing), regardless of pluginConfig.
+- The AFTER_SWAP plugin hook fires once per swap call, not per step.
+- The afterSwap cost varies from ~70K to ~2.6M depending on accumulated
+  `communityFeePending0` in pool storage slot 4. High pending fees trigger expensive fee
+  transfers + TWAP oracle catch-up in the plugin.
+- Cannot distinguish cheap vs expensive afterSwap from pluginConfig alone — both 0xC13F
+  (cheap) and 0x4110 (expensive) have pluginConfig=0x02.
+- Reading slot 4's `communityFeePending0` provides the signal: 0 or small = cheap
+  afterSwap; large (>1e12 wei) = expensive afterSwap (~2.6M gas).
+
+### Fix
+- Replaced fixed `maxSwapSteps` with gas-based step limit: `steps * 22K + baseGas > limit`.
+- Read `pluginConfig` from globalState to detect AFTER_SWAP flag (bit 0x02).
+- When AFTER_SWAP is active, read pool slot 4 (`communityFeePending0`). If pending fees
+  exceed 1e12 wei, deduct 2.6M gas afterSwap penalty from the budget.
+- Effective max steps: 209 (no afterSwap) or 90 (with expensive afterSwap).
+- Pre-read slot 4 in `newAlgebraPool()` for dependency tracking.
+
+### Results
+- 0xA02E: 100% (217 steps, cheap afterSwap, bails at step 209 → returns 0, matches EVM revert)
+- 0xC13F: 100% (147 steps, cheap afterSwap, completes → returns non-zero, matches EVM)
+- 0x4110: 100% (102 steps, expensive afterSwap, bails at step 90 → returns 0, matches EVM revert)
+- 0x668A: 100% (117 steps, expensive afterSwap, bails at step 90 → returns 0, matches EVM revert)
+- Full benchmark (1000 pools, 1 block): 51 → 49 mismatches (net -2, no regressions).
+
 ## 2026-03-28 — Algebra formula: fix two bugs causing false-zero returns
 
 ### Problem

@@ -48,6 +48,14 @@ var (
 		ticks:     big.NewInt(10),
 		bitmap:    big.NewInt(11),
 	}
+	// PangolinV3Pool with RewardSlot between slot0 and feeGrowthGlobal0X128.
+	// The RewardSlot shifts liquidity/ticks/bitmap each by +1.
+	v3LayoutPangolinReward = v3Layout{
+		slot0:     big.NewInt(5),
+		liquidity: big.NewInt(10),
+		ticks:     big.NewInt(11),
+		bitmap:    big.NewInt(12),
+	}
 	v3LayoutPharaohV1 = func() v3Layout {
 		base := new(big.Int).SetBytes(crypto.Keccak256([]byte("states.storage")))
 		return v3Layout{
@@ -76,8 +84,10 @@ var (
 )
 
 // v3ResolveLayout detects the storage layout for a V3 pool by trying slot0 reads.
+// v3ReadSlot0 validates sqrtPrice range AND tick/sqrtPrice consistency, which
+// prevents false positives from non-slot0 storage data (e.g. maxLiquidityPerTick).
 func v3ResolveLayout(read StateReader, poolAddress string) (*v3Layout, error) {
-	layouts := []*v3Layout{&v3LayoutStandard, &v3LayoutProxy, &v3LayoutPangolin}
+	layouts := []*v3Layout{&v3LayoutStandard, &v3LayoutProxy, &v3LayoutPangolinReward, &v3LayoutPangolin}
 	if pharaohV3Pools[poolAddress] {
 		layouts = []*v3Layout{&v3LayoutPharaohV1, &v3LayoutPharaohV2}
 	}
@@ -286,6 +296,19 @@ func v3ReadSlot0(read StateReader, poolAddress string, slot *big.Int) (*big.Int,
 	// Validate tick is in valid range
 	if tick < algebraMinTick || tick > algebraMaxTick {
 		return nil, 0, fmt.Errorf("tick %d out of valid range [%d, %d]", tick, algebraMinTick, algebraMaxTick)
+	}
+	// Validate tick/sqrtPrice consistency: getSqrtRatioAtTick(tick) <= sqrtPrice < getSqrtRatioAtTick(tick+1).
+	// This prevents false positives where non-slot0 data (e.g. maxLiquidityPerTick)
+	// happens to have lower 160 bits in the valid sqrtPrice range but with garbage upper bits.
+	tickLowerSqrt := getSqrtRatioAtTick(tick)
+	if sqrtPriceX96.Cmp(tickLowerSqrt) < 0 {
+		return nil, 0, fmt.Errorf("sqrtPrice %s below tick %d lower bound", sqrtPriceX96, tick)
+	}
+	if tick < algebraMaxTick {
+		tickUpperSqrt := getSqrtRatioAtTick(tick + 1)
+		if sqrtPriceX96.Cmp(tickUpperSqrt) >= 0 {
+			return nil, 0, fmt.Errorf("sqrtPrice %s at or above tick %d upper bound", sqrtPriceX96, tick)
+		}
 	}
 	return sqrtPriceX96, tick, nil
 }

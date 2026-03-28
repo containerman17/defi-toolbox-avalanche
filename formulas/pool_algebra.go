@@ -28,7 +28,7 @@ func newAlgebraPool(addr common.Address, reader StorageReader) *AlgebraPool {
 
 	// Pre-read globalState (slot 2) and packed slot (slot 9) to register
 	// dependency tracking. These reads also validate the pool is initialized.
-	sqrtPrice, _, _, _, err := algebraReadGlobalState(stateReader, poolAddress)
+	sqrtPrice, _, _, _, _, err := algebraReadGlobalState(stateReader, poolAddress)
 	if err != nil || sqrtPrice == nil || sqrtPrice.Sign() == 0 {
 		return nil
 	}

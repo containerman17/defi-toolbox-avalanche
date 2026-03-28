@@ -45,10 +45,10 @@ var (
 )
 
 
-func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int32, uint32, uint32, error) {
+func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int32, uint32, uint32, uint8, error) {
 	data, err := read(poolAddress, algebraSlotGlobalState)
 	if err != nil {
-		return nil, 0, 0, 0, fmt.Errorf("globalState slot: %w", err)
+		return nil, 0, 0, 0, 0, fmt.Errorf("globalState slot: %w", err)
 	}
 	val := new(big.Int).SetBytes(data[:])
 
@@ -56,7 +56,7 @@ func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int
 	mask160 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1))
 	sqrtPrice := new(big.Int).And(val, mask160)
 	if sqrtPrice.Sign() == 0 {
-		return nil, 0, 0, 0, fmt.Errorf("zero sqrtPrice in storage")
+		return nil, 0, 0, 0, 0, fmt.Errorf("zero sqrtPrice in storage")
 	}
 
 	// bits [160:184] = tick (int24)
@@ -70,10 +70,13 @@ func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int
 	// bits [184:200] = lastFee (uint16)
 	fee := uint32(new(big.Int).Rsh(val, 184).Int64() & 0xFFFF)
 
-	// bits [208:224] = communityFee (uint16) — skip pluginConfig at [200:208]
+	// bits [200:208] = pluginConfig (uint8)
+	pluginConfig := uint8(new(big.Int).Rsh(val, 200).Int64() & 0xFF)
+
+	// bits [208:224] = communityFee (uint16)
 	communityFee := uint32(new(big.Int).Rsh(val, 208).Int64() & 0xFFFF)
 
-	return sqrtPrice, tick, fee, communityFee, nil
+	return sqrtPrice, tick, fee, communityFee, pluginConfig, nil
 }
 
 func algebraReadPackedSlot(read StateReader, poolAddress string) (*big.Int, int32, int32, error) {
@@ -156,7 +159,7 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	}
 
 	// Read globalState from slot 2
-	currentPrice, _, fee, _, err := algebraReadGlobalState(read, poolAddress)
+	currentPrice, _, fee, _, pluginConfig, err := algebraReadGlobalState(read, poolAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -167,10 +170,23 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		return nil, err
 	}
 
+	// Gas-based step limit: estimate accumulated EVM gas and bail before 5M limit.
+	// Observed gas-per-step is ~22K across all Algebra pools regardless of pluginConfig.
+	// The AFTER_SWAP plugin hook (pluginConfig & 0x02) fires once per swap call, not
+	// per step, so it doesn't affect per-step cost.
+	// Examples (all ~22K/step):
+	//   Pool 0xA02E (plugin=0x00): 4.9M gas / ~217 steps ≈ 22.6K/step (EVM reverts)
+	//   Pool 0xC13F (plugin=0x02): 3.3M gas / ~147 steps ≈ 22.4K/step (EVM succeeds)
+	//   Pool 0x4110 (plugin=0x02): 4.9M gas / ~211 steps ≈ 22.6K/step (EVM reverts)
+	// With gasPerStep=22K, baseGas=200K, gasLimit=4.8M → maxSteps=209.
+	const algebraBaseGas int64 = 200_000
+	const algebraGasLimit int64 = 4_800_000
+	const gasPerStep int64 = 22_000
+
 	if algebraDebug {
-		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d\n",
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d plugin=0x%02x gasPerStep=%dK maxSteps=%d\n",
 			poolAddress, zeroForOne, amountIn.String(), currentPrice.String(), currentLiquidity.String(),
-			prevInitializedTick, nextInitializedTick, fee)
+			prevInitializedTick, nextInitializedTick, fee, pluginConfig, gasPerStep/1000, (algebraGasLimit-algebraBaseGas)/gasPerStep)
 	}
 
 	var limitSqrtPrice *big.Int
@@ -182,18 +198,13 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 
 	amountRemaining := new(big.Int).Set(amountIn)
 	amountOut := new(big.Int)
-
-	// Guard against runaway loops. The formula has no gas cost, so use a generous
-	// limit. Some Algebra pools have dense tick spacing and need 100+ steps
-	// (e.g., 0xC13F USDT.e/WAVAX uses ~100 steps at 3.3M gas, well within 5M limit).
-	// Match V3's limit of 500.
-	const maxSwapSteps = 500
 	steps := 0
 	for amountRemaining.Sign() > 0 && currentPrice.Cmp(limitSqrtPrice) != 0 {
 		steps++
-		if steps > maxSwapSteps {
+		if int64(steps)*gasPerStep+algebraBaseGas > algebraGasLimit {
 			if algebraDebug {
-				fmt.Fprintf(os.Stderr, "[ALGEBRA] HIT maxSwapSteps at step %d, out=%s rem=%s\n", steps, amountOut.String(), amountRemaining.String())
+				fmt.Fprintf(os.Stderr, "[ALGEBRA] gas estimate %dK exceeds limit at step %d (gasPerStep=%dK), out=%s rem=%s\n",
+					(int64(steps)*gasPerStep+algebraBaseGas)/1000, steps, gasPerStep/1000, amountOut.String(), amountRemaining.String())
 			}
 			return big.NewInt(0), nil
 		}

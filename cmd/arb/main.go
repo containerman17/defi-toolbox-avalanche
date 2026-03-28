@@ -570,34 +570,75 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[arb] block=%d dirty=%d | %s\n",
 			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
 
-		if opp != nil && opp.FormulaProfit > 0 {
-			// Execute if live mode
-			if executor != nil {
-				// Stage 3: verify via eth_call on local node (exact same calldata as on-chain)
-				if err := executor.SimulateViaRPC(opp); err != nil {
-					fmt.Fprintf(os.Stderr, "[arb] stage3-rpc FAILED: %v — skipping\n", err)
-					continue
-				}
-				fmt.Fprintf(os.Stderr, "[arb] stage3-rpc PASSED — sending tx\n")
+		if opp != nil && opp.FormulaProfit > 0 && executor != nil {
+			// Build swap() calldata (same for both local EVM and RPC)
+			calldata := arb.EncodeSwapCalldata(opp.Cycle, pt, WAVAX, opp.AmountIn)
 
-				txHash, err := executor.Execute(opp, bi.baseFee)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)
-				} else {
-					fmt.Fprintf(os.Stderr, "\n[arb] *** TRADE EXECUTED ***\n")
-					fmt.Fprintf(os.Stderr, "[arb] tx: %s\n", txHash.Hex())
-					fmt.Fprintf(os.Stderr, "[arb] snowtrace: https://snowtrace.io/tx/%s\n\n", txHash.Hex())
-					execOut, _ := json.Marshal(map[string]interface{}{
-						"type":   "tx_sent",
-						"block":  bi.block,
-						"txHash": txHash.Hex(),
-						"profit": opp.EVMProfit / 1e18,
-					})
-					fmt.Println(string(execOut))
-					// Exit after first trade to check receipt
-					fmt.Fprintf(os.Stderr, "[arb] exiting after first trade — check receipt\n")
-					os.Exit(0)
+			// Debug: check state vs callstate
+			testSlot := common.HexToHash("0xbb202940fa70baa901e09fd8d6c06c8ce4fc08dcca73ca2e0eadb201914a595c")
+			fmt.Fprintf(os.Stderr, "[arb] DEBUG: state.GetState=%s code=%d\n",
+				state.GetState(WAVAX, testSlot).Hex()[:14], state.GetCodeSize(WAVAX))
+			testCS := statedb.NewCallState(state)
+			fmt.Fprintf(os.Stderr, "[arb] DEBUG: cs.GetState=%s code=%d\n",
+				testCS.GetState(WAVAX, testSlot).Hex()[:14], testCS.GetCodeSize(WAVAX))
+
+			// ── Stage 3a: Local EVM verification ──
+			cfg := statedb.EVMConfig{
+				BlockNumber: bi.block,
+				Timestamp:   bi.timestamp,
+				ChainID:     43114,
+				BaseFee:     bi.baseFee,
+				GasLimit:    bi.gasLimit,
+			}
+			evmCtx := statedb.GetCachedContext(cfg)
+			cs := statedb.NewCallState(state)
+			localRet, localGas, localErr := evmCtx.ExecuteWithCallState(
+				cs, executor.Address(), router.DeployedRouter, calldata)
+			localOK := localErr == nil && len(localRet) >= 32
+
+			var localOut string
+			if localOK {
+				localOut = fmt.Sprintf("OK out=%x gas=%d", localRet[len(localRet)-32:], localGas)
+			} else {
+				reason := "no data"
+				if localErr != nil {
+					reason = localErr.Error()
 				}
+				localOut = fmt.Sprintf("REVERT gas=%d reason=%s", localGas, reason)
+			}
+			fmt.Fprintf(os.Stderr, "[arb] stage3a-local block=%d: %s\n", bi.block, localOut)
+
+			// ── Stage 3b: RPC verification at the SAME block ──
+			rpcOK, rpcOut, rpcGas := executor.SimulateViaRPCAtBlock(opp, calldata, bi.block)
+			fmt.Fprintf(os.Stderr, "[arb] stage3b-rpc   block=%d: %s\n", bi.block, rpcOut)
+
+			// Compare
+			if localOK != rpcOK {
+				fmt.Fprintf(os.Stderr, "[arb] *** MISMATCH *** local=%v rpc=%v at block %d\n", localOK, rpcOK, bi.block)
+			}
+
+			// Only send if RPC passes
+			if !rpcOK {
+				fmt.Fprintf(os.Stderr, "[arb] stage3 RPC failed — skipping\n")
+				continue
+			}
+
+			// Use RPC gas estimate
+			opp.EVMGasUsed = rpcGas
+
+			txHash, err := executor.Execute(opp, bi.baseFee)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "\n[arb] *** TRADE EXECUTED ***\n")
+				fmt.Fprintf(os.Stderr, "[arb] tx: %s\n", txHash.Hex())
+				fmt.Fprintf(os.Stderr, "[arb] snowtrace: https://snowtrace.io/tx/%s\n\n", txHash.Hex())
+				execOut, _ := json.Marshal(map[string]interface{}{
+					"type":   "tx_sent",
+					"block":  bi.block,
+					"txHash": txHash.Hex(),
+				})
+				fmt.Println(string(execOut))
 			}
 		}
 	}

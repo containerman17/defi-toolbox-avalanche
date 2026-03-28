@@ -192,13 +192,13 @@ func (e *Executor) CheckAllowance(token common.Address) (*big.Int, error) {
 	return val, nil
 }
 
-// SimulateViaRPC runs swap() as eth_call on the local node (stage 3).
-// On success, updates opp.EVMGasUsed with the estimated gas.
-// Returns nil if the call succeeds, or an error describing the revert.
-func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
-	calldata := EncodeSwapCalldata(opp.Cycle, e.pt, e.hub, opp.AmountIn)
+// SimulateViaRPCAtBlock runs swap() as eth_call at a specific block number.
+// Returns (success, description, gasEstimate).
+func (e *Executor) SimulateViaRPCAtBlock(opp *Opportunity, calldata []byte, block uint64) (bool, string, uint64) {
 	calldataHex := "0x" + hex.EncodeToString(calldata)
+	blockHex := fmt.Sprintf("0x%x", block)
 
+	// eth_call at specific block
 	reqBody, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -209,13 +209,13 @@ func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
 				"to":   e.routerAddr.Hex(),
 				"data": calldataHex,
 			},
-			"latest",
+			blockHex,
 		},
 	})
 
 	resp, err := e.rpcCall(reqBody)
 	if err != nil {
-		return fmt.Errorf("rpc error: %w", err)
+		return false, fmt.Sprintf("rpc error: %v", err), 0
 	}
 
 	var rpcResp struct {
@@ -228,13 +228,24 @@ func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
 	json.Unmarshal(resp, &rpcResp)
 
 	if rpcResp.Error != nil {
-		return fmt.Errorf("stage4 revert: %s", rpcResp.Error.Message)
+		return false, fmt.Sprintf("REVERT: %s", rpcResp.Error.Message), 0
 	}
 	if rpcResp.Result == "" || rpcResp.Result == "0x" {
-		return fmt.Errorf("stage3: empty result")
+		return false, "empty result", 0
 	}
 
-	// Get gas estimate via eth_estimateGas
+	// Decode amountOut from return data
+	retHex := strings.TrimPrefix(rpcResp.Result, "0x")
+	var outDesc string
+	if len(retHex) >= 64 {
+		outVal := new(big.Int)
+		outVal.SetString(retHex[len(retHex)-64:], 16)
+		outDesc = fmt.Sprintf("OK out=%s", outVal.String())
+	} else {
+		outDesc = fmt.Sprintf("OK ret_len=%d", len(retHex)/2)
+	}
+
+	// eth_estimateGas at same block
 	gasReqBody, _ := json.Marshal(map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      1,
@@ -245,9 +256,10 @@ func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
 				"to":   e.routerAddr.Hex(),
 				"data": calldataHex,
 			},
-			"latest",
+			blockHex,
 		},
 	})
+	var gasUsed uint64
 	gasResp, err := e.rpcCall(gasReqBody)
 	if err == nil {
 		var gasRpcResp struct {
@@ -256,11 +268,11 @@ func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
 		if json.Unmarshal(gasResp, &gasRpcResp) == nil && gasRpcResp.Result != "" {
 			gas := new(big.Int)
 			gas.SetString(strings.TrimPrefix(gasRpcResp.Result, "0x"), 16)
-			opp.EVMGasUsed = gas.Uint64()
+			gasUsed = gas.Uint64()
 		}
 	}
 
-	return nil
+	return true, fmt.Sprintf("%s gas=%d", outDesc, gasUsed), gasUsed
 }
 
 // SimulateViaRPCWithGas runs swap() as eth_call and returns the gas used.

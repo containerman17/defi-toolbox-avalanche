@@ -199,6 +199,71 @@ type RPCCallResult struct {
 	ErrMsg   string
 }
 
+// RPCChecker runs eth_call against a node for cross-checking local EVM results.
+// Unlike Executor, it does NOT need a private key — only an RPC URL and router address.
+// Used in dry-run mode to validate that local EVM matches the real node.
+type RPCChecker struct {
+	rpcURL     string
+	routerAddr common.Address
+	caller     common.Address // "from" address for eth_call (can be zero)
+}
+
+// NewRPCChecker creates a checker for cross-validating local EVM against a node.
+func NewRPCChecker(rpcURL string, routerAddr, caller common.Address) *RPCChecker {
+	return &RPCChecker{rpcURL: rpcURL, routerAddr: routerAddr, caller: caller}
+}
+
+// EthCallAtBlock runs eth_call with the given calldata at a specific block.
+func (c *RPCChecker) EthCallAtBlock(calldata []byte, block uint64) RPCCallResult {
+	calldataHex := "0x" + hex.EncodeToString(calldata)
+	blockHex := fmt.Sprintf("0x%x", block)
+
+	from := c.caller.Hex()
+	if c.caller == (common.Address{}) {
+		from = "0x0000000000000000000000000000000000000000"
+	}
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []interface{}{
+			map[string]string{
+				"from": from,
+				"to":   c.routerAddr.Hex(),
+				"data": calldataHex,
+			},
+			blockHex,
+		},
+	})
+
+	resp, err := http.Post(c.rpcURL, "application/json", bytes.NewReader(reqBody))
+	if err != nil {
+		return RPCCallResult{Reverted: true, ErrMsg: fmt.Sprintf("rpc error: %v", err)}
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.Unmarshal(body, &rpcResp)
+
+	if rpcResp.Error != nil {
+		return RPCCallResult{Reverted: true, ErrMsg: rpcResp.Error.Message}
+	}
+	if rpcResp.Result == "" || rpcResp.Result == "0x" {
+		return RPCCallResult{Reverted: true, ErrMsg: "empty result"}
+	}
+
+	retHex := strings.TrimPrefix(rpcResp.Result, "0x")
+	retData, _ := hex.DecodeString(retHex)
+	return RPCCallResult{RetData: retData}
+}
+
 // EthCallAtBlock runs eth_call with the given calldata at a specific block.
 // Returns the raw return data for byte-for-byte comparison with local EVM.
 func (e *Executor) EthCallAtBlock(calldata []byte, block uint64) RPCCallResult {

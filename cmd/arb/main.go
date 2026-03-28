@@ -191,6 +191,13 @@ func main() {
 		}
 	}
 
+	// RPC checker for stage 3b cross-validation (works in dry-run, no private key needed)
+	var rpcChecker *arb.RPCChecker
+	if rpcURL != "" {
+		rpcChecker = arb.NewRPCChecker(rpcURL, router.DeployedRouter, caller)
+		fmt.Fprintf(os.Stderr, "[arb] RPC cross-checker enabled: %s\n", rpcURL)
+	}
+
 	// Initial rate sweep under read lock
 	ls.RLock()
 	fmt.Fprintf(os.Stderr, "[arb] router code: %d bytes, WAVAX code: %d bytes\n",
@@ -259,10 +266,12 @@ func main() {
 			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
 
 		// ── Stage 3b: RPC cross-check ALL local EVM results ──
-		if executor != nil && len(evmResults) > 0 {
+		// Runs local EVM result calldata against the real node at the same block.
+		// If results differ, our state tracking is broken.
+		if rpcChecker != nil && len(evmResults) > 0 {
 			matched, mismatched, rpcErrors := 0, 0, 0
 			for _, er := range evmResults {
-				rpc := executor.EthCallAtBlock(er.Calldata, er.Block)
+				rpc := rpcChecker.EthCallAtBlock(er.Calldata, er.Block)
 
 				if er.Reverted && rpc.Reverted {
 					matched++ // both reverted — OK

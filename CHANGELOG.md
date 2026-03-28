@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-28 — Fix Pangolin GB/USDT.e pool (36→35 mismatches)
+
+### Pool 0xa0CDD (pangolin_v2, GB/USDT.e)
+- Pool was blacklisted (-1) — un-blacklisted to formula 0 (V2 30bps)
+- Pool source code revealed it's a standard Pangolin V2 pair (Uniswap V2 fork), NOT Algebra
+- Token0 (GoodBridging/GB) is a reflection token with 1% fee — added to `brokenTokens`
+- `deadDirQuoter` blocks dir=0 (GB as input), dir=1 (USDT.e as input) works correctly
+
 ## 2026-03-28 — Token override discovery + mismatch fixes (47→36)
 
 ### Token balance override discovery via state diffs

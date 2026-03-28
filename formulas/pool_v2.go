@@ -12,6 +12,7 @@ var brokenTokens = map[common.Address]bool{
 	common.HexToAddress("0xe80772eaf6e2e18b651f160bc9158b2a5cafca65"): true, // USD+: rebasing token, rayDiv rounding causes V2 swap reverts
 	common.HexToAddress("0xf7d9281e8e363584973f946201b82ba72c965d27"): true, // gAVAX/yyAVAX: ERC1155-backed ERC20, safeTransferFrom reverts in simulation
 	common.HexToAddress("0xb2a85c5ecea99187a977ac34303b80acbddfa208"): true, // ROCO: reflection token, EVM balance override doesn't set _rOwned correctly
+	common.HexToAddress("0x90842eb834cfd2a1db0b1512b254a18e4d396215"): true, // GoodBridging (GB): reflection token with 1% fee, _rOwned/_rTotal incompatible with EVM override
 }
 
 // V2Pool is a pre-loaded V2 constant product pool.

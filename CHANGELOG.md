@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Un-blacklist WAVAX/yyAVAX V3 pool (34→33 mismatches)
+
+### Pool 0xB978 (uniswap_v3, WAVAX/yyAVAX)
+- Un-blacklisted to formula 2 (V3) — V3 construction now succeeds
+- Token1 (gAVAX/yyAVAX) already in brokenTokens → deadDirQuoter blocks dir=1
+- Dir=0 (WAVAX input) matches EVM correctly
+
 ## 2026-03-28 — Fix YBTC.b/BTC.b Algebra pool + GB/USDT.e (36→34 mismatches)
 
 ### Pool 0xf287 (algebra, BTC.b/YBTC.b)

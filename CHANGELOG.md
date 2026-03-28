@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-03-28 — Token override discovery + mismatch fixes (47→36)
+
+### Token balance override discovery via state diffs
+- Traced on-chain Transfer transactions using `debug_traceTransaction` with `prestateTracer` diff mode
+- Discovered storage slots by computing `keccak256(abi.encode(addr, slot))` for standard ERC20s and `keccak256(abi.encode(slot, addr))` for Vyper contracts
+- Found RUX (slot 201), Shoe404/DN404 (erc7201_base + shift=160), unverified token (slot 0), AVVO (Vyper slot 8)
+
+### New token balance overrides
+- **RUX** (0xa1af): standard OZ upgradeable ERC20, slot 201
+- **Shoe404** (0x096d): DN404 hybrid ERC20/ERC721, balance in `addressData` mapping at base `0xa20d6e21d0e5255310` with shift=160 (uint96 packed in upper bits)
+- **Unverified token** (0x00d1): standard slot 0
+- **AVVO** (0xd285): Vyper contract, slot 8, reversed hash order — added `vyper` bool to `tokenOverrideEntry` and Vyper support in `computeBalanceSlot`
+
+### Architecture: generic `deadDirQuoter` wrapper
+- Added `deadDirQuoter` in `pool_quoter.go` — blocks directions with broken input tokens for ANY pool type
+- Previously, broken token detection only worked for V2 pools (via `SetDeadDirs`)
+- Now applied in `wrapAndCache` for V2, V3, Algebra, and all future pool types
+
+### Tokens added to `brokenTokens`
+- **USD+** (0xe807): rebasing token, rayDiv rounding causes V2 swap reverts
+- **gAVAX/yyAVAX** (0xf7d9): ERC1155-backed ERC20, safeTransferFrom reverts in simulation
+- **ROCO** (0xb2a8): reflection token, EVM balance override can't set _rOwned storage
+
+### Registry changes
+- Un-blacklisted: 0xfa57 (LFJ V1 USDC/USD+), 0x620a (LFJ V1 USDT/RUX), 0xbda1 (LFJ V1 RUX/WAVAX)
+
 ## 2026-03-28 — Quote simplification + mismatch hunting
 
 ### Architecture: simplified Quote return type

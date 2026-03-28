@@ -9,6 +9,9 @@ import (
 // internal state (e.g. broken reflection accounting).
 var brokenTokens = map[common.Address]bool{
 	common.HexToAddress("0x704eae6d452ca63ce479c59727177c5f3ba0d90c"): true, // EVDC: SafeMath overflow in reflection _transfer
+	common.HexToAddress("0xe80772eaf6e2e18b651f160bc9158b2a5cafca65"): true, // USD+: rebasing token, rayDiv rounding causes V2 swap reverts
+	common.HexToAddress("0xf7d9281e8e363584973f946201b82ba72c965d27"): true, // gAVAX/yyAVAX: ERC1155-backed ERC20, safeTransferFrom reverts in simulation
+	common.HexToAddress("0xb2a85c5ecea99187a977ac34303b80acbddfa208"): true, // ROCO: reflection token, EVM balance override doesn't set _rOwned correctly
 }
 
 // V2Pool is a pre-loaded V2 constant product pool.

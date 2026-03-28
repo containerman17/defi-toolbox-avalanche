@@ -248,6 +248,14 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		registerSlots()
+		// Wrap with dead direction check for broken tokens (generic, all pool types)
+		if hasTokens {
+			dead0 := brokenTokens[tokens[0]]
+			dead1 := brokenTokens[tokens[1]]
+			if dead0 || dead1 {
+				inner = &deadDirQuoter{inner: inner, deadDir0: dead0, deadDir1: dead1}
+			}
+		}
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
 			wrapped := &fotPoolQuoter{
@@ -367,6 +375,25 @@ func (pm *PoolManager) InvalidateAll() {
 // poolHex returns the lowercase hex string for a pool address.
 func poolHex(addr common.Address) string {
 	return strings.ToLower(addr.Hex())
+}
+
+// deadDirQuoter wraps a PoolQuoter to block directions where a broken input token
+// causes on-chain reverts. Generic version of V2Pool's deadDir flags — works for all pool types.
+type deadDirQuoter struct {
+	inner    PoolQuoter
+	deadDir0 bool // true = zeroForOne always returns 0 (token0 as input reverts)
+	deadDir1 bool // true = !zeroForOne always returns 0 (token1 as input reverts)
+}
+
+func (d *deadDirQuoter) Address() common.Address { return d.inner.Address() }
+func (d *deadDirQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+	if zeroForOne && d.deadDir0 {
+		return uint256.Int{}
+	}
+	if !zeroForOne && d.deadDir1 {
+		return uint256.Int{}
+	}
+	return d.inner.Quote(amountIn, zeroForOne)
 }
 
 // fotPoolQuoter wraps a PoolQuoter to apply FoT tax adjustments on input/output.

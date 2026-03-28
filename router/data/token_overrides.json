@@ -10752,5 +10752,24 @@
   {
     "address": "0xc3344870d52688874b06d844e0c36cc39fc727f6",
     "slot": 101
+  },
+  {
+    "address": "0xa1afcc973d44ce1c65a21d9e644cb82489d26503",
+    "slot": 201
+  },
+  {
+    "address": "0x096d19b58cab84a2f0ff0e81c08291bffaa62848",
+    "slot": 0,
+    "erc7201_base": "0x0000000000000000000000000000000000000000000000a20d6e21d0e5255310",
+    "shift": 160
+  },
+  {
+    "address": "0x00d1b4ffd330e5fc461c50e6fbebdbb5b9bd6da4",
+    "slot": 0
+  },
+  {
+    "address": "0xd285c7e41ed96f01d75d68e9f07095f8a3d85b2d",
+    "slot": 8,
+    "vyper": true
   }
 ]

@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-03-28 — Quote simplification + mismatch hunting
+
+### Architecture: simplified Quote return type
+- `Quote()` now returns `uint256.Int` by value (was `(*uint256.Int, bool)`)
+- `PoolManager.Get()` never returns nil — unknown/blacklisted pools get `zeroQuoter`
+- EVM fallback removed from pathfinder and benchmark
+- Single metric: **mismatches** (formula != EVM ground truth)
+- Net -116 lines, benchmark time 1300ms → 40ms
+
+### Formula fixes
+- **Algebra**: gas-based step limit with `communityFeePending0` detection (22K base + 2.6M afterSwap penalty)
+- **Algebra**: allow zero liquidity gaps between ticks (was incorrectly fatal)
+- **V3**: gas-based step limit differentiating light (25K) vs heavy (55K) implementations
+- **V3**: full-range bitmap scan for positions at MIN/MAX ticks
+- **V3**: partial output return when liquidity exhausted within bitmap window
+- **V2**: token balance check on construction via `balanceOf(pool)` EVM call
+- **V2**: broken token detection (`brokenTokens` map) for corrupted reflection tokens
+- **LFJ V2**: return zero on out-of-liquidity instead of nil
+
+### Pool fixes
+- Un-blacklisted 78+ pools across all types (V2, V4, LFJ V1, Algebra, Pharaoh V3, Swapsicle)
+- Fixed 13 Balancer V3 pools mis-registered as formula 0 (V2) → formula 7
+- Fixed 4 V3 pools missing from bitmap (full-range positions)
+- Fixed EVDC token pools (corrupted reflection accounting → hardcoded broken token)
+
+### Coverage: 97.7% correct, 47 mismatches (was ~75% coverage, 0 visible mismatches)
+
 ## 2026-03-28 — V3 formula: gas-based step limit with implementation-aware per-tick costs
 
 ### Problem

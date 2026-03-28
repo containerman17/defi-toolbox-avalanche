@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-03-28 — Algebra formula: fix two bugs causing false-zero returns
+
+### Problem
+- **Bug 1**: `maxSwapSteps=95` was too low. Pools with dense tick spacing (e.g. 0xC13F
+  USDT.e/WAVAX, rank #14) needed 147 steps but were truncated at 95, returning 0 while
+  EVM returned ~1.08e22. The EVM completed successfully at 3.3M gas (well within 5M limit).
+  Also affected: 0xa38d (dir=0), plus other Algebra pools with >95 steps.
+- **Bug 2**: `currentLiquidity <= 0` check incorrectly returned 0 when liquidity hit exactly
+  zero at a tick boundary. In Algebra's EVM, liquidity=0 is legal (gap between LP ranges);
+  the swap continues through the gap. Affected 0x177a (dir=1, step 58) and 0xF6b5 (dir=1).
+
+### Fix
+- Raised `maxSwapSteps` from 95 to 500 (matching V3's limit). The formula has no gas cost,
+  so a generous limit is safe. The `maxSwapSteps` guard only prevents infinite loops.
+- Changed `currentLiquidity.Sign() <= 0` to `currentLiquidity.Sign() < 0` (strict negative
+  only). Zero liquidity means empty range, not corrupt data. Negative would indicate bad
+  tick data — still bail out.
+- Added `ALGEBRA_DEBUG=1` env var for detailed step-by-step tracing.
+
+### Results
+- 0xC13F: both directions now 100% correct (was 50% — dir=0 returned 0)
+- 0x177a: both directions now 100% correct (was 50% — dir=1 returned 0)
+- 0xa38d: both directions now 100% correct (was 50% — dir=0 returned 0)
+- 0xF6b5: both directions now 100% correct (was 50% — dir=1 returned 0)
+- Full benchmark (1000 pools, 3 blocks): Algebra 66 match / 4 mismatch (was 65/5).
+  The 4 remaining Algebra mismatches:
+  - 3 gas-exhaustion pools (0xA02E/217 steps, 0x4110/101, 0x668A/116) where formula
+    correctly computes the swap but EVM reverts at 5M gas. Formula returning non-zero
+    is acceptable — router handles EVM reverts gracefully.
+  - 1 pool (0xf287) where EVM reverts with "ERC20 transfer exceeds balance" (pre-existing).
+
 ## 2026-03-28 — Algebra formula: add maxSwapSteps guard for EVM gas exhaustion
 
 ### Problem

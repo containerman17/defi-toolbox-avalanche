@@ -3,10 +3,13 @@ package formulas
 import (
 	"fmt"
 	"math/big"
+	"os"
 
 	"github.com/ava-labs/libevm/crypto"
 
 )
+
+var algebraDebug = os.Getenv("ALGEBRA_DEBUG") == "1"
 
 //
 //
@@ -164,6 +167,12 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		return nil, err
 	}
 
+	if algebraDebug {
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d\n",
+			poolAddress, zeroForOne, amountIn.String(), currentPrice.String(), currentLiquidity.String(),
+			prevInitializedTick, nextInitializedTick, fee)
+	}
+
 	var limitSqrtPrice *big.Int
 	if zeroForOne {
 		limitSqrtPrice = new(big.Int).Add(algebraMinSqrtRatio, big.NewInt(1))
@@ -174,19 +183,18 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	amountRemaining := new(big.Int).Set(amountIn)
 	amountOut := new(big.Int)
 
-	// Guard against EVM gas exhaustion. Algebra Integral pools have variable gas
-	// cost per iteration depending on tick density and fee plugin complexity:
-	//   0xA02E: 4.9M gas / 146 steps = ~33.6K/step
-	//   0x4110: 4.9M gas /  98 steps = ~49.6K/step
-	//   0x668A: 4.9M gas / 106 steps = ~46.1K/step
-	// Use worst-case 50K/step to be conservative. With 5M limit and 200K overhead,
-	// this allows ~96 steps max.
-	const maxSwapSteps = 95
+	// Guard against runaway loops. The formula has no gas cost, so use a generous
+	// limit. Some Algebra pools have dense tick spacing and need 100+ steps
+	// (e.g., 0xC13F USDT.e/WAVAX uses ~100 steps at 3.3M gas, well within 5M limit).
+	// Match V3's limit of 500.
+	const maxSwapSteps = 500
 	steps := 0
 	for amountRemaining.Sign() > 0 && currentPrice.Cmp(limitSqrtPrice) != 0 {
 		steps++
 		if steps > maxSwapSteps {
-			// EVM would revert from gas exhaustion.
+			if algebraDebug {
+				fmt.Fprintf(os.Stderr, "[ALGEBRA] HIT maxSwapSteps at step %d, out=%s rem=%s\n", steps, amountOut.String(), amountRemaining.String())
+			}
 			return big.NewInt(0), nil
 		}
 		var nextTick int32
@@ -222,6 +230,12 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		amountRemaining.Sub(amountRemaining, feeAmount)
 		amountOut.Add(amountOut, outputStep)
 
+		if algebraDebug && steps <= 5 {
+			fmt.Fprintf(os.Stderr, "[ALGEBRA] step %d: tick=%d in=%s out=%s fee=%s rem=%s liq=%s\n",
+				steps, nextTick, inputStep.String(), outputStep.String(), feeAmount.String(),
+				amountRemaining.String(), currentLiquidity.String())
+		}
+
 		if resultPrice.Cmp(nextTickPrice) == 0 {
 			// Read tick data from storage
 			liquidityDelta, prevTick, nextTickVal, err := algebraReadTick(read, poolAddress, nextTick)
@@ -239,8 +253,15 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 			}
 
 			currentLiquidity = new(big.Int).Add(currentLiquidity, liquidityDelta)
-			if currentLiquidity.Sign() <= 0 {
-				// Out of liquidity — EVM would revert
+			if algebraDebug && steps <= 5 {
+				fmt.Fprintf(os.Stderr, "[ALGEBRA]   crossed tick %d: delta=%s newLiq=%s prev=%d next=%d\n",
+					nextTick, liquidityDelta.String(), currentLiquidity.String(), prevTick, nextTickVal)
+			}
+			// Note: liquidity can legitimately be 0 between ticks (gap in LP coverage).
+			// Algebra EVM continues through gaps — computeSwapStep with 0 liquidity
+			// produces 0 amounts and just moves price to the next tick.
+			// Negative liquidity indicates corrupt tick data — bail out.
+			if currentLiquidity.Sign() < 0 {
 				return big.NewInt(0), nil
 			}
 		} else if resultPrice.Cmp(currentPrice) != 0 {
@@ -250,6 +271,9 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		currentPrice = resultPrice
 	}
 
+	if algebraDebug {
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] DONE: steps=%d out=%s rem=%s\n", steps, amountOut.String(), amountRemaining.String())
+	}
 	return amountOut, nil
 }
 

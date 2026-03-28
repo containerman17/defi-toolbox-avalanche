@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-03-28 — State server + client state rewrite: simplification & robustness
+
+### Fetcher interface — error propagation
+- All `Fetcher` methods now return `(value, error)` instead of silently returning zero on failure
+- `CallState` captures fetch errors in `lastErr` field — check with `cs.Err()` after EVM execution
+- Errors are per-goroutine (per-CallState), no cross-contamination between concurrent EVM calls
+- Updated all Fetcher implementations: cmd/arb, cmd/benchmark, cmd/native, cmd/wasm, cmd/discover
+
+### StateDB cleanup
+- Removed `CloneFlat()`, `SetStorageSlotCOW()`, `SlotUpdate`, `ApplyUpdates()` — over-engineering
+- Added `HasStorageSlot()` — used by arb bot to only overwrite cached slots during block diffs
+- Added `fetchMu sync.Mutex` — serializes cache-miss fetches for parallel warm-up safety
+- Added `getStorageWithErr()`, `getBalanceWithErr()`, `getOrFetchWithErr()` — internal error-returning variants
+
+### State server rewrite
+- **WS-only**: removed HTTP upstream (`upstreamHTTP` env var), all RPC calls go through WS pool
+- **newHeads subscription**: replaced 500ms polling with `eth_subscribe("newHeads")` + 1ms processing loop
+- **Drop `tracked`**: cache stores ALL diff keys unconditionally (cache grows only through fetches)
+- **Broadcast ALL**: block_diff sends all changed keys to all clients (not just previously-requested ones)
+- **Stale block rejection**: returns JSON-RPC error `-32001` if client requests a non-current block
+- **Request/update exclusion**: `blockMu sync.RWMutex` ensures no client sees half-applied block state
+- `traceBlockDiffWS()` replaces `traceBlockDiff()` — uses WS pool instead of `http.Post`
+- `proxyEthCall()` forwards through WS pool instead of `http.Post`
+
+### Arb bot simplification
+- In-place mutation: `state.SetStorageSlot()` with `HasStorageSlot()` guard replaces `ApplyUpdates()`
+- Removed `pm.SetReader()` calls — reader closure already points to same mutable state object
+- `VerifyFull()` checks `cs.Err()` after EVM execution for stale block / network errors
+
+### Pathfinder
+- `ApplyOverridesFlat()` now uses `NewOverlay()` + `SetStorageSlot()` instead of `CloneFlat()` + COW
+
+## 2026-03-28 — Immutable StateDB: fix data race in arb bot local EVM
+
+### Architecture
+- `StateDB.ApplyUpdates([]SlotUpdate)` creates a new state snapshot via CloneFlat + COW
+- Block diffs are buffered from readLoop goroutine, applied atomically on main goroutine
+- Old state is never mutated — EVM simulation reads an immutable snapshot
+- `PoolManager.SetReader()` re-points formula quoting to the new snapshot after swap
+
+### Arb bot changes
+- Re-enabled local EVM verification (stage 3a) using immutable state
+- Dual verification: local EVM + RPC eth_call at same block, log mismatches
+- Only execute trades when both local EVM and RPC agree (safety gate)
+- Removed direct `state.SetStorageSlot()` calls from block loop
+
 ## 2026-03-27 — WAVAX cyclic arbitrage bot: first successful on-chain trade
 
 ### First on-chain arb execution

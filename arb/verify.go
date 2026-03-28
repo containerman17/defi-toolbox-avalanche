@@ -52,18 +52,54 @@ func NewVerifier(
 	}
 }
 
+// Block returns the block number this verifier is configured for.
+func (v *Verifier) Block() uint64 { return v.cfg.BlockNumber }
+
 // Verify executes a full multi-hop cycle through the HayabusaRouter via EVM.
 // Returns (amountOut, gasUsed, success).
 func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64, bool) {
-	// Stage 3: exact same swap() calldata as stage 4 and on-chain. No overrides.
+	r := v.VerifyFull(c, amountIn)
+	if r.Reverted || len(r.RetData) < 32 {
+		return nil, r.GasUsed, false
+	}
+	amountOut := new(uint256.Int).SetBytes(r.RetData[len(r.RetData)-32:])
+	if amountOut.IsZero() {
+		return nil, r.GasUsed, false
+	}
+	return amountOut, r.GasUsed, true
+}
+
+// VerifyFull executes a cycle and returns the full EVMResult including calldata,
+// raw return data, gas, and block number — for cross-checking against RPC.
+func (v *Verifier) VerifyFull(c *Cycle, amountIn *uint256.Int) EVMResult {
 	calldata := EncodeSwapCalldata(c, v.pt, v.hub, amountIn)
 	from := v.caller
 	cs := statedb.NewCallState(v.state)
 
 	ret, gasUsed, err := v.evmCtx.ExecuteWithCallState(cs, from, v.routerAddr, calldata)
 
+	r := EVMResult{
+		Cycle:    c,
+		AmountIn: amountIn,
+		Calldata: calldata,
+		RetData:  ret,
+		GasUsed:  gasUsed,
+		Block:    v.cfg.BlockNumber,
+	}
+
+	if err != nil {
+		r.Reverted = true
+		r.ErrMsg = err.Error()
+	}
+
+	// Check for state fetch errors (stale block, network failure)
+	if fetchErr := cs.Err(); fetchErr != nil {
+		r.Reverted = true
+		r.ErrMsg = fmt.Sprintf("state fetch error: %v", fetchErr)
+	}
+
 	if v.verbose {
-		if err != nil {
+		if r.Reverted {
 			fmt.Fprintf(os.Stderr, "[arb/evm] REVERT %d-hop in=%s err=%v gas=%d ret_len=%d ret_hex=%x sel=%x to=%s from=%s\n",
 				c.Hops, amountIn.Dec(), err, gasUsed, len(ret), ret, calldata[:4], v.routerAddr.Hex()[:10], from.Hex()[:10])
 		} else if len(ret) < 32 {
@@ -76,16 +112,7 @@ func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64
 		}
 	}
 
-	if err != nil || len(ret) < 32 {
-		return nil, gasUsed, false
-	}
-
-	amountOut := new(uint256.Int).SetBytes(ret[len(ret)-32:])
-	if amountOut.IsZero() {
-		return nil, gasUsed, false
-	}
-
-	return amountOut, gasUsed, true
+	return r
 }
 
 // EncodeSwapCalldata builds swap() calldata for on-chain execution.

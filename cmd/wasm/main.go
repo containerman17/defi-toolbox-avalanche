@@ -11,9 +11,11 @@ import (
 	"sync/atomic"
 	"syscall/js"
 
+	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+	poolcollector "defi-toolbox/pool-collector"
 	"defi-toolbox/router"
 	"defi-toolbox/statedb"
-	"defi-toolbox/formulas"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -56,68 +58,67 @@ func awaitPromise(promise js.Value) string {
 	return <-ch
 }
 
-func (f *jsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
+func (f *jsFetcher) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	f.misses.Add(1)
 	promise := js.Global().Call("__goFetchStorageAsync", addr.Hex(), slot.Hex())
 	result := awaitPromise(promise)
 	if strings.HasPrefix(result, "ERROR:") {
-		fmt.Printf("[wasm] FetchStorage error: %s\n", result)
-		return common.Hash{}
+		return common.Hash{}, fmt.Errorf("[wasm] FetchStorage: %s", result)
 	}
-	return common.HexToHash(result)
+	return common.HexToHash(result), nil
 }
 
-func (f *jsFetcher) FetchBalance(addr common.Address) *uint256.Int {
+func (f *jsFetcher) FetchBalance(addr common.Address) (*uint256.Int, error) {
 	f.misses.Add(1)
 	promise := js.Global().Call("__goFetchBalanceAsync", addr.Hex())
 	result := awaitPromise(promise)
 	if strings.HasPrefix(result, "ERROR:") {
-		return uint256.NewInt(0)
+		return nil, fmt.Errorf("[wasm] FetchBalance: %s", result)
 	}
 	bi, ok := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
 	if !ok {
-		return uint256.NewInt(0)
+		return nil, fmt.Errorf("[wasm] FetchBalance bad hex: %s", result)
 	}
 	val, _ := uint256.FromBig(bi)
-	return val
+	return val, nil
 }
 
-func (f *jsFetcher) FetchNonce(addr common.Address) uint64 {
+func (f *jsFetcher) FetchNonce(addr common.Address) (uint64, error) {
 	f.misses.Add(1)
 	promise := js.Global().Call("__goFetchNonceAsync", addr.Hex())
 	result := awaitPromise(promise)
 	if strings.HasPrefix(result, "ERROR:") {
-		return 0
+		return 0, fmt.Errorf("[wasm] FetchNonce: %s", result)
 	}
 	bi, ok := new(big.Int).SetString(strings.TrimPrefix(result, "0x"), 16)
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("[wasm] FetchNonce bad hex: %s", result)
 	}
-	return bi.Uint64()
+	return bi.Uint64(), nil
 }
 
-func (f *jsFetcher) FetchCode(addr common.Address) []byte {
+func (f *jsFetcher) FetchCode(addr common.Address) ([]byte, error) {
 	f.misses.Add(1)
 	promise := js.Global().Call("__goFetchCodeAsync", addr.Hex())
 	result := awaitPromise(promise)
 	if strings.HasPrefix(result, "ERROR:") {
-		return nil
+		return nil, fmt.Errorf("[wasm] FetchCode: %s", result)
 	}
 	if result == "" || result == "0x" {
-		return nil
+		return nil, nil
 	}
 	code, _ := hex.DecodeString(strings.TrimPrefix(result, "0x"))
-	return code
+	return code, nil
 }
 
-func (f *jsFetcher) FetchBlockHash(num uint64) common.Hash {
+func (f *jsFetcher) FetchBlockHash(num uint64) (common.Hash, error) {
 	f.misses.Add(1)
 	promise := js.Global().Call("__goFetchBlockHashAsync", fmt.Sprintf("0x%x", num))
 	result := awaitPromise(promise)
 	if strings.HasPrefix(result, "ERROR:") {
-		return common.Hash{}
+		return common.Hash{}, fmt.Errorf("[wasm] FetchBlockHash: %s", result)
 	}
-	return common.HexToHash(result)
+	return common.HexToHash(result), nil
 }
 
 // ─── Global state ──────────────────────────────────────────────────
@@ -127,7 +128,12 @@ var (
 	fetcher  = &jsFetcher{}
 	counter  = &statedb.Counter{}
 	evmCfg   statedb.EVMConfig
-	registry = formulas.NewRegistry() // empty by default
+	registry *formulas.Registry
+	pm       *formulas.PoolManager
+
+	embeddedPools     []pf.Pool
+	embeddedGraph     *pf.Graph
+	embeddedOverrides []pf.ParsedOverride
 )
 
 func main() {
@@ -137,6 +143,29 @@ func main() {
 		Timestamp:   0,
 		ChainID:     43114,
 	}
+
+	// Load formula registry (embedded registry.txt)
+	registry = formulas.LoadEmbeddedRegistry()
+
+	// Pre-compute pools, graph, and overrides for find_route
+	embeddedPools = poolcollector.EmbeddedPools(7500)
+	embeddedGraph = pf.BuildGraph(embeddedPools)
+	embeddedOverrides = router.BuildTokenOverrides(router.DeployedRouter, embeddedPools)
+
+	// Create PoolManager backed by state
+	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
+		return state.GetState(addr, slot)
+	}
+	pm = formulas.NewPoolManager(registry, stateReader)
+	for _, p := range embeddedPools {
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+		}
+		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+	}
+	pm.SetBlockTimestamp(evmCfg.Timestamp)
+
+	fmt.Printf("[wasm] ready: %d pools, %d overrides\n", len(embeddedPools), len(embeddedOverrides))
 
 	// Counter (Prototype 1 compatibility)
 	js.Global().Set("increment", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
@@ -150,6 +179,7 @@ func main() {
 		}
 		if len(args) >= 2 {
 			evmCfg.Timestamp = uint64(args[1].Int())
+			pm.SetBlockTimestamp(evmCfg.Timestamp)
 		}
 		if len(args) >= 3 {
 			evmCfg.BaseFee = uint64(args[2].Int())
@@ -169,6 +199,7 @@ func main() {
 		slot := common.HexToHash(args[1].String())
 		value := common.HexToHash(args[2].String())
 		state.SetStorageSlot(addr, slot, value)
+		pm.InvalidateBySlot(addr, slot)
 		return nil
 	}))
 
@@ -356,6 +387,46 @@ func main() {
 			}
 			buf.WriteString(`]}`)
 			callback.Invoke(buf.String())
+		}()
+
+		return nil
+	}))
+
+	// find_route — Args: tokenIn, tokenOut, amountIn (hex), maxHops, formulaOnly, callback
+	js.Global().Set("__goFindRoute", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if len(args) < 6 {
+			return js.Null()
+		}
+		tokenInHex := args[0].String()
+		tokenOutHex := args[1].String()
+		amountInHex := args[2].String()
+		maxHops := args[3].Int()
+		formulaOnly := args[4].Bool()
+		callback := args[5]
+
+		go func() {
+			tokenIn := common.HexToAddress(tokenInHex)
+			tokenOut := common.HexToAddress(tokenOutHex)
+			amtBig, ok := new(big.Int).SetString(strings.TrimPrefix(amountInHex, "0x"), 16)
+			if !ok {
+				callback.Invoke(`{"error":"invalid amountIn"}`)
+				return
+			}
+			amountIn, _ := uint256.FromBig(amtBig)
+
+			if maxHops <= 0 {
+				maxHops = 4
+			}
+
+			pm.SetBlockTimestamp(evmCfg.Timestamp)
+			route := pf.FindBestRoute(state, evmCfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops, formulaOnly)
+			if route == nil {
+				callback.Invoke(`{"route":null}`)
+				return
+			}
+
+			result, _ := json.Marshal(route)
+			callback.Invoke(string(result))
 		}()
 
 		return nil

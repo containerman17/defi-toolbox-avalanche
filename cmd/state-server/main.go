@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -28,9 +26,7 @@ var (
 	listenHost    string
 	listenPort    int
 	upstreamWsURL string
-	upstreamHTTP  string
 	poolSize      int
-	blockPollMs   int
 )
 
 func envOrDefault(key, fallback string) string {
@@ -56,9 +52,7 @@ func init() {
 	listenHost = envOrDefault("STATE_SERVER_HOST", "127.0.0.1")
 	listenPort = envIntOrDefault("STATE_SERVER_PORT", 7449)
 	upstreamWsURL = envOrDefault("UPSTREAM_RPC_WS_URL", "ws://127.0.0.1:9650/ext/bc/C/ws")
-	upstreamHTTP = envOrDefault("UPSTREAM_RPC_HTTP_URL", "http://127.0.0.1:9650/ext/bc/C/rpc")
 	poolSize = envIntOrDefault("UPSTREAM_POOL_SIZE", runtime.NumCPU())
-	blockPollMs = envIntOrDefault("BLOCK_POLL_MS", 500)
 }
 
 // ---------------------------------------------------------------------------
@@ -356,18 +350,16 @@ func (p *rpcPool) ethGetBlockByNumber(block int) (blockInfo, error) {
 
 type stateCache struct {
 	mu          sync.RWMutex
-	tracked     map[string]struct{}
 	values      map[string]string
 	blockNumber int
-	timestamp   int
+	timestamp   uint64
 	baseFee     uint64
 	gasLimit    uint64
 }
 
 func newStateCache() *stateCache {
 	return &stateCache{
-		tracked: make(map[string]struct{}),
-		values:  make(map[string]string),
+		values: make(map[string]string),
 	}
 }
 
@@ -381,14 +373,7 @@ func (c *stateCache) get(key string) (string, bool) {
 func (c *stateCache) set(key, value string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.tracked[key] = struct{}{}
 	c.values[key] = value
-}
-
-func (c *stateCache) track(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.tracked[key] = struct{}{}
 }
 
 func (c *stateCache) applyDiff(diff map[string]string) int {
@@ -396,15 +381,13 @@ func (c *stateCache) applyDiff(diff map[string]string) int {
 	defer c.mu.Unlock()
 	applied := 0
 	for k, v := range diff {
-		if _, ok := c.tracked[k]; ok {
-			c.values[k] = v
-			applied++
-		}
+		c.values[k] = v
+		applied++
 	}
 	return applied
 }
 
-func (c *stateCache) dump() (int, int, uint64, uint64, [][2]string) {
+func (c *stateCache) dump() (int, uint64, uint64, uint64, [][2]string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	entries := make([][2]string, 0, len(c.values))
@@ -426,64 +409,29 @@ func (c *stateCache) size() int {
 	return len(c.values)
 }
 
-func (c *stateCache) trackedSize() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.tracked)
-}
-
-func (c *stateCache) isTracked(key string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	_, ok := c.tracked[key]
-	return ok
-}
-
 // ---------------------------------------------------------------------------
-// Block diff via debug_traceBlockByNumber (HTTP)
+// Block diff via debug_traceBlockByNumber (WebSocket)
 // ---------------------------------------------------------------------------
 
-func traceBlockDiff(block int) (map[string]string, error) {
-	reqBody, _ := json.Marshal(map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "debug_traceBlockByNumber",
-		"params": []interface{}{
-			blockHex(block),
-			map[string]interface{}{
-				"tracer":       "prestateTracer",
-				"tracerConfig": map[string]interface{}{"diffMode": true},
-			},
+func traceBlockDiffWS(pool *rpcPool, block int) (map[string]string, error) {
+	raw, err := pool.call("debug_traceBlockByNumber", []interface{}{
+		blockHex(block),
+		map[string]interface{}{
+			"tracer":       "prestateTracer",
+			"tracerConfig": map[string]interface{}{"diffMode": true},
 		},
 	})
-
-	resp, err := http.Post(upstreamHTTP, "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	var rpcResp struct {
-		Error  *rpcError         `json:"error"`
-		Result []json.RawMessage `json:"result"`
-	}
-	if err := json.Unmarshal(body, &rpcResp); err != nil {
-		return nil, err
-	}
-	if rpcResp.Error != nil {
-		return nil, fmt.Errorf("trace: %s", rpcResp.Error.Message)
+	var txResults []json.RawMessage
+	if err := json.Unmarshal(raw, &txResults); err != nil {
+		return nil, fmt.Errorf("parse trace result: %w", err)
 	}
 
 	diff := make(map[string]string)
-	if rpcResp.Result == nil {
-		return diff, nil
-	}
-
-	for _, txRaw := range rpcResp.Result {
+	for _, txRaw := range txResults {
 		var tx struct {
 			Result struct {
 				Post map[string]struct {
@@ -505,7 +453,6 @@ func traceBlockDiff(block int) (map[string]string, error) {
 				diff[balanceKey(address)] = *account.Balance
 			}
 			if account.Nonce != nil {
-				// Nonce comes as a number — convert to hex
 				n, err := strconv.ParseInt(account.Nonce.String(), 10, 64)
 				if err == nil {
 					diff[nonceKey(address)] = fmt.Sprintf("0x%x", n)
@@ -691,9 +638,8 @@ func (c *ethCallCache) size() int {
 	return len(c.cache)
 }
 
-// proxyEthCall forwards an eth_call to the upstream HTTP RPC and caches the result.
-// Returns the full JSON-RPC response body.
-func proxyEthCall(callCache *ethCallCache, reqBody []byte, params json.RawMessage, id interface{}) []byte {
+// proxyEthCall forwards an eth_call to the upstream WS RPC pool and caches the result.
+func proxyEthCall(pool *rpcPool, callCache *ethCallCache, params json.RawMessage, id interface{}) []byte {
 	key := ethCallCacheKey(params)
 
 	if cached, ok := callCache.get(key); ok {
@@ -703,8 +649,8 @@ func proxyEthCall(callCache *ethCallCache, reqBody []byte, params json.RawMessag
 		return resp
 	}
 
-	// Miss — forward to upstream
-	httpResp, err := http.Post(upstreamHTTP, "application/json", bytes.NewReader(reqBody))
+	// Miss — forward to upstream via WS pool
+	result, err := pool.call("eth_call", params)
 	if err != nil {
 		errResp, _ := json.Marshal(jsonRPCResponse{
 			JSONRPC: "2.0", ID: id,
@@ -712,19 +658,13 @@ func proxyEthCall(callCache *ethCallCache, reqBody []byte, params json.RawMessag
 		})
 		return errResp
 	}
-	defer httpResp.Body.Close()
-	body, _ := io.ReadAll(httpResp.Body)
 
-	// Cache successful results
-	var parsed struct {
-		Result json.RawMessage `json:"result"`
-		Error  *rpcError       `json:"error"`
-	}
-	if json.Unmarshal(body, &parsed) == nil && parsed.Error == nil && parsed.Result != nil {
-		callCache.set(key, parsed.Result)
-	}
+	callCache.set(key, result)
 
-	return body
+	resp, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0", "id": id, "result": result,
+	})
+	return resp
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +675,7 @@ type stateServer struct {
 	cache   *stateCache
 	clients *clientManager
 	ready   chan struct{} // closed when block info is initialized
+	blockMu sync.RWMutex // block update (write) vs client request (read) exclusion
 }
 
 var (
@@ -778,7 +719,7 @@ func initFrozen(pool *rpcPool, s *stateServer, block int) {
 	}
 	s.cache.mu.Lock()
 	s.cache.blockNumber = block
-	s.cache.timestamp = int(info.Timestamp)
+	s.cache.timestamp = info.Timestamp
 	s.cache.baseFee = info.BaseFee
 	s.cache.gasLimit = info.GasLimit
 	s.cache.mu.Unlock()
@@ -845,14 +786,13 @@ func main() {
 
 	// /eth-call — independent eth_call caching proxy
 	http.HandleFunc("/eth-call", func(w http.ResponseWriter, r *http.Request) {
-		handleEthCallWS(callCache, w, r)
+		handleEthCallWS(pool, callCache, w, r)
 	})
 
 	addr := fmt.Sprintf("%s:%d", listenHost, listenPort)
 	logJSON(map[string]interface{}{
 		"event": "listening", "host": listenHost, "port": listenPort,
-		"upstream": upstreamWsURL, "upstreamHttp": upstreamHTTP,
-		"poolSize": poolSize, "blockPollMs": blockPollMs,
+		"upstream": upstreamWsURL, "poolSize": poolSize,
 	})
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
@@ -872,7 +812,8 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 	}
 	defer conn.Close()
 
-	// Send initial_dump BEFORE adding to clients, so no block_diff can race ahead
+	// Hold blockMu.RLock during dump+add to prevent a block update from racing
+	s.blockMu.RLock()
 	blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
 	dumpMsg, _ := json.Marshal(map[string]interface{}{
 		"type":        "initial_dump",
@@ -885,6 +826,7 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 	_ = conn.WriteMessage(websocket.TextMessage, dumpMsg)
 
 	wmu := s.clients.add(conn)
+	s.blockMu.RUnlock()
 	defer s.clients.remove(conn)
 
 	wsWrite := func(msg []byte) {
@@ -913,24 +855,37 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
+		// Hold blockMu.RLock for the duration of request handling
+		s.blockMu.RLock()
+
+		currentBlock := s.cache.getBlockNumber()
+		if req.BlockNumber != currentBlock {
+			s.blockMu.RUnlock()
+			resp, _ := json.Marshal(jsonRPCResponse{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &rpcError{Code: -32001, Message: fmt.Sprintf("stale block: requested %d, server at %d", req.BlockNumber, currentBlock)},
+			})
+			wsWrite(resp)
+			continue
+		}
+
 		key := cacheKeyForRequest(req)
-		isLatest := req.BlockNumber == s.cache.getBlockNumber()
 
 		// Cache hit
-		if isLatest {
-			if cached, ok := s.cache.get(key); ok {
-				resp, _ := json.Marshal(jsonRPCResponse{
-					JSONRPC: "2.0", ID: req.ID,
-					Result: map[string]string{"value": cached},
-				})
-				wsWrite(resp)
-				continue
-			}
+		if cached, ok := s.cache.get(key); ok {
+			s.blockMu.RUnlock()
+			resp, _ := json.Marshal(jsonRPCResponse{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: map[string]string{"value": cached},
+			})
+			wsWrite(resp)
+			continue
 		}
 
 		// Fetch from upstream
 		value, err := fetchFromNode(pool, req)
 		if err != nil {
+			s.blockMu.RUnlock()
 			resp, _ := json.Marshal(jsonRPCResponse{
 				JSONRPC: "2.0", ID: req.ID,
 				Error: &rpcError{Code: -32603, Message: err.Error()},
@@ -939,10 +894,11 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
-		s.cache.track(key)
 		if req.BlockNumber == s.cache.getBlockNumber() {
 			s.cache.set(key, value)
 		}
+		s.blockMu.RUnlock()
+
 		resp, _ := json.Marshal(jsonRPCResponse{
 			JSONRPC: "2.0", ID: req.ID,
 			Result: map[string]string{"value": value},
@@ -955,7 +911,7 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 // eth_call WebSocket handler (independent endpoint)
 // ---------------------------------------------------------------------------
 
-func handleEthCallWS(callCache *ethCallCache, w http.ResponseWriter, r *http.Request) {
+func handleEthCallWS(pool *rpcPool, callCache *ethCallCache, w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("eth-call upgrade error: %v", err)
@@ -995,10 +951,10 @@ func handleEthCallWS(callCache *ethCallCache, w http.ResponseWriter, r *http.Req
 			continue
 		}
 
-		go func(rawReq []byte, params json.RawMessage, id interface{}) {
-			resp := proxyEthCall(callCache, rawReq, params, id)
+		go func(params json.RawMessage, id interface{}) {
+			resp := proxyEthCall(pool, callCache, params, id)
 			wsWrite(resp)
-		}(data, peek.Params, peek.ID)
+		}(peek.Params, peek.ID)
 	}
 }
 
@@ -1020,7 +976,7 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 		return fmt.Errorf("initial block info: %w", err)
 	}
 	s.cache.mu.Lock()
-	s.cache.timestamp = int(info.Timestamp)
+	s.cache.timestamp = info.Timestamp
 	s.cache.baseFee = info.BaseFee
 	s.cache.gasLimit = info.GasLimit
 	s.cache.mu.Unlock()
@@ -1030,99 +986,165 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 		"event": "block_loop_start", "block": bn, "timestamp": info.Timestamp,
 	})
 
-	ticker := time.NewTicker(time.Duration(blockPollMs) * time.Millisecond)
-	defer ticker.Stop()
+	// Subscribe to newHeads via a dedicated WebSocket
+	var latestBlock atomic.Int64
+	latestBlock.Store(int64(bn))
+	go subscribeNewHeads(upstreamWsURL, &latestBlock)
 
-	for range ticker.C {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					logJSON(map[string]interface{}{"event": "block_error", "error": fmt.Sprint(r)})
-				}
+	processedBlock := bn
+
+	for {
+		latest := int(latestBlock.Load())
+		if latest <= processedBlock {
+			time.Sleep(1 * time.Millisecond)
+			continue
+		}
+
+		for block := processedBlock + 1; block <= latest; block++ {
+			t0 := time.Now()
+
+			type diffResult struct {
+				diff map[string]string
+				err  error
+			}
+			type infoResult struct {
+				info blockInfo
+				err  error
+			}
+			diffCh := make(chan diffResult, 1)
+			infoCh := make(chan infoResult, 1)
+
+			go func() {
+				d, e := traceBlockDiffWS(pool, block)
+				diffCh <- diffResult{d, e}
+			}()
+			go func() {
+				i, e := pool.ethGetBlockByNumber(block)
+				infoCh <- infoResult{i, e}
 			}()
 
-			latest, err := pool.ethBlockNumber()
-			if err != nil {
-				logJSON(map[string]interface{}{"event": "block_error", "error": err.Error()})
-				return
+			dr := <-diffCh
+			ir := <-infoCh
+			if dr.err != nil {
+				logJSON(map[string]interface{}{"event": "block_error", "block": block, "error": dr.err.Error()})
+				break
 			}
-			currentBlock := s.cache.getBlockNumber()
-			if latest <= currentBlock {
-				return
+			if ir.err != nil {
+				logJSON(map[string]interface{}{"event": "block_error", "block": block, "error": ir.err.Error()})
+				break
 			}
 
-			for block := currentBlock + 1; block <= latest; block++ {
-				t0 := time.Now()
+			// Hold blockMu.Lock during diff apply + metadata update + broadcast
+			s.blockMu.Lock()
 
-				type diffResult struct {
-					diff map[string]string
-					err  error
+			applied := s.cache.applyDiff(dr.diff)
+			s.cache.mu.Lock()
+			s.cache.blockNumber = block
+			s.cache.timestamp = ir.info.Timestamp
+			s.cache.baseFee = ir.info.BaseFee
+			s.cache.gasLimit = ir.info.GasLimit
+			s.cache.mu.Unlock()
+
+			// Broadcast ALL changed keys to all clients
+			if len(dr.diff) > 0 && s.clients.count() > 0 {
+				entries := make([][2]string, 0, len(dr.diff))
+				for k, v := range dr.diff {
+					entries = append(entries, [2]string{k, v})
 				}
-				type infoResult struct {
-					info blockInfo
-					err  error
-				}
-				diffCh := make(chan diffResult, 1)
-				infoCh := make(chan infoResult, 1)
-
-				go func() {
-					d, e := traceBlockDiff(block)
-					diffCh <- diffResult{d, e}
-				}()
-				go func() {
-					i, e := pool.ethGetBlockByNumber(block)
-					infoCh <- infoResult{i, e}
-				}()
-
-				dr := <-diffCh
-				ir := <-infoCh
-				if dr.err != nil {
-					logJSON(map[string]interface{}{"event": "block_error", "error": dr.err.Error()})
-					return
-				}
-				if ir.err != nil {
-					logJSON(map[string]interface{}{"event": "block_error", "error": ir.err.Error()})
-					return
-				}
-
-				applied := s.cache.applyDiff(dr.diff)
-				s.cache.mu.Lock()
-				s.cache.blockNumber = block
-				s.cache.timestamp = int(ir.info.Timestamp)
-				s.cache.baseFee = ir.info.BaseFee
-				s.cache.gasLimit = ir.info.GasLimit
-				s.cache.mu.Unlock()
-
-				elapsed := time.Since(t0).Milliseconds()
-				logJSON(map[string]interface{}{
-					"event": "block", "block": block, "diffKeys": len(dr.diff),
-					"applied": applied, "cached": s.cache.size(), "tracked": s.cache.trackedSize(),
-					"ms": elapsed, "clients": s.clients.count(),
+				msg, _ := json.Marshal(map[string]interface{}{
+					"type":        "block_diff",
+					"blockNumber": block,
+					"timestamp":   ir.info.Timestamp,
+					"baseFee":     ir.info.BaseFee,
+					"gasLimit":    ir.info.GasLimit,
+					"entries":     entries,
 				})
+				s.clients.broadcast(msg)
+			}
 
-				if applied > 0 && s.clients.count() > 0 {
-					entries := make([][2]string, 0)
-					for k, v := range dr.diff {
-						if s.cache.isTracked(k) {
-							entries = append(entries, [2]string{k, v})
-						}
-					}
-					if len(entries) > 0 {
-						msg, _ := json.Marshal(map[string]interface{}{
-							"type":        "block_diff",
-							"blockNumber": block,
-							"timestamp":   ir.info.Timestamp,
-							"baseFee":     ir.info.BaseFee,
-							"gasLimit":    ir.info.GasLimit,
-							"entries":     entries,
-						})
-						s.clients.broadcast(msg)
-					}
+			s.blockMu.Unlock()
+
+			processedBlock = block
+
+			elapsed := time.Since(t0).Milliseconds()
+			logJSON(map[string]interface{}{
+				"event": "block", "block": block, "diffKeys": len(dr.diff),
+				"applied": applied, "cached": s.cache.size(),
+				"ms": elapsed, "clients": s.clients.count(),
+			})
+		}
+	}
+}
+
+// subscribeNewHeads connects to the upstream WS and subscribes to newHeads.
+// Updates the atomic counter on each new block.
+func subscribeNewHeads(wsURL string, latestBlock *atomic.Int64) {
+	for {
+		func() {
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+			if err != nil {
+				log.Printf("newHeads connect error: %v, retrying...", err)
+				time.Sleep(1 * time.Second)
+				return
+			}
+			defer conn.Close()
+
+			// Send eth_subscribe for newHeads
+			subReq, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0", "id": 1,
+				"method": "eth_subscribe",
+				"params": []string{"newHeads"},
+			})
+			if err := conn.WriteMessage(websocket.TextMessage, subReq); err != nil {
+				log.Printf("newHeads subscribe write error: %v", err)
+				return
+			}
+
+			// Read subscription confirmation
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				log.Printf("newHeads subscribe read error: %v", err)
+				return
+			}
+			var subResp struct {
+				Result string    `json:"result"`
+				Error  *rpcError `json:"error"`
+			}
+			if json.Unmarshal(msg, &subResp) != nil || subResp.Error != nil {
+				log.Printf("newHeads subscribe failed: %s", string(msg))
+				return
+			}
+			logJSON(map[string]interface{}{"event": "newHeads_subscribed", "subId": subResp.Result})
+
+			// Read notifications
+			for {
+				_, msg, err := conn.ReadMessage()
+				if err != nil {
+					log.Printf("newHeads read error: %v", err)
+					return
 				}
+				var notif struct {
+					Params struct {
+						Result struct {
+							Number string `json:"number"`
+						} `json:"result"`
+					} `json:"params"`
+				}
+				if json.Unmarshal(msg, &notif) != nil {
+					continue
+				}
+				if notif.Params.Result.Number == "" {
+					continue
+				}
+				n, err := strconv.ParseInt(strings.TrimPrefix(notif.Params.Result.Number, "0x"), 16, 64)
+				if err != nil {
+					continue
+				}
+				latestBlock.Store(n)
 			}
 		}()
+		time.Sleep(1 * time.Second) // reconnect delay
 	}
-	return nil
 }
 
 func logJSON(fields map[string]interface{}) {

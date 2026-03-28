@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"defi-toolbox/arb"
@@ -32,12 +34,12 @@ type wsFetcher struct {
 	mu           sync.Mutex
 	nextID       int
 	pending      map[int]chan json.RawMessage
-	block        uint64
-	timestamp    uint64
-	baseFee      uint64
-	gasLimit     uint64
+	block        atomic.Uint64
+	timestamp    atomic.Uint64
+	baseFee      atomic.Uint64
+	gasLimit     atomic.Uint64
 	cacheMisses  int64
-	onSlotChange func(addr common.Address, slot common.Hash)
+	onSlotChange func(addr common.Address, slot, value common.Hash)
 	onBlock      func(block, timestamp, baseFee, gasLimit uint64)
 }
 
@@ -92,10 +94,10 @@ func newWSFetcher(url string) (*wsFetcher, *statedb.StateDB, error) {
 		return nil, nil, fmt.Errorf("expected initial_dump, got %s", dump.Type)
 	}
 
-	f.block = dump.BlockNumber
-	f.timestamp = dump.Timestamp
-	f.baseFee = dump.BaseFee
-	f.gasLimit = dump.GasLimit
+	f.block.Store(dump.BlockNumber)
+	f.timestamp.Store(dump.Timestamp)
+	f.baseFee.Store(dump.BaseFee)
+	f.gasLimit.Store(dump.GasLimit)
 
 	storageCount := 0
 	accountData := make(map[string]map[string]string)
@@ -158,11 +160,14 @@ func newWSFetcher(url string) (*wsFetcher, *statedb.StateDB, error) {
 	}
 
 	fmt.Fprintf(os.Stderr, "[arb] initial_dump: block=%d, %d storage, %d accounts\n",
-		f.block, storageCount, accountCount)
+		f.block.Load(), storageCount, accountCount)
 
-	go f.readLoop(state)
-
+	// NOTE: caller must set onSlotChange/onBlock callbacks then call startReadLoop()
 	return f, state, nil
+}
+
+func (f *wsFetcher) startReadLoop(state *statedb.StateDB) {
+	go f.readLoop(state)
 }
 
 func (f *wsFetcher) readLoop(state *statedb.StateDB) {
@@ -179,22 +184,24 @@ func (f *wsFetcher) readLoop(state *statedb.StateDB) {
 		}
 
 		if m.Type == "block_diff" {
-			f.block = m.BlockNumber
-			f.timestamp = m.Timestamp
-			f.baseFee = m.BaseFee
-			f.gasLimit = m.GasLimit
+			f.block.Store(m.BlockNumber)
+			f.timestamp.Store(m.Timestamp)
+			f.baseFee.Store(m.BaseFee)
+			f.gasLimit.Store(m.GasLimit)
 
-			for _, entry := range m.Entries {
-				key, value := entry[0], entry[1]
-				if strings.HasPrefix(key, "s:") {
-					parts := strings.SplitN(key, ":", 3)
-					if len(parts) == 3 {
-						addr := common.HexToAddress(parts[1])
-						slot := common.HexToHash(parts[2])
-						val := common.HexToHash(value)
-						state.SetStorageSlot(addr, slot, val)
-						if f.onSlotChange != nil {
-							f.onSlotChange(addr, slot)
+			// Buffer slot updates — do NOT write to state from this goroutine.
+			// State writes happen on the main goroutine to avoid data races.
+			if f.onSlotChange != nil {
+				for _, entry := range m.Entries {
+					key, value := entry[0], entry[1]
+					if strings.HasPrefix(key, "s:") {
+						parts := strings.SplitN(key, ":", 3)
+						if len(parts) == 3 {
+							f.onSlotChange(
+								common.HexToAddress(parts[1]),
+								common.HexToHash(parts[2]),
+								common.HexToHash(value),
+							)
 						}
 					}
 				}
@@ -253,90 +260,91 @@ func (f *wsFetcher) call(method string, params interface{}) (json.RawMessage, er
 	}
 }
 
-func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
+func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	f.cacheMisses++
+	block := f.block.Load()
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"slot":        slot.Hex(),
-		"blockNumber": f.block,
+		"blockNumber": block,
 	}
 	result, err := f.call("state_getStorageAt", params)
 	if err != nil {
-		return common.Hash{}
+		return common.Hash{}, fmt.Errorf("FetchStorage %s slot=%s block=%d: %w", addr.Hex()[:10], slot.Hex()[:14], block, err)
 	}
 	var vr valueResult
 	if err := json.Unmarshal(result, &vr); err != nil {
-		return common.Hash{}
+		return common.Hash{}, fmt.Errorf("FetchStorage parse %s slot=%s: %w raw=%s", addr.Hex()[:10], slot.Hex()[:14], err, string(result))
 	}
-	return common.HexToHash(vr.Value)
+	return common.HexToHash(vr.Value), nil
 }
 
-func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
+func (f *wsFetcher) FetchBalance(addr common.Address) (*uint256.Int, error) {
 	f.cacheMisses++
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
-		"blockNumber": f.block,
+		"blockNumber": f.block.Load(),
 	}
 	result, err := f.call("state_getBalance", params)
 	if err != nil {
-		return uint256.NewInt(0)
+		return nil, fmt.Errorf("FetchBalance %s: %w", addr.Hex()[:10], err)
 	}
 	var vr valueResult
 	if err := json.Unmarshal(result, &vr); err != nil {
-		return uint256.NewInt(0)
+		return nil, fmt.Errorf("FetchBalance parse %s: %w", addr.Hex()[:10], err)
 	}
 	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
 	if !ok {
-		return uint256.NewInt(0)
+		return nil, fmt.Errorf("FetchBalance parse hex %s: %s", addr.Hex()[:10], vr.Value)
 	}
 	val, _ := uint256.FromBig(bi)
-	return val
+	return val, nil
 }
 
-func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
+func (f *wsFetcher) FetchNonce(addr common.Address) (uint64, error) {
 	f.cacheMisses++
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
-		"blockNumber": f.block,
+		"blockNumber": f.block.Load(),
 	}
 	result, err := f.call("state_getNonce", params)
 	if err != nil {
-		return 0
+		return 0, fmt.Errorf("FetchNonce %s: %w", addr.Hex()[:10], err)
 	}
 	var vr valueResult
 	if err := json.Unmarshal(result, &vr); err != nil {
-		return 0
+		return 0, fmt.Errorf("FetchNonce parse %s: %w", addr.Hex()[:10], err)
 	}
 	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
 	if !ok {
-		return 0
+		return 0, fmt.Errorf("FetchNonce parse hex %s: %s", addr.Hex()[:10], vr.Value)
 	}
-	return bi.Uint64()
+	return bi.Uint64(), nil
 }
 
-func (f *wsFetcher) FetchCode(addr common.Address) []byte {
+func (f *wsFetcher) FetchCode(addr common.Address) ([]byte, error) {
 	f.cacheMisses++
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
-		"blockNumber": f.block,
+		"blockNumber": f.block.Load(),
 	}
 	result, err := f.call("state_getCode", params)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("FetchCode %s: %w", addr.Hex()[:10], err)
 	}
 	var vr valueResult
 	if err := json.Unmarshal(result, &vr); err != nil {
-		return nil
+		return nil, fmt.Errorf("FetchCode parse %s: %w", addr.Hex()[:10], err)
 	}
 	if vr.Value == "" || vr.Value == "0x" {
-		return nil
+		return nil, nil
 	}
 	code, _ := hex.DecodeString(strings.TrimPrefix(vr.Value, "0x"))
-	return code
+	return code, nil
 }
 
-func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash {
-	return common.Hash{}
+func (f *wsFetcher) FetchBlockHash(num uint64) (common.Hash, error) {
+	return common.Hash{}, nil
 }
 
 // ─── Main ──────────────────────────────────────────────────────────
@@ -405,7 +413,7 @@ func main() {
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
-	pm.SetBlockTimestamp(fetcher.timestamp)
+	pm.SetBlockTimestamp(fetcher.timestamp.Load())
 
 	// Build pool table and enumerate cycles
 	pt := arb.NewPoolTable(embeddedPools)
@@ -477,7 +485,7 @@ func main() {
 			minAllowance := new(big.Int).Mul(big.NewInt(1000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
 			if allowance.Cmp(minAllowance) < 0 {
 				fmt.Fprintf(os.Stderr, "[arb] WAVAX allowance too low (%s), approving router...\n", allowance.String())
-				txHash, err := executor.Approve(WAVAX, fetcher.baseFee)
+				txHash, err := executor.Approve(WAVAX, fetcher.baseFee.Load())
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[arb] ERROR: approve failed: %v\n", err)
 					os.Exit(1)
@@ -515,18 +523,19 @@ func main() {
 	scanner.InitRates()
 	fmt.Fprintf(os.Stderr, "[arb] ready. Waiting for blocks...\n")
 
-	// Buffer slot changes from readLoop goroutine, apply on main goroutine.
-	// PoolManager is NOT thread-safe — all access must be on the main goroutine.
-	type slotChange struct {
-		addr common.Address
-		slot common.Hash
+	// Buffer ALL state changes from readLoop goroutine, apply on main goroutine.
+	// StateDB and PoolManager are NOT thread-safe — all writes must be on the main goroutine.
+	type slotUpdate struct {
+		addr  common.Address
+		slot  common.Hash
+		value common.Hash
 	}
 	var slotMu sync.Mutex
-	var pendingSlots []slotChange
+	var pendingSlots []slotUpdate
 
-	fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
+	fetcher.onSlotChange = func(addr common.Address, slot, value common.Hash) {
 		slotMu.Lock()
-		pendingSlots = append(pendingSlots, slotChange{addr, slot})
+		pendingSlots = append(pendingSlots, slotUpdate{addr, slot, value})
 		slotMu.Unlock()
 	}
 
@@ -541,19 +550,31 @@ func main() {
 		}
 	}
 
+	// Start readLoop AFTER callbacks are set (avoids data race on callback fields)
+	fetcher.startReadLoop(state)
+
 	// Process blocks
 	for bi := range blockCh {
-		// Drain pending slot changes on main goroutine (PoolManager not thread-safe)
+		// Drain pending slot changes on main goroutine
 		slotMu.Lock()
 		slots := pendingSlots
 		pendingSlots = nil
 		slotMu.Unlock()
 
 		pm.SetBlockTimestamp(bi.timestamp)
+
+		// Apply updates in-place: only overwrite slots already in cache
+		for _, su := range slots {
+			if state.HasStorageSlot(su.addr, su.slot) {
+				state.SetStorageSlot(su.addr, su.slot, su.value)
+			}
+		}
+
+		// Invalidate dirty pools in PoolManager
 		dirtySet := make(map[common.Address]bool)
 		var dp []common.Address
-		for _, sc := range slots {
-			poolAddr := pm.InvalidateBySlot(sc.addr, sc.slot)
+		for _, su := range slots {
+			poolAddr := pm.InvalidateBySlot(su.addr, su.slot)
 			if poolAddr != (common.Address{}) && !dirtySet[poolAddr] {
 				dirtySet[poolAddr] = true
 				dp = append(dp, poolAddr)
@@ -564,68 +585,70 @@ func main() {
 			continue
 		}
 
-		// Stages 1+2: rate screening + formula quoting (no EVM)
-		opp := scanner.OnBlock(dp, nil, bi.baseFee)
+		// Build EVM config + verifier for this block (immutable state — safe)
+		cfg := statedb.EVMConfig{
+			BlockNumber: bi.block,
+			Timestamp:   bi.timestamp,
+			ChainID:     43114,
+			BaseFee:     bi.baseFee,
+			GasLimit:    bi.gasLimit,
+		}
+		var verifier *arb.Verifier
+		var caller common.Address
+		if executor != nil {
+			caller = executor.Address()
+		}
+		verifier = arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX)
+
+		// Stages 1+2+3: rate screening + formula quoting + local EVM (top 50)
+		opp, evmResults := scanner.OnBlock(dp, verifier, bi.baseFee)
 
 		fmt.Fprintf(os.Stderr, "[arb] block=%d dirty=%d | %s\n",
 			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
 
-		if opp != nil && opp.FormulaProfit > 0 && executor != nil {
-			// Build swap() calldata (same for both local EVM and RPC)
-			calldata := arb.EncodeSwapCalldata(opp.Cycle, pt, WAVAX, opp.AmountIn)
+		// ── Stage 3b: RPC cross-check ALL local EVM results ──
+		if executor != nil && len(evmResults) > 0 {
+			matched, mismatched, rpcErrors := 0, 0, 0
+			for _, er := range evmResults {
+				rpc := executor.EthCallAtBlock(er.Calldata, er.Block)
 
-			// Debug: check state vs callstate
-			testSlot := common.HexToHash("0xbb202940fa70baa901e09fd8d6c06c8ce4fc08dcca73ca2e0eadb201914a595c")
-			fmt.Fprintf(os.Stderr, "[arb] DEBUG: state.GetState=%s code=%d\n",
-				state.GetState(WAVAX, testSlot).Hex()[:14], state.GetCodeSize(WAVAX))
-			testCS := statedb.NewCallState(state)
-			fmt.Fprintf(os.Stderr, "[arb] DEBUG: cs.GetState=%s code=%d\n",
-				testCS.GetState(WAVAX, testSlot).Hex()[:14], testCS.GetCodeSize(WAVAX))
-
-			// ── Stage 3a: Local EVM verification ──
-			cfg := statedb.EVMConfig{
-				BlockNumber: bi.block,
-				Timestamp:   bi.timestamp,
-				ChainID:     43114,
-				BaseFee:     bi.baseFee,
-				GasLimit:    bi.gasLimit,
-			}
-			evmCtx := statedb.GetCachedContext(cfg)
-			cs := statedb.NewCallState(state)
-			localRet, localGas, localErr := evmCtx.ExecuteWithCallState(
-				cs, executor.Address(), router.DeployedRouter, calldata)
-			localOK := localErr == nil && len(localRet) >= 32
-
-			var localOut string
-			if localOK {
-				localOut = fmt.Sprintf("OK out=%x gas=%d", localRet[len(localRet)-32:], localGas)
-			} else {
-				reason := "no data"
-				if localErr != nil {
-					reason = localErr.Error()
+				if er.Reverted && rpc.Reverted {
+					matched++ // both reverted — OK
+					continue
 				}
-				localOut = fmt.Sprintf("REVERT gas=%d reason=%s", localGas, reason)
+				if er.Reverted != rpc.Reverted {
+					mismatched++
+					fmt.Fprintf(os.Stderr, "[arb] *** MISMATCH *** block=%d local_revert=%v rpc_revert=%v local_err=%s rpc_err=%s\n",
+						er.Block, er.Reverted, rpc.Reverted, er.ErrMsg, rpc.ErrMsg)
+					continue
+				}
+				if rpc.ErrMsg != "" && rpc.RetData == nil {
+					rpcErrors++
+					continue
+				}
+				// Both succeeded — compare return data byte-for-byte
+				if !bytes.Equal(er.RetData, rpc.RetData) {
+					mismatched++
+					// Extract amountOut from both for readable log
+					var localOut, rpcOut string
+					if len(er.RetData) >= 32 {
+						localOut = fmt.Sprintf("%x", er.RetData[len(er.RetData)-32:])
+					}
+					if len(rpc.RetData) >= 32 {
+						rpcOut = fmt.Sprintf("%x", rpc.RetData[len(rpc.RetData)-32:])
+					}
+					fmt.Fprintf(os.Stderr, "[arb] *** OUTPUT MISMATCH *** block=%d local_out=%s rpc_out=%s local_gas=%d local_ret_len=%d rpc_ret_len=%d\n",
+						er.Block, localOut, rpcOut, er.GasUsed, len(er.RetData), len(rpc.RetData))
+				} else {
+					matched++
+				}
 			}
-			fmt.Fprintf(os.Stderr, "[arb] stage3a-local block=%d: %s\n", bi.block, localOut)
+			fmt.Fprintf(os.Stderr, "[arb] stage3 cross-check: %d/%d matched, %d mismatched, %d rpc-errors\n",
+				matched, len(evmResults), mismatched, rpcErrors)
+		}
 
-			// ── Stage 3b: RPC verification at the SAME block ──
-			rpcOK, rpcOut, rpcGas := executor.SimulateViaRPCAtBlock(opp, calldata, bi.block)
-			fmt.Fprintf(os.Stderr, "[arb] stage3b-rpc   block=%d: %s\n", bi.block, rpcOut)
-
-			// Compare
-			if localOK != rpcOK {
-				fmt.Fprintf(os.Stderr, "[arb] *** MISMATCH *** local=%v rpc=%v at block %d\n", localOK, rpcOK, bi.block)
-			}
-
-			// Only send if RPC passes
-			if !rpcOK {
-				fmt.Fprintf(os.Stderr, "[arb] stage3 RPC failed — skipping\n")
-				continue
-			}
-
-			// Use RPC gas estimate
-			opp.EVMGasUsed = rpcGas
-
+		// ── Stage 4: Execute if profitable and verified ──
+		if opp != nil && opp.EVMVerified && opp.EVMProfit > 0 && executor != nil {
 			txHash, err := executor.Execute(opp, bi.baseFee)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)

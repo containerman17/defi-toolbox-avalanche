@@ -298,29 +298,21 @@ func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.
 	return overlay
 }
 
-// ApplyOverridesFlat creates a flat clone of base with overrides baked in.
-// No overlay indirection — CallState reads directly from one layer.
-// Uses COW for storage maps so the original base state is not modified.
+// ApplyOverridesFlat creates an overlay of base with overrides baked in.
+// Overrides are isolated from the base state via the overlay pattern.
 func ApplyOverridesFlat(base *statedb.StateDB, overrides []ParsedOverride) *statedb.StateDB {
 	if len(overrides) == 0 {
 		return base
 	}
-	flat := base.CloneFlat()
-
-	// Track which accounts are shared with original to do COW
-	shared := make(map[common.Address]bool, len(overrides))
-	for _, po := range overrides {
-		shared[po.Addr] = true
-	}
+	overlay := base.NewOverlay()
 
 	for _, po := range overrides {
 		if po.Code != nil {
-			flat.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
-			delete(shared, po.Addr) // SetAccount creates fresh account, no longer shared
+			overlay.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
 		}
 		for _, s := range po.Slots {
-			flat.SetStorageSlotCOW(po.Addr, s.Slot, s.Value, shared)
+			overlay.SetStorageSlot(po.Addr, s.Slot, s.Value)
 		}
 	}
-	return flat
+	return overlay
 }

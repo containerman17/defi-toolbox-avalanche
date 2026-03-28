@@ -213,49 +213,49 @@ func (f *wsFetcher) call(method string, params interface{}) (json.RawMessage, er
 	}
 }
 
-func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
+func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	params := map[string]interface{}{"address": addr.Hex(), "slot": slot.Hex(), "blockNumber": f.block}
 	result, err := f.call("state_getStorageAt", params)
-	if err != nil { return common.Hash{} }
+	if err != nil { return common.Hash{}, err }
 	var vr valueResult
-	if json.Unmarshal(result, &vr) != nil { return common.Hash{} }
-	return common.HexToHash(vr.Value)
+	if err := json.Unmarshal(result, &vr); err != nil { return common.Hash{}, err }
+	return common.HexToHash(vr.Value), nil
 }
 
-func (f *wsFetcher) FetchBalance(addr common.Address) *uint256.Int {
+func (f *wsFetcher) FetchBalance(addr common.Address) (*uint256.Int, error) {
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
 	result, err := f.call("state_getBalance", params)
-	if err != nil { return uint256.NewInt(0) }
+	if err != nil { return nil, err }
 	var vr valueResult
-	if json.Unmarshal(result, &vr) != nil { return uint256.NewInt(0) }
+	if err := json.Unmarshal(result, &vr); err != nil { return nil, err }
 	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
-	if !ok { return uint256.NewInt(0) }
+	if !ok { return nil, fmt.Errorf("bad hex: %s", vr.Value) }
 	val, _ := uint256.FromBig(bi)
-	return val
+	return val, nil
 }
 
-func (f *wsFetcher) FetchNonce(addr common.Address) uint64 {
+func (f *wsFetcher) FetchNonce(addr common.Address) (uint64, error) {
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
 	result, err := f.call("state_getNonce", params)
-	if err != nil { return 0 }
+	if err != nil { return 0, err }
 	var vr valueResult
-	if json.Unmarshal(result, &vr) != nil { return 0 }
+	if err := json.Unmarshal(result, &vr); err != nil { return 0, err }
 	n, _ := strconv.ParseUint(strings.TrimPrefix(vr.Value, "0x"), 16, 64)
-	return n
+	return n, nil
 }
 
-func (f *wsFetcher) FetchCode(addr common.Address) []byte {
+func (f *wsFetcher) FetchCode(addr common.Address) ([]byte, error) {
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
 	result, err := f.call("state_getCode", params)
-	if err != nil { return nil }
+	if err != nil { return nil, err }
 	var vr valueResult
-	if json.Unmarshal(result, &vr) != nil { return nil }
-	if vr.Value == "" || vr.Value == "0x" { return nil }
+	if err := json.Unmarshal(result, &vr); err != nil { return nil, err }
+	if vr.Value == "" || vr.Value == "0x" { return nil, nil }
 	code, _ := hex.DecodeString(strings.TrimPrefix(vr.Value, "0x"))
-	return code
+	return code, nil
 }
 
-func (f *wsFetcher) FetchBlockHash(num uint64) common.Hash { return common.Hash{} }
+func (f *wsFetcher) FetchBlockHash(num uint64) (common.Hash, error) { return common.Hash{}, nil }
 
 func main() {
 	stateServerURL := "ws://localhost:7449/live"

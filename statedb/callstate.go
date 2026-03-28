@@ -133,6 +133,9 @@ type CallState struct {
 	// Journal for O(mutations) snapshot/revert
 	journal   []journalEntry
 	snapshots []int
+
+	// Per-goroutine error from fetch failures. Check with Err() after EVM execution.
+	lastErr error
 }
 
 // NewCallState creates a thin overlay backed by the given base state.
@@ -147,6 +150,14 @@ func NewCallState(base *StateDB) *CallState {
 	}
 }
 
+// Err returns and clears the last fetch error. Each CallState is per-goroutine,
+// so errors are isolated — no cross-contamination between concurrent EVM calls.
+func (s *CallState) Err() error {
+	err := s.lastErr
+	s.lastErr = nil
+	return err
+}
+
 // Reset clears per-call state for reuse between EVM calls.
 // Only clears what Prepare() doesn't handle. Avoids redundant map allocations.
 func (s *CallState) Reset() {
@@ -157,6 +168,7 @@ func (s *CallState) Reset() {
 	s.logs = s.logs[:0]
 	s.journal = s.journal[:0]
 	s.snapshots = s.snapshots[:0]
+	s.lastErr = nil
 }
 
 // ─── Storage ────────────────────────────────────────────────────────
@@ -167,7 +179,12 @@ func (s *CallState) GetState(addr common.Address, key common.Hash, _ ...statecon
 			return val
 		}
 	}
-	return s.base.GetState(addr, key)
+	val, err := s.base.getStorageWithErr(addr, key)
+	if err != nil {
+		s.lastErr = err
+		return common.Hash{}
+	}
+	return val
 }
 
 func (s *CallState) GetCommittedState(addr common.Address, key common.Hash, _ ...stateconf.StateDBStateOption) common.Hash {
@@ -194,7 +211,12 @@ func (s *CallState) GetBalance(addr common.Address) *uint256.Int {
 	if bal, ok := s.balanceOverrides[addr]; ok {
 		return new(uint256.Int).Set(bal)
 	}
-	return s.base.GetBalance(addr)
+	val, err := s.base.getBalanceWithErr(addr)
+	if err != nil {
+		s.lastErr = err
+		return uint256.NewInt(0)
+	}
+	return val
 }
 
 func (s *CallState) SubBalance(addr common.Address, amount *uint256.Int) {

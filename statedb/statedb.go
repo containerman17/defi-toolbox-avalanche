@@ -1,7 +1,9 @@
 package statedb
 
 import (
+	"fmt"
 	"math/big"
+	"sync"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
@@ -20,11 +22,11 @@ var _ vm.StateDB = (*StateDB)(nil)
 // Native backend implements this via WebSocket to state server.
 // WASM backend implements this via JS callbacks.
 type Fetcher interface {
-	FetchStorage(addr common.Address, slot common.Hash) common.Hash
-	FetchBalance(addr common.Address) *uint256.Int
-	FetchNonce(addr common.Address) uint64
-	FetchCode(addr common.Address) []byte
-	FetchBlockHash(num uint64) common.Hash
+	FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error)
+	FetchBalance(addr common.Address) (*uint256.Int, error)
+	FetchNonce(addr common.Address) (uint64, error)
+	FetchCode(addr common.Address) ([]byte, error)
+	FetchBlockHash(num uint64) (common.Hash, error)
 }
 
 type account struct {
@@ -51,6 +53,10 @@ type StateDB struct {
 
 	// Transient storage (EIP-1153)
 	transientStorage map[common.Address]map[common.Hash]common.Hash
+
+	// fetchMu serializes cache-miss fetches for parallel warm-up safety.
+	// Fast path (cache hit) doesn't touch this lock.
+	fetchMu sync.Mutex
 }
 
 type snapshot struct {
@@ -69,29 +75,66 @@ func NewStateDB(fetcher Fetcher) *StateDB {
 }
 
 func (s *StateDB) getOrFetch(addr common.Address) *account {
+	a, _ := s.getOrFetchWithErr(addr)
+	return a
+}
+
+func (s *StateDB) getOrFetchWithErr(addr common.Address) (*account, error) {
 	if a, ok := s.accounts[addr]; ok {
-		// If account exists locally but hasn't been fully fetched yet
-		// (created by SetStorageSlot with only storage overrides),
-		// fetch the rest from the base/remote.
 		if !a.exists && s.fetcher != nil {
-			a.balance = s.fetcher.FetchBalance(addr)
-			a.nonce = s.fetcher.FetchNonce(addr)
-			a.code = s.fetcher.FetchCode(addr)
-			if len(a.code) > 0 {
-				a.codeHash = crypto.Keccak256Hash(a.code)
+			s.fetchMu.Lock()
+			defer s.fetchMu.Unlock()
+			// Double-check after lock
+			if !a.exists {
+				bal, err := s.fetcher.FetchBalance(addr)
+				if err != nil {
+					return a, fmt.Errorf("FetchBalance(%s): %w", addr.Hex()[:10], err)
+				}
+				a.balance = bal
+				nonce, err := s.fetcher.FetchNonce(addr)
+				if err != nil {
+					return a, fmt.Errorf("FetchNonce(%s): %w", addr.Hex()[:10], err)
+				}
+				a.nonce = nonce
+				code, err := s.fetcher.FetchCode(addr)
+				if err != nil {
+					return a, fmt.Errorf("FetchCode(%s): %w", addr.Hex()[:10], err)
+				}
+				a.code = code
+				if len(a.code) > 0 {
+					a.codeHash = crypto.Keccak256Hash(a.code)
+				}
+				a.exists = true
 			}
-			a.exists = true
 		}
-		return a
+		return a, nil
 	}
 	// Fetch from remote
 	a := &account{
 		storage: make(map[common.Hash]common.Hash),
 	}
 	if s.fetcher != nil {
-		a.balance = s.fetcher.FetchBalance(addr)
-		a.nonce = s.fetcher.FetchNonce(addr)
-		a.code = s.fetcher.FetchCode(addr)
+		s.fetchMu.Lock()
+		defer s.fetchMu.Unlock()
+		bal, err := s.fetcher.FetchBalance(addr)
+		if err != nil {
+			a.balance = uint256.NewInt(0)
+			s.accounts[addr] = a
+			return a, fmt.Errorf("FetchBalance(%s): %w", addr.Hex()[:10], err)
+		}
+		a.balance = bal
+		nonce, err := s.fetcher.FetchNonce(addr)
+		if err != nil {
+			s.accounts[addr] = a
+			return a, fmt.Errorf("FetchNonce(%s): %w", addr.Hex()[:10], err)
+		}
+		a.nonce = nonce
+		code, err := s.fetcher.FetchCode(addr)
+		if err != nil {
+			s.accounts[addr] = a
+			return a, fmt.Errorf("FetchCode(%s): %w", addr.Hex()[:10], err)
+		}
+		a.code = code
 		if len(a.code) > 0 {
 			a.codeHash = crypto.Keccak256Hash(a.code)
 		}
@@ -100,7 +143,7 @@ func (s *StateDB) getOrFetch(addr common.Address) *account {
 		a.balance = uint256.NewInt(0)
 	}
 	s.accounts[addr] = a
-	return a
+	return a, nil
 }
 
 // SetAccount sets account data directly (used for prefilling from initial_dump).
@@ -155,6 +198,14 @@ func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
 	return new(uint256.Int).Set(s.getOrFetch(addr).balance)
 }
 
+func (s *StateDB) getBalanceWithErr(addr common.Address) (*uint256.Int, error) {
+	a, err := s.getOrFetchWithErr(addr)
+	if err != nil {
+		return uint256.NewInt(0), err
+	}
+	return new(uint256.Int).Set(a.balance), nil
+}
+
 // Nonce
 func (s *StateDB) GetNonce(addr common.Address) uint64    { return s.getOrFetch(addr).nonce }
 func (s *StateDB) SetNonce(addr common.Address, n uint64) { s.getOrFetch(addr).nonce = n }
@@ -198,23 +249,39 @@ func (s *StateDB) GetState(addr common.Address, key common.Hash, _ ...stateconf.
 }
 
 func (s *StateDB) getStorage(addr common.Address, key common.Hash) common.Hash {
+	val, _ := s.getStorageWithErr(addr, key)
+	return val
+}
+
+func (s *StateDB) getStorageWithErr(addr common.Address, key common.Hash) (common.Hash, error) {
 	// Check local storage first (includes overlay overrides from SetStorageSlot)
 	if a, ok := s.accounts[addr]; ok {
 		if val, ok := a.storage[key]; ok {
-			return val
+			return val, nil
 		}
 	}
 	// Not in local storage — fetch from base/remote
 	a := s.getOrFetch(addr)
 	if val, ok := a.storage[key]; ok {
-		return val
+		return val, nil
 	}
 	if s.fetcher != nil {
-		val := s.fetcher.FetchStorage(addr, key)
+		s.fetchMu.Lock()
+		// Double-check after lock
+		if val, ok := a.storage[key]; ok {
+			s.fetchMu.Unlock()
+			return val, nil
+		}
+		val, err := s.fetcher.FetchStorage(addr, key)
+		if err != nil {
+			s.fetchMu.Unlock()
+			return common.Hash{}, fmt.Errorf("FetchStorage(%s, %s): %w", addr.Hex()[:10], key.Hex()[:14], err)
+		}
 		a.storage[key] = val
-		return val
+		s.fetchMu.Unlock()
+		return val, nil
 	}
-	return common.Hash{}
+	return common.Hash{}, nil
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash, _ ...stateconf.StateDBStateOption) {
@@ -353,88 +420,62 @@ func (s *StateDB) AddPreimage(hash common.Hash, data []byte) {}
 // GetBlockHash uses the fetcher to get block hashes.
 func (s *StateDB) GetBlockHash(num uint64) common.Hash {
 	if s.fetcher != nil {
-		return s.fetcher.FetchBlockHash(num)
+		h, _ := s.fetcher.FetchBlockHash(num)
+		return h
 	}
 	return common.Hash{}
+}
+
+// HasStorageSlot returns true if the slot is already cached locally.
+// Used by block loop: only overwrite slots already in cache.
+func (s *StateDB) HasStorageSlot(addr common.Address, slot common.Hash) bool {
+	a, ok := s.accounts[addr]
+	if !ok {
+		return false
+	}
+	_, ok = a.storage[slot]
+	return ok
 }
 
 // ─── StateDB as Fetcher (for overlay pattern) ─────────────────────
 // A StateDB can back another StateDB: overlay checks itself first,
 // then delegates to the base. Base delegates to the remote fetcher.
 
-func (s *StateDB) FetchStorage(addr common.Address, slot common.Hash) common.Hash {
-	return s.getStorage(addr, slot)
+func (s *StateDB) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
+	return s.getStorageWithErr(addr, slot)
 }
 
-func (s *StateDB) FetchBalance(addr common.Address) *uint256.Int {
-	return new(uint256.Int).Set(s.getOrFetch(addr).balance)
+func (s *StateDB) FetchBalance(addr common.Address) (*uint256.Int, error) {
+	return s.getBalanceWithErr(addr)
 }
 
-func (s *StateDB) FetchNonce(addr common.Address) uint64 {
-	return s.getOrFetch(addr).nonce
+func (s *StateDB) FetchNonce(addr common.Address) (uint64, error) {
+	a, err := s.getOrFetchWithErr(addr)
+	if err != nil {
+		return 0, err
+	}
+	return a.nonce, nil
 }
 
-func (s *StateDB) FetchCode(addr common.Address) []byte {
-	return s.getOrFetch(addr).code
+func (s *StateDB) FetchCode(addr common.Address) ([]byte, error) {
+	a, err := s.getOrFetchWithErr(addr)
+	if err != nil {
+		return nil, err
+	}
+	return a.code, nil
 }
 
-func (s *StateDB) FetchBlockHash(num uint64) common.Hash {
+func (s *StateDB) FetchBlockHash(num uint64) (common.Hash, error) {
 	if s.fetcher != nil {
 		return s.fetcher.FetchBlockHash(num)
 	}
-	return common.Hash{}
+	return common.Hash{}, nil
 }
 
 // NewOverlay creates a fresh StateDB backed by this one.
 // Writes go to the overlay; reads fall through to the base on miss.
 func (s *StateDB) NewOverlay() *StateDB {
 	return NewStateDB(s)
-}
-
-// CloneFlat creates a shallow clone sharing account pointers.
-// Override slots get COW storage maps. No overlay indirection.
-func (s *StateDB) CloneFlat() *StateDB {
-	clone := &StateDB{
-		accounts:         make(map[common.Address]*account, len(s.accounts)),
-		accessList:       make(map[common.Address]map[common.Hash]bool),
-		fetcher:          s.fetcher,
-		transientStorage: make(map[common.Address]map[common.Hash]common.Hash),
-	}
-	for addr, a := range s.accounts {
-		clone.accounts[addr] = a
-	}
-	return clone
-}
-
-// SetStorageSlotCOW sets a storage slot with copy-on-write for the storage map.
-// If the account's storage map is shared with another StateDB, it creates a copy first.
-func (s *StateDB) SetStorageSlotCOW(addr common.Address, slot, value common.Hash, sharedAccounts map[common.Address]bool) {
-	a, ok := s.accounts[addr]
-	if !ok {
-		a = &account{
-			balance: uint256.NewInt(0),
-			storage: make(map[common.Hash]common.Hash),
-		}
-		s.accounts[addr] = a
-	} else if sharedAccounts[addr] {
-		// COW: copy storage map before writing
-		newStorage := make(map[common.Hash]common.Hash, len(a.storage)+1)
-		for k, v := range a.storage {
-			newStorage[k] = v
-		}
-		newA := &account{
-			balance:  a.balance,
-			nonce:    a.nonce,
-			code:     a.code,
-			codeHash: a.codeHash,
-			storage:  newStorage,
-			exists:   a.exists,
-		}
-		s.accounts[addr] = newA
-		a = newA
-		delete(sharedAccounts, addr) // Only COW once
-	}
-	a.storage[slot] = value
 }
 
 // NewReusableOverlay creates an overlay that can be Reset() between calls.

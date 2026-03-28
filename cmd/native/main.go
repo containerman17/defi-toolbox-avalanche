@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"encoding/json"
 
@@ -20,344 +19,8 @@ import (
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
-	"github.com/gorilla/websocket"
 	"github.com/holiman/uint256"
 )
-
-// ─── WebSocket state fetcher ───────────────────────────────────────
-
-type wsFetcher struct {
-	conn         *websocket.Conn
-	mu           sync.Mutex
-	nextID       int
-	pending      map[int]chan json.RawMessage
-	block        uint64
-	timestamp    uint64
-	baseFee      uint64
-	gasLimit     uint64
-	cacheMisses  int64 // counts state server fetches (cache misses)
-	onSlotChange func(addr common.Address, slot common.Hash) // called on block_diff storage changes
-	onBlock      func(timestamp uint64)                       // called after block_diff is fully processed
-}
-
-type jsonRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      int         `json:"id"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-}
-
-type jsonRPCResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      int             `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   json.RawMessage `json:"error,omitempty"`
-}
-
-type stateServerMessage struct {
-	Type        string     `json:"type,omitempty"`
-	BlockNumber uint64     `json:"blockNumber,omitempty"`
-	Timestamp   uint64     `json:"timestamp,omitempty"`
-	BaseFee     uint64     `json:"baseFee,omitempty"`
-	GasLimit    uint64     `json:"gasLimit,omitempty"`
-	Entries     [][2]string `json:"entries,omitempty"`
-
-	// JSON-RPC fields
-	JSONRPC string          `json:"jsonrpc,omitempty"`
-	ID      int             `json:"id,omitempty"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   json.RawMessage `json:"error,omitempty"`
-}
-
-func newWSFetcher(url string) (*wsFetcher, *statedb.StateDB, error) {
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("ws connect: %w", err)
-	}
-
-	f := &wsFetcher{
-		conn:    conn,
-		pending: make(map[int]chan json.RawMessage),
-	}
-
-	// Create state DB with this fetcher
-	state := statedb.NewStateDB(f)
-
-	// Read initial_dump
-	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		return nil, nil, fmt.Errorf("read initial_dump: %w", err)
-	}
-
-	var dump stateServerMessage
-	if err := json.Unmarshal(msg, &dump); err != nil {
-		return nil, nil, fmt.Errorf("parse initial_dump: %w", err)
-	}
-
-	if dump.Type != "initial_dump" {
-		return nil, nil, fmt.Errorf("expected initial_dump, got %s", dump.Type)
-	}
-
-	f.block = dump.BlockNumber
-	f.timestamp = dump.Timestamp
-	f.baseFee = dump.BaseFee
-	f.gasLimit = dump.GasLimit
-
-	// Parse entries
-	storageCount := 0
-	accountData := make(map[string]map[string]string) // addr -> {balance, nonce, code}
-
-	for _, entry := range dump.Entries {
-		key, value := entry[0], entry[1]
-		if strings.HasPrefix(key, "s:") {
-			parts := strings.SplitN(key, ":", 3)
-			if len(parts) == 3 {
-				addr := common.HexToAddress(parts[1])
-				slot := common.HexToHash(parts[2])
-				val := common.HexToHash(value)
-				state.SetStorageSlot(addr, slot, val)
-				storageCount++
-			}
-		} else if strings.HasPrefix(key, "b:") {
-			addr := key[2:]
-			if accountData[addr] == nil {
-				accountData[addr] = make(map[string]string)
-			}
-			accountData[addr]["balance"] = value
-		} else if strings.HasPrefix(key, "n:") {
-			addr := key[2:]
-			if accountData[addr] == nil {
-				accountData[addr] = make(map[string]string)
-			}
-			accountData[addr]["nonce"] = value
-		} else if strings.HasPrefix(key, "c:") {
-			addr := key[2:]
-			if accountData[addr] == nil {
-				accountData[addr] = make(map[string]string)
-			}
-			accountData[addr]["code"] = value
-		}
-	}
-
-	accountCount := 0
-	for addrStr, data := range accountData {
-		addr := common.HexToAddress(addrStr)
-		balance := uint256.NewInt(0)
-		if b, ok := data["balance"]; ok {
-			bi, _ := new(big.Int).SetString(strings.TrimPrefix(b, "0x"), 16)
-			if bi != nil {
-				balance, _ = uint256.FromBig(bi)
-			}
-		}
-		var nonce uint64
-		if n, ok := data["nonce"]; ok {
-			ni, _ := new(big.Int).SetString(strings.TrimPrefix(n, "0x"), 16)
-			if ni != nil {
-				nonce = ni.Uint64()
-			}
-		}
-		var code []byte
-		if c, ok := data["code"]; ok && c != "0x" && c != "" {
-			code, _ = hex.DecodeString(strings.TrimPrefix(c, "0x"))
-		}
-		state.SetAccount(addr, balance, nonce, code)
-		accountCount++
-	}
-
-	fmt.Fprintf(os.Stderr, "[native] initial_dump: block=%d, %d storage, %d accounts\n",
-		f.block, storageCount, accountCount)
-
-	// Start background reader for responses and block_diff
-	go f.readLoop(state)
-
-	return f, state, nil
-}
-
-func (f *wsFetcher) readLoop(state *statedb.StateDB) {
-	for {
-		_, msg, err := f.conn.ReadMessage()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[native] ws read error: %v\n", err)
-			return
-		}
-
-		var m stateServerMessage
-		if err := json.Unmarshal(msg, &m); err != nil {
-			continue
-		}
-
-		if m.Type == "block_diff" {
-			f.block = m.BlockNumber
-			f.timestamp = m.Timestamp
-			f.baseFee = m.BaseFee
-			f.gasLimit = m.GasLimit
-			currentBlock = m.BlockNumber
-			currentTimestamp = m.Timestamp
-			currentBaseFee = m.BaseFee
-			currentGasLimit = m.GasLimit
-			for _, entry := range m.Entries {
-				key, value := entry[0], entry[1]
-				if strings.HasPrefix(key, "s:") {
-					parts := strings.SplitN(key, ":", 3)
-					if len(parts) == 3 {
-						addr := common.HexToAddress(parts[1])
-						slot := common.HexToHash(parts[2])
-						val := common.HexToHash(value)
-						state.SetStorageSlot(addr, slot, val)
-						if f.onSlotChange != nil {
-							f.onSlotChange(addr, slot)
-						}
-					}
-				}
-			}
-			if f.onBlock != nil {
-				f.onBlock(m.Timestamp)
-			}
-			// Notify JS of new block via stdout
-			note, _ := json.Marshal(map[string]interface{}{
-				"type": "block", "blockNumber": m.BlockNumber, "timestamp": m.Timestamp,
-			})
-			writeStdout(note)
-			continue
-		}
-
-		// JSON-RPC response
-		if m.ID > 0 {
-			f.mu.Lock()
-			ch, ok := f.pending[m.ID]
-			if ok {
-				delete(f.pending, m.ID)
-			}
-			f.mu.Unlock()
-			if ok {
-				if m.Error != nil && string(m.Error) != "null" {
-					ch <- m.Error
-				} else {
-					ch <- m.Result
-				}
-			}
-		}
-	}
-}
-
-func (f *wsFetcher) call(method string, params interface{}) (json.RawMessage, error) {
-	f.mu.Lock()
-	f.nextID++
-	id := f.nextID
-	ch := make(chan json.RawMessage, 1)
-	f.pending[id] = ch
-
-	req := jsonRPCRequest{
-		JSONRPC: "2.0",
-		ID:      id,
-		Method:  method,
-		Params:  params,
-	}
-	data, _ := json.Marshal(req)
-	err := f.conn.WriteMessage(websocket.TextMessage, data)
-	f.mu.Unlock()
-
-	if err != nil {
-		return nil, err
-	}
-
-	select {
-	case result := <-ch:
-		return result, nil
-	case <-time.After(30 * time.Second):
-		return nil, fmt.Errorf("timeout waiting for %s response", method)
-	}
-}
-
-type valueResult struct {
-	Value string `json:"value"`
-}
-
-func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	f.cacheMisses++
-	params := map[string]interface{}{
-		"address":     addr.Hex(),
-		"slot":        slot.Hex(),
-		"blockNumber": f.block,
-	}
-	result, err := f.call("state_getStorageAt", params)
-	if err != nil {
-		return common.Hash{}, fmt.Errorf("[native] FetchStorage: %w", err)
-	}
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil {
-		return common.Hash{}, fmt.Errorf("[native] FetchStorage parse: %w", err)
-	}
-	return common.HexToHash(vr.Value), nil
-}
-
-func (f *wsFetcher) FetchBalance(addr common.Address) (*uint256.Int, error) {
-	f.cacheMisses++
-	params := map[string]interface{}{
-		"address":     addr.Hex(),
-		"blockNumber": f.block,
-	}
-	result, err := f.call("state_getBalance", params)
-	if err != nil {
-		return nil, fmt.Errorf("[native] FetchBalance: %w", err)
-	}
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil {
-		return nil, fmt.Errorf("[native] FetchBalance parse: %w", err)
-	}
-	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
-	if !ok {
-		return nil, fmt.Errorf("[native] FetchBalance bad hex: %s", vr.Value)
-	}
-	val, _ := uint256.FromBig(bi)
-	return val, nil
-}
-
-func (f *wsFetcher) FetchNonce(addr common.Address) (uint64, error) {
-	f.cacheMisses++
-	params := map[string]interface{}{
-		"address":     addr.Hex(),
-		"blockNumber": f.block,
-	}
-	result, err := f.call("state_getNonce", params)
-	if err != nil {
-		return 0, err
-	}
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil {
-		return 0, err
-	}
-	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
-	if !ok {
-		return 0, fmt.Errorf("bad hex: %s", vr.Value)
-	}
-	return bi.Uint64(), nil
-}
-
-func (f *wsFetcher) FetchCode(addr common.Address) ([]byte, error) {
-	f.cacheMisses++
-	params := map[string]interface{}{
-		"address":     addr.Hex(),
-		"blockNumber": f.block,
-	}
-	result, err := f.call("state_getCode", params)
-	if err != nil {
-		return nil, err
-	}
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil {
-		return nil, err
-	}
-	if vr.Value == "" || vr.Value == "0x" {
-		return nil, nil
-	}
-	code, _ := hex.DecodeString(strings.TrimPrefix(vr.Value, "0x"))
-	return code, nil
-}
-
-func (f *wsFetcher) FetchBlockHash(num uint64) (common.Hash, error) {
-	return common.Hash{}, nil
-}
 
 // ─── Stdin/stdout JSON-RPC ─────────────────────────────────────────
 
@@ -467,13 +130,7 @@ func applyOverrides(base *statedb.StateDB, raw map[string]stateOverrideEntry) *s
 	return applyParsedOverrides(base, parseOverrides(raw))
 }
 
-var (
-	currentBlock     uint64
-	currentTimestamp  uint64
-	currentBaseFee   uint64
-	currentGasLimit  uint64
-	stdoutMu         sync.Mutex
-)
+var stdoutMu sync.Mutex
 
 // writeStdout writes a line to stdout, safe for concurrent use from readLoop and main.
 func writeStdout(data []byte) {
@@ -510,20 +167,17 @@ func main() {
 	)
 	fmt.Fprintf(os.Stderr, "[native] pre-computed: %d pools, %d overrides\n", len(embeddedPools), len(embeddedOverrides))
 
-	var fetcher *wsFetcher
+	var ls *statedb.LiveState
 	var state *statedb.StateDB
 
 	if stateServerURL != "" {
 		var err error
-		fetcher, state, err = newWSFetcher(stateServerURL)
+		ls, err = statedb.Connect(stateServerURL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to connect to state server: %v\n", err)
 			os.Exit(1)
 		}
-		currentBlock = fetcher.block
-		currentTimestamp = fetcher.timestamp
-		currentBaseFee = fetcher.baseFee
-		currentGasLimit = fetcher.gasLimit
+		state = ls.State()
 		fmt.Fprintf(os.Stderr, "[native] connected to state server %s\n", stateServerURL)
 	}
 
@@ -543,14 +197,28 @@ func main() {
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
-	pm.SetBlockTimestamp(currentTimestamp)
-	if fetcher != nil {
-		fetcher.onSlotChange = func(addr common.Address, slot common.Hash) {
-			pm.InvalidateBySlot(addr, slot)
-		}
-		fetcher.onBlock = func(timestamp uint64) {
-			pm.SetBlockTimestamp(timestamp)
-		}
+	if ls != nil {
+		pm.SetBlockTimestamp(ls.Timestamp())
+		ls.SetOnBlock(func(liveState *statedb.LiveState, entries [][2]string) {
+			// Invalidate pools whose storage changed
+			for _, entry := range entries {
+				key := entry[0]
+				if strings.HasPrefix(key, "s:") {
+					parts := strings.SplitN(key, ":", 3)
+					if len(parts) == 3 {
+						addr := common.HexToAddress(parts[1])
+						slot := common.HexToHash(parts[2])
+						pm.InvalidateBySlot(addr, slot)
+					}
+				}
+			}
+			pm.SetBlockTimestamp(liveState.Timestamp())
+			// Notify JS of new block via stdout
+			note, _ := json.Marshal(map[string]interface{}{
+				"type": "block", "blockNumber": liveState.Block(), "timestamp": liveState.Timestamp(),
+			})
+			writeStdout(note)
+		})
 	}
 	fmt.Fprintf(os.Stderr, "[native] pool manager ready for %d pools\n", len(embeddedPools))
 
@@ -567,6 +235,11 @@ func main() {
 		if err := json.Unmarshal(line, &req); err != nil {
 			fmt.Fprintf(os.Stderr, "invalid json: %v\n", err)
 			continue
+		}
+
+		// Lock for reading state during the entire request
+		if ls != nil {
+			ls.RLock()
 		}
 
 		var resp response
@@ -592,12 +265,9 @@ func main() {
 			}
 
 			execState := applyOverrides(state, params.StateOverrides)
-			cfg := statedb.EVMConfig{
-				BlockNumber: currentBlock,
-				Timestamp:   currentTimestamp,
-				ChainID:     43114,
-				BaseFee:     currentBaseFee,
-				GasLimit:    currentGasLimit,
+			var cfg statedb.EVMConfig
+			if ls != nil {
+				cfg = ls.EVMConfig()
 			}
 
 			ret, gasUsed, evmErr := statedb.ExecuteCall(execState, cfg, from, to, data)
@@ -619,17 +289,9 @@ func main() {
 			}
 
 			parsed := parseOverrides(params.StateOverrides)
-			cfg := statedb.EVMConfig{
-				BlockNumber: currentBlock,
-				Timestamp:   currentTimestamp,
-				ChainID:     43114,
-				BaseFee:     currentBaseFee,
-				GasLimit:    currentGasLimit,
-			}
-
-			missesBefore := int64(0)
-			if fetcher != nil {
-				missesBefore = fetcher.cacheMisses
+			var cfg statedb.EVMConfig
+			if ls != nil {
+				cfg = ls.EVMConfig()
 			}
 
 			// Apply overrides once — EVM calls use CallState overlay on top
@@ -673,13 +335,8 @@ func main() {
 				}
 			}
 
-			missesAfter := int64(0)
-			if fetcher != nil {
-				missesAfter = fetcher.cacheMisses
-			}
 			resp.Result = map[string]interface{}{
-				"results":     results,
-				"cacheMisses": missesAfter - missesBefore,
+				"results": results,
 			}
 
 		case "find_route":
@@ -704,12 +361,10 @@ func main() {
 			}
 			amountIn, _ := uint256.FromBig(amtBig)
 
-			cfg := statedb.EVMConfig{
-				BlockNumber: currentBlock,
-				Timestamp:   currentTimestamp,
-				ChainID:     43114,
-				BaseFee:     currentBaseFee,
-				GasLimit:    currentGasLimit,
+			var cfg statedb.EVMConfig
+			if ls != nil {
+				cfg = ls.EVMConfig()
+				pm.SetBlockTimestamp(ls.Timestamp())
 			}
 
 			maxHops := params.MaxHops
@@ -717,7 +372,6 @@ func main() {
 				maxHops = 4
 			}
 
-			pm.SetBlockTimestamp(currentTimestamp)
 			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
@@ -731,6 +385,10 @@ func main() {
 
 		out, _ := json.Marshal(resp)
 		writeStdout(out)
+
+		if ls != nil {
+			ls.RUnlock()
+		}
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {

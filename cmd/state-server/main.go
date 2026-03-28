@@ -387,6 +387,22 @@ func (c *stateCache) applyDiff(diff map[string]string) int {
 	return applied
 }
 
+// applyDiffAndUpdateBlock applies a diff and updates block metadata under a single lock.
+func (c *stateCache) applyDiffAndUpdateBlock(diff map[string]string, block int, timestamp, baseFee, gasLimit uint64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	applied := 0
+	for k, v := range diff {
+		c.values[k] = v
+		applied++
+	}
+	c.blockNumber = block
+	c.timestamp = timestamp
+	c.baseFee = baseFee
+	c.gasLimit = gasLimit
+	return applied
+}
+
 func (c *stateCache) dump() (int, uint64, uint64, uint64, [][2]string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -884,10 +900,14 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
-		// Cache the result if block hasn't changed since we snapped it
+		// Cache the result if block hasn't changed since we snapped it.
+		// Hold blockMu.RLock during the check+set to prevent a block update
+		// from racing between the check and the write (TOCTOU).
+		s.blockMu.RLock()
 		if s.cache.getBlockNumber() == currentBlock {
 			s.cache.set(key, value)
 		}
+		s.blockMu.RUnlock()
 
 		resp, _ := json.Marshal(jsonRPCResponse{
 			JSONRPC: "2.0", ID: req.ID,
@@ -1027,13 +1047,7 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 			// Hold blockMu.Lock during diff apply + metadata update + broadcast
 			s.blockMu.Lock()
 
-			applied := s.cache.applyDiff(dr.diff)
-			s.cache.mu.Lock()
-			s.cache.blockNumber = block
-			s.cache.timestamp = ir.info.Timestamp
-			s.cache.baseFee = ir.info.BaseFee
-			s.cache.gasLimit = ir.info.GasLimit
-			s.cache.mu.Unlock()
+			applied := s.cache.applyDiffAndUpdateBlock(dr.diff, block, ir.info.Timestamp, ir.info.BaseFee, ir.info.GasLimit)
 
 			// Broadcast ALL changed keys to all clients
 			if len(dr.diff) > 0 && s.clients.count() > 0 {

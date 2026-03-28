@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-03-28 — Shared LiveState: unify state management across all consumers
+
+### New: `statedb/transport_ws.go` — shared WebSocket transport
+- Extracts the duplicated call()/readLoop pattern from 4 consumers into one component
+- Multiplexes concurrent Call() requests over a single WS connection
+- Routes JSON-RPC responses to pending channels, push messages to consumer callback
+
+### New: `statedb/livestate.go` — shared state client with block-level concurrency
+- Two-universe concurrency model: block updates (exclusive) vs quoting (shared, N goroutines)
+- `sync.RWMutex` separates the universes — in-flight quotes finish before block update proceeds
+- `Connect(url)` works for both `/live` and `/debug/<block>` — frozen blocks just never send diffs
+- Implements `Fetcher` interface — routes all state fetches through the WS transport
+- `SetOnBlock(fn)` callback passes raw entries for consumer-side pool invalidation
+
+### StateDB: `sync.Map` for accounts + storage
+- All writes are idempotent within a block (same slot = same value), so concurrent fetches are safe
+- Example: Balancer vault — multiple pools share one contract's storage, parallel quoting is safe
+- Removed `fetchMu` — `sync.Map` makes it redundant
+- Added `getCodeWithErr` for on-demand code fetch with error propagation
+
+### CallState: consistent error propagation
+- `GetCode`/`GetNonce`/`GetCodeHash`/`GetCodeSize` now propagate errors via `lastErr`
+- Previously these silently swallowed errors while `GetState`/`GetBalance` propagated them
+
+### Consumer rewrites (deleted ~900 lines of duplicated wsFetcher code)
+- `cmd/arb`: uses `LiveState.SetOnBlock` + `RLock/RUnlock` around scanner pipeline
+- `cmd/benchmark`: uses `Connect()` for frozen debug endpoints
+- `cmd/native`: wraps each stdin request with `RLock/RUnlock`
+- `cmd/discover`: uses `Connect()` for frozen debug endpoints
+
+### State server fixes
+- TOCTOU fix: hold `blockMu.RLock` during cache set after upstream fetch
+- Double lock merge: `applyDiffAndUpdateBlock` combines diff + metadata under one lock
+
+### Verified
+- Benchmark: 93.5% correct (187/200 match) — unchanged
+- Arb bot: processes blocks with 20/50 pools, zero data races (`-race` flag)
+
 ## 2026-03-28 — Fix cold boot: on-demand code fetch + state server request handling
 
 ### Bugs fixed

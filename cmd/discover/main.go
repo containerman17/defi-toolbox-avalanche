@@ -11,14 +11,10 @@
 package main
 
 import (
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"defi-toolbox/formulas"
@@ -28,7 +24,6 @@ import (
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
-	"github.com/gorilla/websocket"
 	"github.com/holiman/uint256"
 )
 
@@ -62,201 +57,6 @@ var (
 	DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 )
 
-// ─── State server connection ───
-
-type wsFetcher struct {
-	conn    *websocket.Conn
-	mu      sync.Mutex
-	nextID  int
-	pending map[int]chan json.RawMessage
-	block   uint64
-}
-
-type stateServerMessage struct {
-	Type        string          `json:"type,omitempty"`
-	BlockNumber uint64          `json:"blockNumber,omitempty"`
-	Timestamp   uint64          `json:"timestamp,omitempty"`
-	BaseFee     uint64          `json:"baseFee,omitempty"`
-	GasLimit    uint64          `json:"gasLimit,omitempty"`
-	Entries     [][2]string     `json:"entries,omitempty"`
-	JSONRPC     string          `json:"jsonrpc,omitempty"`
-	ID          int             `json:"id,omitempty"`
-	Result      json.RawMessage `json:"result,omitempty"`
-	Error       json.RawMessage `json:"error,omitempty"`
-}
-
-type valueResult struct {
-	Value string `json:"value"`
-}
-
-func connectStateServer(url string) (*statedb.StateDB, statedb.EVMConfig, error) {
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
-	if err != nil {
-		return nil, statedb.EVMConfig{}, fmt.Errorf("ws connect: %w", err)
-	}
-
-	f := &wsFetcher{conn: conn, pending: make(map[int]chan json.RawMessage)}
-	state := statedb.NewStateDB(f)
-
-	_, msg, err := conn.ReadMessage()
-	if err != nil {
-		return nil, statedb.EVMConfig{}, fmt.Errorf("read initial_dump: %w", err)
-	}
-	var dump stateServerMessage
-	if err := json.Unmarshal(msg, &dump); err != nil {
-		return nil, statedb.EVMConfig{}, fmt.Errorf("parse initial_dump: %w", err)
-	}
-	if dump.Type != "initial_dump" {
-		return nil, statedb.EVMConfig{}, fmt.Errorf("expected initial_dump, got %s", dump.Type)
-	}
-
-	storageCount := 0
-	accountData := make(map[string]map[string]string)
-
-	for _, entry := range dump.Entries {
-		key, value := entry[0], entry[1]
-		if strings.HasPrefix(key, "s:") {
-			parts := strings.SplitN(key, ":", 3)
-			if len(parts) == 3 {
-				state.SetStorageSlot(common.HexToAddress(parts[1]), common.HexToHash(parts[2]), common.HexToHash(value))
-				storageCount++
-			}
-		} else if strings.HasPrefix(key, "b:") {
-			addr := key[2:]
-			if accountData[addr] == nil { accountData[addr] = make(map[string]string) }
-			accountData[addr]["balance"] = value
-		} else if strings.HasPrefix(key, "n:") {
-			addr := key[2:]
-			if accountData[addr] == nil { accountData[addr] = make(map[string]string) }
-			accountData[addr]["nonce"] = value
-		} else if strings.HasPrefix(key, "c:") {
-			addr := key[2:]
-			if accountData[addr] == nil { accountData[addr] = make(map[string]string) }
-			accountData[addr]["code"] = value
-		}
-	}
-
-	for addrStr, data := range accountData {
-		addr := common.HexToAddress(addrStr)
-		balance := uint256.NewInt(0)
-		if b, ok := data["balance"]; ok {
-			if bi, ok := new(big.Int).SetString(strings.TrimPrefix(b, "0x"), 16); ok && bi != nil {
-				balance, _ = uint256.FromBig(bi)
-			}
-		}
-		var nonce uint64
-		if n, ok := data["nonce"]; ok {
-			if ni, ok := new(big.Int).SetString(strings.TrimPrefix(n, "0x"), 16); ok && ni != nil {
-				nonce = ni.Uint64()
-			}
-		}
-		var code []byte
-		if c, ok := data["code"]; ok && c != "0x" && c != "" {
-			code, _ = hex.DecodeString(strings.TrimPrefix(c, "0x"))
-		}
-		state.SetAccount(addr, balance, nonce, code)
-	}
-
-	fmt.Fprintf(os.Stderr, "[discover] loaded block %d: %d storage, %d accounts\n",
-		dump.BlockNumber, storageCount, len(accountData))
-
-	go f.readLoop(state)
-
-	cfg := statedb.EVMConfig{
-		BlockNumber: dump.BlockNumber,
-		Timestamp:   dump.Timestamp,
-		ChainID:     43114,
-		BaseFee:     dump.BaseFee,
-		GasLimit:    dump.GasLimit,
-	}
-
-	return state, cfg, nil
-}
-
-func (f *wsFetcher) readLoop(state *statedb.StateDB) {
-	for {
-		_, msg, err := f.conn.ReadMessage()
-		if err != nil { return }
-		var m stateServerMessage
-		if json.Unmarshal(msg, &m) != nil { continue }
-		if m.Type == "block_diff" { continue }
-		if m.ID > 0 {
-			f.mu.Lock()
-			ch, ok := f.pending[m.ID]
-			if ok { delete(f.pending, m.ID) }
-			f.mu.Unlock()
-			if ok {
-				if m.Error != nil && string(m.Error) != "null" { ch <- m.Error } else { ch <- m.Result }
-			}
-		}
-	}
-}
-
-func (f *wsFetcher) call(method string, params interface{}) (json.RawMessage, error) {
-	f.mu.Lock()
-	f.nextID++
-	id := f.nextID
-	ch := make(chan json.RawMessage, 1)
-	f.pending[id] = ch
-	data, _ := json.Marshal(struct {
-		JSONRPC string      `json:"jsonrpc"`
-		ID      int         `json:"id"`
-		Method  string      `json:"method"`
-		Params  interface{} `json:"params"`
-	}{"2.0", id, method, params})
-	err := f.conn.WriteMessage(websocket.TextMessage, data)
-	f.mu.Unlock()
-	if err != nil { return nil, err }
-	select {
-	case result := <-ch: return result, nil
-	case <-time.After(30 * time.Second): return nil, fmt.Errorf("timeout")
-	}
-}
-
-func (f *wsFetcher) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
-	params := map[string]interface{}{"address": addr.Hex(), "slot": slot.Hex(), "blockNumber": f.block}
-	result, err := f.call("state_getStorageAt", params)
-	if err != nil { return common.Hash{}, err }
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil { return common.Hash{}, err }
-	return common.HexToHash(vr.Value), nil
-}
-
-func (f *wsFetcher) FetchBalance(addr common.Address) (*uint256.Int, error) {
-	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
-	result, err := f.call("state_getBalance", params)
-	if err != nil { return nil, err }
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil { return nil, err }
-	bi, ok := new(big.Int).SetString(strings.TrimPrefix(vr.Value, "0x"), 16)
-	if !ok { return nil, fmt.Errorf("bad hex: %s", vr.Value) }
-	val, _ := uint256.FromBig(bi)
-	return val, nil
-}
-
-func (f *wsFetcher) FetchNonce(addr common.Address) (uint64, error) {
-	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
-	result, err := f.call("state_getNonce", params)
-	if err != nil { return 0, err }
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil { return 0, err }
-	n, _ := strconv.ParseUint(strings.TrimPrefix(vr.Value, "0x"), 16, 64)
-	return n, nil
-}
-
-func (f *wsFetcher) FetchCode(addr common.Address) ([]byte, error) {
-	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": f.block}
-	result, err := f.call("state_getCode", params)
-	if err != nil { return nil, err }
-	var vr valueResult
-	if err := json.Unmarshal(result, &vr); err != nil { return nil, err }
-	if vr.Value == "" || vr.Value == "0x" { return nil, nil }
-	code, _ := hex.DecodeString(strings.TrimPrefix(vr.Value, "0x"))
-	return code, nil
-}
-
-func (f *wsFetcher) FetchBlockHash(num uint64) (common.Hash, error) { return common.Hash{}, nil }
-
 func main() {
 	stateServerURL := "ws://localhost:7449/live"
 	poolLimit := 5000
@@ -274,11 +74,13 @@ func main() {
 		}
 	}
 
-	state, cfg, err := connectStateServer(stateServerURL)
+	ls, err := statedb.Connect(stateServerURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to connect: %v\n", err)
 		os.Exit(1)
 	}
+	state := ls.State()
+	cfg := ls.EVMConfig()
 
 	pools := poolcollector.EmbeddedPools(poolLimit)
 	registry := formulas.LoadEmbeddedRegistry()

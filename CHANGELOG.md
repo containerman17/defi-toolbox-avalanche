@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Block broken directions on 3 more pools (28→25 mismatches)
+
+### Pools added to `deadPoolDirs`
+- **0x4110** (Algebra, WAVAX/USDC): block dir=1 — formula exceeds gas limit on-chain
+- **0x668A** (Algebra, WAVAX/USDC): block dir=1 — formula exceeds gas limit on-chain
+- **0x4E03** (BalancerV3, BIFI/waAvaWAVAX): block dir=1 — extreme pool imbalance causes EVM revert
+
 ## 2026-03-28 — Pool-specific dead directions for LFJ V2 (30→28 mismatches)
 
 ### Architecture: `deadPoolDirs` map

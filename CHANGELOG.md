@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Un-blacklist ROCO/WAVAX V3 pool (33→32 mismatches)
+
+### Pool 0x8154 (uniswap_v3, ROCO/WAVAX)
+- Un-blacklisted to formula 2 — V3 construction now succeeds
+- ROCO already in brokenTokens → deadDirQuoter blocks dir=0
+- Dir=1 (WAVAX input) matches EVM correctly
+
 ## 2026-03-28 — Un-blacklist WAVAX/yyAVAX V3 pool (34→33 mismatches)
 
 ### Pool 0xB978 (uniswap_v3, WAVAX/yyAVAX)

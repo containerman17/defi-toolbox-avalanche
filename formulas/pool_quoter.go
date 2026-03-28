@@ -100,6 +100,12 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 	}
 }
 
+// SetReader replaces the storage reader function. Called after state snapshot swaps
+// so the PoolManager reads from the new immutable state.
+func (pm *PoolManager) SetReader(reader StorageReader) {
+	pm.reader = reader
+}
+
 // SetEVMCaller provides an EVM execution function used for calling rate providers
 // in Balancer V3 WITH_RATE token pools. Must be called before Get() for those pools.
 func (pm *PoolManager) SetEVMCaller(fn EVMCaller) {

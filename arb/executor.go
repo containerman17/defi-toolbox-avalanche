@@ -192,6 +192,58 @@ func (e *Executor) CheckAllowance(token common.Address) (*big.Int, error) {
 	return val, nil
 }
 
+// RPCCallResult holds the raw result of an eth_call for cross-checking.
+type RPCCallResult struct {
+	RetData  []byte // raw return data (nil if reverted)
+	Reverted bool
+	ErrMsg   string
+}
+
+// EthCallAtBlock runs eth_call with the given calldata at a specific block.
+// Returns the raw return data for byte-for-byte comparison with local EVM.
+func (e *Executor) EthCallAtBlock(calldata []byte, block uint64) RPCCallResult {
+	calldataHex := "0x" + hex.EncodeToString(calldata)
+	blockHex := fmt.Sprintf("0x%x", block)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []interface{}{
+			map[string]string{
+				"from": e.addr.Hex(),
+				"to":   e.routerAddr.Hex(),
+				"data": calldataHex,
+			},
+			blockHex,
+		},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return RPCCallResult{Reverted: true, ErrMsg: fmt.Sprintf("rpc error: %v", err)}
+	}
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.Unmarshal(resp, &rpcResp)
+
+	if rpcResp.Error != nil {
+		return RPCCallResult{Reverted: true, ErrMsg: rpcResp.Error.Message}
+	}
+	if rpcResp.Result == "" || rpcResp.Result == "0x" {
+		return RPCCallResult{Reverted: true, ErrMsg: "empty result"}
+	}
+
+	retHex := strings.TrimPrefix(rpcResp.Result, "0x")
+	retData, _ := hex.DecodeString(retHex)
+	return RPCCallResult{RetData: retData}
+}
+
 // SimulateViaRPCAtBlock runs swap() as eth_call at a specific block number.
 // Returns (success, description, gasEstimate).
 func (e *Executor) SimulateViaRPCAtBlock(opp *Opportunity, calldata []byte, block uint64) (bool, string, uint64) {

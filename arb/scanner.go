@@ -24,6 +24,18 @@ type Opportunity struct {
 	EVMVerified   bool
 }
 
+// EVMResult holds a single local EVM execution result for cross-checking against RPC.
+type EVMResult struct {
+	Cycle    *Cycle
+	AmountIn *uint256.Int
+	Calldata []byte // exact swap() calldata sent to the EVM
+	RetData  []byte // raw return data from local EVM
+	GasUsed  uint64
+	Block    uint64 // block number the simulation ran at
+	Reverted bool   // true if local EVM reverted
+	ErrMsg   string // error message if reverted
+}
+
 // Scanner implements the 3-phase pipeline: rate screening → formula quoting → EVM verification.
 type Scanner struct {
 	cycles       []Cycle
@@ -101,9 +113,9 @@ func (s *Scanner) OnBlock(
 	dirtyPools []common.Address,
 	evmVerifier *Verifier,
 	gasPrice uint64,
-) *Opportunity {
+) (*Opportunity, []EVMResult) {
 	if len(dirtyPools) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	t0 := time.Now()
@@ -211,51 +223,53 @@ func (s *Scanner) OnBlock(
 
 	phase2Time := time.Since(t1)
 
-	// ── Phase 3: Time-budgeted EVM verification ──────────────────
+	// ── Phase 3: Local EVM verification — top 50 candidates ─────
 	t2 := time.Now()
-	evmBudget := 100 * time.Millisecond
 	var bestOpp *Opportunity
+	var evmResults []EVMResult
 
-	// EVM-verify ALL formula results + all near-misses, sorted by profit descending.
-	// Only filter by profitability at execution time, not verification.
+	// Merge all formula results + near-misses, sorted by profit descending.
+	// Take top 50 regardless of profitability — we're validating EVM precision.
 	evmCandidates := append([]formulaResult{}, results...)
 	evmCandidates = append(evmCandidates, nearMisses...)
 	sort.Slice(evmCandidates, func(i, j int) bool { return evmCandidates[i].profit > evmCandidates[j].profit })
+	if len(evmCandidates) > 50 {
+		evmCandidates = evmCandidates[:50]
+	}
 
 	if evmVerifier != nil && len(evmCandidates) > 0 {
+		evmResults = make([]EVMResult, 0, len(evmCandidates))
 		for _, r := range evmCandidates {
-			if time.Since(t2) > evmBudget {
-				break
-			}
-
 			c := &s.cycles[r.cycleIdx]
-			evmOut, gasUsed, ok := evmVerifier.Verify(c, r.amountIn)
-			if !ok || evmOut == nil {
-				continue
-			}
+			evmR := evmVerifier.VerifyFull(c, r.amountIn)
+			evmResults = append(evmResults, evmR)
 
-			// swap() returns gross amountOut. Profit = out - in - gasCost.
-			gasCost := gasUsed * gasPrice
-			gasCostU := new(uint256.Int).SetUint64(gasCost)
-			totalCost := new(uint256.Int).Add(r.amountIn, gasCostU)
-			var evmProfit float64
-			if evmOut.Cmp(totalCost) > 0 {
-				evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, totalCost))
-			} else {
-				evmProfit = -(float64FromU256(new(uint256.Int).Sub(totalCost, evmOut)))
-			}
-
-			if evmProfit > 0 && (bestOpp == nil || evmProfit > bestOpp.EVMProfit) {
-				bestOpp = &Opportunity{
-					Cycle:         c,
-					SizeBucket:    r.size,
-					AmountIn:      r.amountIn,
-					FormulaOut:    r.amountOut,
-					EVMOut:        evmOut,
-					EVMGasUsed:    gasUsed,
-					FormulaProfit: r.profit,
-					EVMProfit:     evmProfit,
-					EVMVerified:   true,
+			// Track best profitable opportunity for stage 4
+			if !evmR.Reverted && len(evmR.RetData) >= 32 {
+				evmOut := new(uint256.Int).SetBytes(evmR.RetData[len(evmR.RetData)-32:])
+				if !evmOut.IsZero() {
+					gasCost := evmR.GasUsed * gasPrice
+					gasCostU := new(uint256.Int).SetUint64(gasCost)
+					totalCost := new(uint256.Int).Add(r.amountIn, gasCostU)
+					var evmProfit float64
+					if evmOut.Cmp(totalCost) > 0 {
+						evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, totalCost))
+					} else {
+						evmProfit = -(float64FromU256(new(uint256.Int).Sub(totalCost, evmOut)))
+					}
+					if evmProfit > 0 && (bestOpp == nil || evmProfit > bestOpp.EVMProfit) {
+						bestOpp = &Opportunity{
+							Cycle:         c,
+							SizeBucket:    r.size,
+							AmountIn:      r.amountIn,
+							FormulaOut:    r.amountOut,
+							EVMOut:        evmOut,
+							EVMGasUsed:    evmR.GasUsed,
+							FormulaProfit: r.profit,
+							EVMProfit:     evmProfit,
+							EVMVerified:   true,
+						}
+					}
 				}
 			}
 		}
@@ -279,8 +293,8 @@ func (s *Scanner) OnBlock(
 	}
 
 	totalTime := time.Since(t0)
-	fmt.Fprintf(os.Stderr, "[arb] block: %d dirty pools, %d dirty cycles, %d screened, %d formula-profitable, %d near-misses | phase1=%v phase2=%v phase3=%v total=%v\n",
-		len(dirtyPools), len(dirtyCycleSet), len(candidates), len(results), len(nearMisses),
+	fmt.Fprintf(os.Stderr, "[arb] block: %d dirty pools, %d dirty cycles, %d screened, %d formula-profitable, %d near-misses, %d evm-verified | phase1=%v phase2=%v phase3=%v total=%v\n",
+		len(dirtyPools), len(dirtyCycleSet), len(candidates), len(results), len(nearMisses), len(evmResults),
 		phase1Time.Round(time.Microsecond),
 		phase2Time.Round(time.Microsecond),
 		phase3Time.Round(time.Microsecond),
@@ -308,7 +322,7 @@ func (s *Scanner) OnBlock(
 		fmt.Fprintf(os.Stderr, "]\n")
 	}
 
-	return bestOpp
+	return bestOpp, evmResults
 }
 
 func (s *Scanner) sequentialQuote(c *Cycle, amountIn *uint256.Int) *uint256.Int {

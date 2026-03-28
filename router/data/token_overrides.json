@@ -10771,5 +10771,9 @@
     "address": "0xd285c7e41ed96f01d75d68e9f07095f8a3d85b2d",
     "slot": 8,
     "vyper": true
+  },
+  {
+    "address": "0x2cd3cdb3bd68eea0d3be81da707bc0c8743d7335",
+    "slot": 251
   }
 ]

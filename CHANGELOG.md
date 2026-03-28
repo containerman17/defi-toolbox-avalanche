@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Fix YBTC.b/BTC.b Algebra pool + GB/USDT.e (36→34 mismatches)
+
+### Pool 0xf287 (algebra, BTC.b/YBTC.b)
+- Token1 (YBTC.b, BridgedYBTCB) is a standard ERC20Upgradeable with no fee/reflection
+- Missing from token_overrides.json — traced Transfer tx to find _balances at slot 251
+- Added override, EVM can now fund YBTC.b-as-input swaps → mismatch resolved
+
 ## 2026-03-28 — Fix Pangolin GB/USDT.e pool (36→35 mismatches)
 
 ### Pool 0xa0CDD (pangolin_v2, GB/USDT.e)

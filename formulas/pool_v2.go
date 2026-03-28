@@ -12,6 +12,28 @@ type V2Pool struct {
 	reserve0 uint256.Int
 	reserve1 uint256.Int
 	factor   *uint256.Int // fee factor (9970 for 0.3%, 9950 for 0.5%)
+	balance0 uint256.Int  // actual token0 balance of the pool (0 = unknown)
+	balance1 uint256.Int  // actual token1 balance of the pool (0 = unknown)
+}
+
+// SetTokenBalances reads actual token balances via EVM and stores them.
+// If the actual balance is less than the reserve, swaps in that direction
+// will revert on-chain (SafeMath: subtraction overflow), so Quote returns 0.
+func (p *V2Pool) SetTokenBalances(caller EVMCaller, token0, token1 common.Address) {
+	if caller == nil {
+		return
+	}
+	calldata := make([]byte, 36)
+	copy(calldata[:4], balanceOfSelector[:])
+	copy(calldata[16:36], p.addr[:])
+
+	if ret, ok := caller(token0, calldata); ok && len(ret) >= 32 {
+		p.balance0.SetBytes(ret[:32])
+	}
+	if ret, ok := caller(token1, calldata); ok && len(ret) >= 32 {
+		p.balance1.SetBytes(ret[:32])
+	}
+
 }
 
 func newV2Pool(addr common.Address, reader StorageReader) *V2Pool {
@@ -78,13 +100,15 @@ func (p *V2Pool) Address() common.Address {
 }
 
 func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	var reserveIn, reserveOut *uint256.Int
+	var reserveIn, reserveOut, balanceOut *uint256.Int
 	if zeroForOne {
 		reserveIn = &p.reserve0
 		reserveOut = &p.reserve1
+		balanceOut = &p.balance1
 	} else {
 		reserveIn = &p.reserve1
 		reserveOut = &p.reserve0
+		balanceOut = &p.balance0
 	}
 
 	// amountOut = (amountIn * factor * reserveOut) / (reserveIn * 10000 + amountIn * factor)
@@ -106,6 +130,12 @@ func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 
 	var result uint256.Int
 	result.Div(&num, &den)
+
+	// If we know the actual token balance and the output exceeds it,
+	// the on-chain transfer would revert (SafeMath: subtraction overflow).
+	if !balanceOut.IsZero() && result.Gt(balanceOut) {
+		return uint256.Int{}
+	}
 
 	return result
 }

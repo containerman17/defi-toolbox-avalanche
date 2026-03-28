@@ -275,7 +275,12 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		default:
 			p = newV2Pool(pool, trackedReader)
 		}
-		if p != nil { return wrapAndCache(p) }
+		if p != nil {
+			if hasTokens {
+				p.SetTokenBalances(pm.evmCaller, tokens[0], tokens[1])
+			}
+			return wrapAndCache(p)
+		}
 	case FormulaPharaohV1:
 		if p := newPharaohV1Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:

@@ -141,9 +141,21 @@ func Connect(url string) (*LiveState, error) {
 	//
 	// By decoupling via a channel, the readLoop stays free to deliver RPC responses
 	// even while block_diffs queue up waiting for the write lock.
-	pushCh := make(chan []byte, 16)
+	pushCh := make(chan []byte, 256)
 	transport.SetOnMessage(func(msg []byte) {
-		pushCh <- msg
+		select {
+		case pushCh <- msg:
+		default:
+			// Channel full — drop the oldest and enqueue the new one.
+			// This prevents the readLoop from blocking (which would deadlock
+			// RPC response delivery). The block_diff processor will catch up
+			// via subsequent diffs.
+			select {
+			case <-pushCh:
+			default:
+			}
+			pushCh <- msg
+		}
 	})
 	go func() {
 		for msg := range pushCh {

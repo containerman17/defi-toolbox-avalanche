@@ -278,6 +278,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		if p != nil {
 			if hasTokens {
 				p.SetTokenBalances(pm.evmCaller, tokens[0], tokens[1])
+				p.SetDeadDirs(tokens[0], tokens[1])
 			}
 			return wrapAndCache(p)
 		}

@@ -5,6 +5,12 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// brokenTokens lists tokens whose transfer() always reverts due to corrupted
+// internal state (e.g. broken reflection accounting).
+var brokenTokens = map[common.Address]bool{
+	common.HexToAddress("0x704eae6d452ca63ce479c59727177c5f3ba0d90c"): true, // EVDC: SafeMath overflow in reflection _transfer
+}
+
 // V2Pool is a pre-loaded V2 constant product pool.
 // Construction reads slot 8 once. Quote is pure math.
 type V2Pool struct {
@@ -14,6 +20,18 @@ type V2Pool struct {
 	factor   *uint256.Int // fee factor (9970 for 0.3%, 9950 for 0.5%)
 	balance0 uint256.Int  // actual token0 balance of the pool (0 = unknown)
 	balance1 uint256.Int  // actual token1 balance of the pool (0 = unknown)
+	deadDir0 bool         // true = zeroForOne always reverts on-chain
+	deadDir1 bool         // true = !zeroForOne always reverts on-chain
+}
+
+// SetDeadDirs marks directions where a broken input token causes reverts.
+func (p *V2Pool) SetDeadDirs(token0, token1 common.Address) {
+	if brokenTokens[token0] {
+		p.deadDir0 = true // selling token0 reverts
+	}
+	if brokenTokens[token1] {
+		p.deadDir1 = true // selling token1 reverts
+	}
 }
 
 // SetTokenBalances reads actual token balances via EVM and stores them.
@@ -100,6 +118,13 @@ func (p *V2Pool) Address() common.Address {
 }
 
 func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+	if zeroForOne && p.deadDir0 {
+		return uint256.Int{}
+	}
+	if !zeroForOne && p.deadDir1 {
+		return uint256.Int{}
+	}
+
 	var reserveIn, reserveOut, balanceOut *uint256.Int
 	if zeroForOne {
 		reserveIn = &p.reserve0

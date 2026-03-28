@@ -192,11 +192,120 @@ func (e *Executor) CheckAllowance(token common.Address) (*big.Int, error) {
 	return val, nil
 }
 
+// SimulateViaRPC runs swap() as eth_call on the local node (stage 3).
+// On success, updates opp.EVMGasUsed with the estimated gas.
+// Returns nil if the call succeeds, or an error describing the revert.
+func (e *Executor) SimulateViaRPC(opp *Opportunity) error {
+	calldata := EncodeSwapCalldata(opp.Cycle, e.pt, e.hub, opp.AmountIn)
+	calldataHex := "0x" + hex.EncodeToString(calldata)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []interface{}{
+			map[string]string{
+				"from": e.addr.Hex(),
+				"to":   e.routerAddr.Hex(),
+				"data": calldataHex,
+			},
+			"latest",
+		},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return fmt.Errorf("rpc error: %w", err)
+	}
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+			Data    string `json:"data"`
+		} `json:"error"`
+	}
+	json.Unmarshal(resp, &rpcResp)
+
+	if rpcResp.Error != nil {
+		return fmt.Errorf("stage4 revert: %s", rpcResp.Error.Message)
+	}
+	if rpcResp.Result == "" || rpcResp.Result == "0x" {
+		return fmt.Errorf("stage3: empty result")
+	}
+
+	// Get gas estimate via eth_estimateGas
+	gasReqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_estimateGas",
+		"params": []interface{}{
+			map[string]string{
+				"from": e.addr.Hex(),
+				"to":   e.routerAddr.Hex(),
+				"data": calldataHex,
+			},
+			"latest",
+		},
+	})
+	gasResp, err := e.rpcCall(gasReqBody)
+	if err == nil {
+		var gasRpcResp struct {
+			Result string `json:"result"`
+		}
+		if json.Unmarshal(gasResp, &gasRpcResp) == nil && gasRpcResp.Result != "" {
+			gas := new(big.Int)
+			gas.SetString(strings.TrimPrefix(gasRpcResp.Result, "0x"), 16)
+			opp.EVMGasUsed = gas.Uint64()
+		}
+	}
+
+	return nil
+}
+
+// SimulateViaRPCWithGas runs swap() as eth_call and returns the gas used.
+func (e *Executor) SimulateViaRPCWithGas(opp *Opportunity) (uint64, error) {
+	calldata := EncodeSwapCalldata(opp.Cycle, e.pt, e.hub, opp.AmountIn)
+	calldataHex := "0x" + hex.EncodeToString(calldata)
+
+	reqBody, _ := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_estimateGas",
+		"params": []interface{}{
+			map[string]string{
+				"from": e.addr.Hex(),
+				"to":   e.routerAddr.Hex(),
+				"data": calldataHex,
+			},
+			"latest",
+		},
+	})
+
+	resp, err := e.rpcCall(reqBody)
+	if err != nil {
+		return 0, fmt.Errorf("rpc error: %w", err)
+	}
+
+	var rpcResp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	json.Unmarshal(resp, &rpcResp)
+
+	if rpcResp.Error != nil {
+		return 0, fmt.Errorf("stage4 revert: %s", rpcResp.Error.Message)
+	}
+
+	gas := new(big.Int)
+	gas.SetString(strings.TrimPrefix(rpcResp.Result, "0x"), 16)
+	return gas.Uint64(), nil
+}
+
 // Execute builds, signs, and sends an arb transaction for a verified opportunity.
 func (e *Executor) Execute(opp *Opportunity, baseFee uint64) (common.Hash, error) {
-	if !opp.EVMVerified {
-		return common.Hash{}, fmt.Errorf("opportunity not EVM-verified")
-	}
 
 	calldata := EncodeSwapCalldata(opp.Cycle, e.pt, e.hub, opp.AmountIn)
 

@@ -18,7 +18,6 @@ import (
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
-	"github.com/ava-labs/libevm/crypto"
 	"github.com/gorilla/websocket"
 	"github.com/holiman/uint256"
 )
@@ -460,17 +459,6 @@ func main() {
 			balF := new(big.Float).Quo(new(big.Float).SetInt(wavaxBal), new(big.Float).SetFloat64(1e18))
 			fmt.Fprintf(os.Stderr, "[arb] WAVAX balance: %s\n", balF.Text('f', 6))
 
-			// Seed wallet's WAVAX balance slot into local state (real value, not override)
-			walletAddr := executor.Address()
-			var balKey [64]byte
-			copy(balKey[12:32], walletAddr[:])
-			balKey[63] = 3 // WAVAX balanceOf mapping slot
-			balSlot := crypto.Keccak256Hash(balKey[:])
-			balU, _ := uint256.FromBig(wavaxBal)
-			state.SetStorageSlot(WAVAX, balSlot, common.Hash(balU.Bytes32()))
-			// Verify readback
-			readback := state.GetState(WAVAX, balSlot)
-			fmt.Fprintf(os.Stderr, "[arb] seeded WAVAX balance slot %s readback=%s seeded=%s\n", balSlot.Hex()[:14], readback.Hex(), common.Hash(balU.Bytes32()).Hex())
 		}
 		// Also show native AVAX (for gas)
 		nativeBal, err := executor.FetchBalance()
@@ -483,19 +471,7 @@ func main() {
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[arb] WARNING: could not check allowance: %v\n", err)
 		} else {
-			// Seed allowance slot into local state
-			walletAddr := executor.Address()
-			var innerKey [64]byte
-			copy(innerKey[12:32], walletAddr[:])
-			innerKey[63] = 4 // WAVAX allowance mapping slot
-			innerHash := crypto.Keccak256Hash(innerKey[:])
-			var outerKey [64]byte
-			copy(outerKey[12:32], router.DeployedRouter[:])
-			copy(outerKey[32:64], innerHash[:])
-			allowSlot := crypto.Keccak256Hash(outerKey[:])
-			allowU, _ := uint256.FromBig(allowance)
-			state.SetStorageSlot(WAVAX, allowSlot, common.Hash(allowU.Bytes32()))
-			fmt.Fprintf(os.Stderr, "[arb] seeded WAVAX allowance slot %s\n", allowSlot.Hex()[:14])
+			fmt.Fprintf(os.Stderr, "[arb] WAVAX allowance: %s\n", allowance.String())
 
 			// Need at least 1000 WAVAX allowance to be useful
 			minAllowance := new(big.Int).Mul(big.NewInt(1000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
@@ -588,44 +564,22 @@ func main() {
 			continue
 		}
 
-		cfg := statedb.EVMConfig{
-			BlockNumber: bi.block,
-			Timestamp:   bi.timestamp,
-			ChainID:     43114,
-			BaseFee:     bi.baseFee,
-			GasLimit:    bi.gasLimit,
-		}
-
-		caller := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
-		if executor != nil {
-			caller = executor.Address()
-		}
-		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX)
-		verifier.SetVerbose(true)
-
-		opp := scanner.OnBlock(dp, verifier, bi.baseFee)
+		// Stages 1+2: rate screening + formula quoting (no EVM)
+		opp := scanner.OnBlock(dp, nil, bi.baseFee)
 
 		fmt.Fprintf(os.Stderr, "[arb] block=%d dirty=%d | %s\n",
 			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
 
-		if opp != nil && opp.EVMVerified && opp.EVMProfit > 0 {
-			poolAddrs := opp.Cycle.ExpandPoolAddrs(pt)
-			out, _ := json.Marshal(map[string]interface{}{
-				"type":          "opportunity",
-				"block":         bi.block,
-				"hops":          opp.Cycle.Hops,
-				"amountIn":      opp.AmountIn.Hex(),
-				"formulaOut":    opp.FormulaOut.Hex(),
-				"evmOut":        opp.EVMOut.Hex(),
-				"evmGasUsed":    opp.EVMGasUsed,
-				"evmProfitWei":  fmt.Sprintf("%.0f", opp.EVMProfit),
-				"evmProfitAvax": opp.EVMProfit / 1e18,
-				"pools":         poolsHex(poolAddrs),
-			})
-			fmt.Println(string(out))
-
+		if opp != nil && opp.FormulaProfit > 0 {
 			// Execute if live mode
 			if executor != nil {
+				// Stage 3: verify via eth_call on local node (exact same calldata as on-chain)
+				if err := executor.SimulateViaRPC(opp); err != nil {
+					fmt.Fprintf(os.Stderr, "[arb] stage3-rpc FAILED: %v — skipping\n", err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "[arb] stage3-rpc PASSED — sending tx\n")
+
 				txHash, err := executor.Execute(opp, bi.baseFee)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "[arb] exec error: %v\n", err)
@@ -640,8 +594,8 @@ func main() {
 						"profit": opp.EVMProfit / 1e18,
 					})
 					fmt.Println(string(execOut))
-					// Exit after first trade
-					fmt.Fprintf(os.Stderr, "[arb] exiting after first trade\n")
+					// Exit after first trade to check receipt
+					fmt.Fprintf(os.Stderr, "[arb] exiting after first trade — check receipt\n")
 					os.Exit(0)
 				}
 			}

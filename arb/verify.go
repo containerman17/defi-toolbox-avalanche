@@ -5,8 +5,6 @@ import (
 	"math/big"
 	"os"
 
-	pf "defi-toolbox/pathfinder"
-	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
@@ -28,8 +26,8 @@ type Verifier struct {
 	caller     common.Address
 	evmCtx     *statedb.CachedContext
 	pt         *PoolTable
-	hub        common.Address
-	verbose    bool
+	hub     common.Address
+	verbose bool
 }
 
 // SetVerbose enables detailed logging of each EVM verification attempt.
@@ -57,18 +55,10 @@ func NewVerifier(
 // Verify executes a full multi-hop cycle through the HayabusaRouter via EVM.
 // Returns (amountOut, gasUsed, success).
 func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64, bool) {
-	calldata := encodeMultiHopSwap(c, v.pt, v.hub, amountIn)
-
-	// Use executeSwap with router balance override (matches the working pathfinder pattern).
-	// Override just the router's hub token balance to amountIn.
-	po := router.BuildSingleTokenOverride(v.routerAddr, v.hub, amountIn)
-	var overrides []pf.ParsedOverride
-	if po != nil {
-		overrides = []pf.ParsedOverride{*po}
-	}
-	base := pf.ApplyOverridesFlat(v.state, overrides)
+	// Stage 3: exact same swap() calldata as stage 4 and on-chain. No overrides.
+	calldata := EncodeSwapCalldata(c, v.pt, v.hub, amountIn)
 	from := v.caller
-	cs := statedb.NewCallState(base)
+	cs := statedb.NewCallState(v.state)
 
 	ret, gasUsed, err := v.evmCtx.ExecuteWithCallState(cs, from, v.routerAddr, calldata)
 

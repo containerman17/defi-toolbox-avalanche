@@ -341,20 +341,17 @@ contract HayabusaRouter {
         bytes[] calldata extraDatas,
         uint256 minOutput
     ) external payable returns (uint256) {
-        // Pull input token from caller
         address tokenIn = tokens[0];
+        address tokenOut = tokens[pools.length * 2 - 1];
         uint256 totalIn = amountsIn[0];
         if (totalIn == 0) revert("swap: amountsIn[0] must be nonzero");
+
         IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
+        executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
 
-        // Execute
-        uint256 amountOut = executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
-
-        // Check minimum output
+        // Transfer all tokenOut held by router to caller.
+        uint256 amountOut = IERC20(tokenOut).balanceOf(address(this));
         if (amountOut < minOutput) revert("swap: insufficient output");
-
-        // Send output to caller
-        address tokenOut = tokens[pools.length * 2 - 1];
         IERC20(tokenOut).transfer(msg.sender, amountOut);
         return amountOut;
     }

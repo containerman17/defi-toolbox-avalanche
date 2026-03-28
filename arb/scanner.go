@@ -234,15 +234,15 @@ func (s *Scanner) OnBlock(
 				continue
 			}
 
-			// executeSwap returns balanceOf delta (net profit before gas).
-			// Subtract gas cost to get real profit.
+			// swap() returns gross amountOut. Profit = out - in - gasCost.
 			gasCost := gasUsed * gasPrice
 			gasCostU := new(uint256.Int).SetUint64(gasCost)
+			totalCost := new(uint256.Int).Add(r.amountIn, gasCostU)
 			var evmProfit float64
-			if evmOut.Cmp(gasCostU) > 0 {
-				evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, gasCostU))
+			if evmOut.Cmp(totalCost) > 0 {
+				evmProfit = float64FromU256(new(uint256.Int).Sub(evmOut, totalCost))
 			} else {
-				evmProfit = -(float64FromU256(new(uint256.Int).Sub(gasCostU, evmOut)))
+				evmProfit = -(float64FromU256(new(uint256.Int).Sub(totalCost, evmOut)))
 			}
 
 			if evmProfit > 0 && (bestOpp == nil || evmProfit > bestOpp.EVMProfit) {

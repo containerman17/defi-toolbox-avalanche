@@ -4,6 +4,7 @@ import (
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/core/vm"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/ava-labs/libevm/libevm/stateconf"
 	"github.com/ava-labs/libevm/params"
 	"github.com/holiman/uint256"
@@ -241,26 +242,40 @@ func (s *CallState) AddBalance(addr common.Address, amount *uint256.Int) {
 
 func (s *CallState) CreateAccount(addr common.Address) {}
 
-// ─── Code — delegate to base, zero per-call cost ───────────────────
+// ─── Code — delegate to base with error propagation ─────────────────
 
 func (s *CallState) GetCodeHash(addr common.Address) common.Hash {
-	return s.base.GetCodeHash(addr)
+	code := s.GetCode(addr)
+	if len(code) == 0 {
+		return common.Hash{}
+	}
+	return crypto.Keccak256Hash(code)
 }
 
 func (s *CallState) GetCode(addr common.Address) []byte {
-	return s.base.GetCode(addr)
+	code, err := s.base.getCodeWithErr(addr)
+	if err != nil {
+		s.lastErr = err
+		return nil
+	}
+	return code
 }
 
 func (s *CallState) SetCode(addr common.Address, code []byte) {}
 
 func (s *CallState) GetCodeSize(addr common.Address) int {
-	return s.base.GetCodeSize(addr)
+	return len(s.GetCode(addr))
 }
 
-// ─── Nonce — delegate to base ───────────────────────────────────────
+// ─── Nonce — delegate to base with error propagation ────────────────
 
 func (s *CallState) GetNonce(addr common.Address) uint64 {
-	return s.base.GetNonce(addr)
+	a, err := s.base.getOrFetchWithErr(addr)
+	if err != nil {
+		s.lastErr = err
+		return 0
+	}
+	return a.nonce
 }
 
 func (s *CallState) SetNonce(addr common.Address, n uint64) {}

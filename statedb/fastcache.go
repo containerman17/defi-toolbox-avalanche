@@ -21,11 +21,15 @@ type FastCache struct {
 // BuildFastCache creates a FastCache from a StateDB's current storage.
 func BuildFastCache(s *StateDB) *FastCache {
 	fc := &FastCache{storage: make(map[StorageKey]common.Hash)}
-	for addr, acct := range s.accounts {
-		for slot, val := range acct.storage {
-			fc.storage[MakeStorageKey(addr, slot)] = val
-		}
-	}
+	s.accounts.Range(func(key, value any) bool {
+		addr := key.(common.Address)
+		acct := value.(*account)
+		acct.storage.Range(func(k, v any) bool {
+			fc.storage[MakeStorageKey(addr, k.(common.Hash))] = v.(common.Hash)
+			return true
+		})
+		return true
+	})
 	return fc
 }
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Blacklist empty Pharaoh V3 pool (31→30 mismatches)
+
+### Pool 0x71bd (pharaoh_v3, BTC.b/USDC)
+- All storage slots 0-20 are zero at reference block — pool has no state
+- V3 formula incorrectly returned nonzero from empty pool (bug in empty V3Pool fallback)
+- Blacklisted to -1 to prevent formula returning garbage
+
 ## 2026-03-28 — Fix CDK/WAVAX LFJ V2 pool (32→31 mismatches)
 
 ### Pool 0x3315 (lfj_v2, CDK/WAVAX)

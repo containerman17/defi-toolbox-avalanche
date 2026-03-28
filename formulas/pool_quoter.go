@@ -249,12 +249,21 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		registerSlots()
 		// Wrap with dead direction check for broken tokens (generic, all pool types)
+		dead0, dead1 := false, false
 		if hasTokens {
-			dead0 := brokenTokens[tokens[0]]
-			dead1 := brokenTokens[tokens[1]]
-			if dead0 || dead1 {
-				inner = &deadDirQuoter{inner: inner, deadDir0: dead0, deadDir1: dead1}
+			dead0 = brokenTokens[tokens[0]]
+			dead1 = brokenTokens[tokens[1]]
+		}
+		// Pool-specific dead directions override token-level checks
+		if dir, ok := deadPoolDirs[pool]; ok {
+			if dir == 0 {
+				dead0 = true
+			} else {
+				dead1 = true
 			}
+		}
+		if dead0 || dead1 {
+			inner = &deadDirQuoter{inner: inner, deadDir0: dead0, deadDir1: dead1}
 		}
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
@@ -375,6 +384,13 @@ func (pm *PoolManager) InvalidateAll() {
 // poolHex returns the lowercase hex string for a pool address.
 func poolHex(addr common.Address) string {
 	return strings.ToLower(addr.Hex())
+}
+
+// deadPoolDirs lists pools where one direction reverts on-chain but the formula computes
+// a value. Key = pool address, value = direction to block (0 = block zeroForOne, 1 = block !zeroForOne).
+var deadPoolDirs = map[common.Address]int{
+	common.HexToAddress("0xd446eb1660f766d533beceef890df7a69d26f7d1"): 1, // WAVAX/USDC LFJ V2: dir=1 (USDC→WAVAX) reverts on-chain
+	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): 0, // BTC.b/SolvBTC LFJ V2: dir=0 (BTC.b→SolvBTC) reverts on-chain
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

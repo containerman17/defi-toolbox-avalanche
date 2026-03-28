@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-03-28 — Pool-specific dead directions for LFJ V2 (30→28 mismatches)
+
+### Architecture: `deadPoolDirs` map
+- New pool-specific dead direction mechanism in `pool_quoter.go`
+- Unlike `brokenTokens` (which blocks ALL pools with a broken token), `deadPoolDirs` blocks a specific direction for a specific pool
+- Used for pools where one direction reverts on-chain but the formula computes a value
+
+### Pools fixed
+- **0xD446** (lfj_v2, WAVAX/USDC): un-blacklisted to formula 3, block dir=1 (USDC→WAVAX reverts)
+- **0x55C2** (lfj_v2, BTC.b/SolvBTC): un-blacklisted to formula 3, block dir=0 (BTC.b→SolvBTC reverts)
+
 ## 2026-03-28 — Blacklist empty Pharaoh V3 pool (31→30 mismatches)
 
 ### Pool 0x71bd (pharaoh_v3, BTC.b/USDC)

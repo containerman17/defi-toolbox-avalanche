@@ -331,37 +331,16 @@ contract HayabusaRouter {
     // === PUBLIC SWAP ===
 
     /// @notice Pull tokenIn from msg.sender, execute the swap, send tokenOut back.
+    ///         Reverts if amountOut < minOutput (slippage protection).
     /// @return amountOut The amount of tokenOut sent to msg.sender
     function swap(
         address[] calldata pools,
         uint8[] calldata poolTypes,
         address[] calldata tokens,
         uint256[] calldata amountsIn,
-        bytes[] calldata extraDatas
-    ) external payable returns (uint256) {
-        return _swap(pools, poolTypes, tokens, amountsIn, extraDatas, 0);
-    }
-
-    /// @notice Same as swap() but reverts if amountOut < minOutput.
-    function swapWithMinOutput(
-        address[] calldata pools,
-        uint8[] calldata poolTypes,
-        address[] calldata tokens,
-        uint256[] calldata amountsIn,
         bytes[] calldata extraDatas,
         uint256 minOutput
     ) external payable returns (uint256) {
-        return _swap(pools, poolTypes, tokens, amountsIn, extraDatas, minOutput);
-    }
-
-    function _swap(
-        address[] calldata pools,
-        uint8[] calldata poolTypes,
-        address[] calldata tokens,
-        uint256[] calldata amountsIn,
-        bytes[] calldata extraDatas,
-        uint256 minOutput
-    ) internal returns (uint256) {
         // Pull input token from caller
         address tokenIn = tokens[0];
         uint256 totalIn = amountsIn[0];

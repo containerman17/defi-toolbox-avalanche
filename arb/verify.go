@@ -16,8 +16,9 @@ import (
 // executeSwap selector — for simulation (router already has tokens via override)
 var executeSwapSelector = [4]byte{0x32, 0x39, 0x33, 0x4d}
 
-// swapWithMinOutput selector — for on-chain tx (reverts if output < minOutput)
-var swapWithMinOutputSelector = [4]byte{0x35, 0x73, 0xf0, 0xc8}
+// swap selector — for on-chain tx: swap(address[],uint8[],address[],uint256[],bytes[],uint256)
+// The 6th param is minOutput (reverts if output < minOutput).
+var swapSelector = [4]byte{0x9c, 0x03, 0x60, 0x14}
 
 // Verifier handles EVM verification of cycle candidates.
 type Verifier struct {
@@ -97,40 +98,33 @@ func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64
 	return amountOut, gasUsed, true
 }
 
-// EncodeSwapCalldata builds swapWithMinOutput() calldata for on-chain execution.
+// EncodeSwapCalldata builds swap() calldata for on-chain execution.
+// swap() has 6 params: the same 5 array params as executeSwap, plus uint256 minOutput.
 // minOutput = amountIn (for arb: we want at least our input back).
 func EncodeSwapCalldata(c *Cycle, pt *PoolTable, hub common.Address, amountIn *uint256.Int) []byte {
-	// swapWithMinOutput has the same 5 array params as executeSwap, plus a trailing uint256 minOutput.
-	// ABI encoding: the 5 offsets shift by 32 bytes (6 head words instead of 5),
-	// and minOutput sits in the 6th head slot.
 	base := encodeMultiHopSwap(c, pt, hub, amountIn)
 
-	// Insert minOutput as 6th head word (after the 5 offset words).
-	// Shift all offsets by 32 and insert minOutput.
+	// Insert minOutput as 6th head word. Shift all 5 offsets by +32.
 	result := make([]byte, len(base)+32)
-	copy(result[0:4], swapWithMinOutputSelector[:])
+	copy(result[0:4], swapSelector[:])
 
-	// Read the 5 offsets, add 32 to each (one extra head word)
 	for i := 0; i < 5; i++ {
 		off := 4 + i*32
-		// Read original offset (last 8 bytes of word)
 		var origOff uint64
 		for j := 0; j < 8; j++ {
 			origOff = origOff<<8 | uint64(base[off+24+j])
 		}
-		origOff += 32 // shift for the extra minOutput word
-		// Write adjusted offset
+		origOff += 32
 		for j := 0; j < 8; j++ {
 			result[off+31-j] = byte(origOff >> (j * 8))
 		}
 	}
 
 	// 6th head word: minOutput = amountIn
-	minOutPos := 4 + 5*32
 	b := amountIn.Bytes32()
-	copy(result[minOutPos:minOutPos+32], b[:])
+	copy(result[4+5*32:4+6*32], b[:])
 
-	// Copy the rest of the data (after the 5 offset words)
+	// Copy array data (shifted by 32)
 	copy(result[4+6*32:], base[4+5*32:])
 
 	return result

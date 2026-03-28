@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-03-29 — Stage 3 cross-check verified: local EVM matches node 100%
+
+### RPC cross-check in dry-run mode
+- Added `RPCChecker` to arb package — runs `eth_call` against the node without a private key
+- Stage 3b cross-check now runs whenever `--rpc` is provided, even without `--execute`
+- Local EVM runs top 50 candidates → gets block number → same calldata replayed via `eth_call` at that exact block → results compared byte-for-byte
+
+### LiveState deadlock fixes
+- Decoupled block_diff processing from readLoop goroutine via channel — prevents deadlock where readLoop blocks on `blockMu.Lock()` while a quoting goroutine holds `RLock` waiting for an RPC response that the blocked readLoop can't deliver
+- Non-blocking channel send with drop-oldest fallback — prevents channel overflow during long cold-start warm-ups (1500 pools from empty cache takes ~10min of serial fetches)
+
+### Verification results
+- **1500 pools, 165 blocks, 950 EVM results: 100% match, 0 mismatches, 0 RPC errors**
+- Benchmark: 2000 pools at 96.3% formula correctness (3853/4000)
+- Race detector: zero data races
+
 ## 2026-03-28 — Shared LiveState: unify state management across all consumers
 
 ### New: `statedb/transport_ws.go` — shared WebSocket transport

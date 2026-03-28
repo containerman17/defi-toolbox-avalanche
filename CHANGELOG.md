@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-28 — Fix CDK/WAVAX LFJ V2 pool (32→31 mismatches)
+
+### Pool 0x3315 (lfj_v2, CDK/WAVAX)
+- Token0 (CDK, CdkDiamonds) is a SolidState Diamond proxy ERC20
+- Balance mapping uses `keccak256("solidstate.contracts.storage.ERC20Base")` as base slot
+- Added token override with erc7201_base, un-blacklisted pool to formula 3
+
 ## 2026-03-28 — Un-blacklist ROCO/WAVAX V3 pool (33→32 mismatches)
 
 ### Pool 0x8154 (uniswap_v3, ROCO/WAVAX)

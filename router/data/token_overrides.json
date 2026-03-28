@@ -10775,5 +10775,10 @@
   {
     "address": "0x2cd3cdb3bd68eea0d3be81da707bc0c8743d7335",
     "slot": 251
+  },
+  {
+    "address": "0x108468885eba2932901d409af6bf97bf9c3eda50",
+    "slot": 0,
+    "erc7201_base": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b4"
   }
 ]

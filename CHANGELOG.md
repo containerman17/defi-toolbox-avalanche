@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-28 — Fix cold boot: on-demand code fetch + state server request handling
+
+### Bugs fixed
+- **Code fetch on demand**: accounts loaded from dump without code (balance-only entries from block diffs) now fetch code lazily in `GetCode()`/`GetCodeSize()`/`GetCodeHash()`. Previously, `exists=true` from `SetAccount` prevented any re-fetch, so router/WAVAX had 0 bytes code.
+- **Arb bot deadlock**: moved `startReadLoop()` before `GetCodeSize()` and `InitRates()` — fetches sent before readLoop started would hang forever waiting for responses.
+- **State server stale block**: removed strict `blockNumber != currentBlock` rejection for `/live` clients. Client may be slightly behind; server now upgrades the request to the current block. Stale block rejection was causing all on-demand fetches to fail.
+- **State server lock convoy**: `blockMu.RLock` is no longer held during upstream fetches — only during cache check. Prevents block updates from blocking on slow fetch round trips.
+
 ## 2026-03-28 — State server + client state rewrite: simplification & robustness
 
 ### Fetcher interface — error propagation

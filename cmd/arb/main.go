@@ -514,15 +514,6 @@ func main() {
 		}
 	}
 
-	// Verify key contracts are in state (check code size without triggering fetch)
-	fmt.Fprintf(os.Stderr, "[arb] router code: %d bytes, WAVAX code: %d bytes\n",
-		state.GetCodeSize(router.DeployedRouter), state.GetCodeSize(WAVAX))
-
-	// Initial rate sweep BEFORE wiring callbacks (PoolManager is not thread-safe)
-	fmt.Fprintf(os.Stderr, "[arb] running initial rate sweep...\n")
-	scanner.InitRates()
-	fmt.Fprintf(os.Stderr, "[arb] ready. Waiting for blocks...\n")
-
 	// Buffer ALL state changes from readLoop goroutine, apply on main goroutine.
 	// StateDB and PoolManager are NOT thread-safe — all writes must be on the main goroutine.
 	type slotUpdate struct {
@@ -550,8 +541,17 @@ func main() {
 		}
 	}
 
-	// Start readLoop AFTER callbacks are set (avoids data race on callback fields)
+	// Start readLoop BEFORE any fetches (GetCode etc need responses from the server)
 	fetcher.startReadLoop(state)
+
+	// Verify key contracts are in state (may trigger code fetch on demand)
+	fmt.Fprintf(os.Stderr, "[arb] router code: %d bytes, WAVAX code: %d bytes\n",
+		state.GetCodeSize(router.DeployedRouter), state.GetCodeSize(WAVAX))
+
+	// Initial rate sweep BEFORE block processing (PoolManager is not thread-safe)
+	fmt.Fprintf(os.Stderr, "[arb] running initial rate sweep...\n")
+	scanner.InitRates()
+	fmt.Fprintf(os.Stderr, "[arb] ready. Waiting for blocks...\n")
 
 	// Process blocks
 	for bi := range blockCh {

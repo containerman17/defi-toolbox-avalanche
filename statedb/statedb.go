@@ -212,17 +212,29 @@ func (s *StateDB) SetNonce(addr common.Address, n uint64) { s.getOrFetch(addr).n
 
 // Code
 func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
-	a := s.getOrFetch(addr)
-	if len(a.code) == 0 {
+	code := s.GetCode(addr)
+	if len(code) == 0 {
 		return common.Hash{}
 	}
+	a := s.accounts[addr]
 	if a.codeHash == (common.Hash{}) {
-		a.codeHash = crypto.Keccak256Hash(a.code)
+		a.codeHash = crypto.Keccak256Hash(code)
 	}
 	return a.codeHash
 }
 
-func (s *StateDB) GetCode(addr common.Address) []byte       { return s.getOrFetch(addr).code }
+func (s *StateDB) GetCode(addr common.Address) []byte {
+	a := s.getOrFetch(addr)
+	if a.exists && len(a.code) == 0 && s.fetcher != nil {
+		// Account was loaded from dump without code — fetch on demand
+		code, err := s.fetcher.FetchCode(addr)
+		if err == nil && len(code) > 0 {
+			a.code = code
+			a.codeHash = crypto.Keccak256Hash(code)
+		}
+	}
+	return a.code
+}
 func (s *StateDB) SetCode(addr common.Address, code []byte) {
 	a := s.getOrFetch(addr)
 	a.code = code
@@ -232,7 +244,7 @@ func (s *StateDB) SetCode(addr common.Address, code []byte) {
 		a.codeHash = common.Hash{}
 	}
 }
-func (s *StateDB) GetCodeSize(addr common.Address) int { return len(s.getOrFetch(addr).code) }
+func (s *StateDB) GetCodeSize(addr common.Address) int { return len(s.GetCode(addr)) }
 
 // Refund
 func (s *StateDB) AddRefund(gas uint64) { s.refund += gas }

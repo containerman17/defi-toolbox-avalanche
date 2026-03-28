@@ -855,25 +855,16 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
-		// Hold blockMu.RLock for the duration of request handling
+		// Snap current block and check cache under blockMu.RLock.
+		// Release BEFORE upstream fetch to avoid blocking block updates.
 		s.blockMu.RLock()
-
 		currentBlock := s.cache.getBlockNumber()
-		if req.BlockNumber != currentBlock {
-			s.blockMu.RUnlock()
-			resp, _ := json.Marshal(jsonRPCResponse{
-				JSONRPC: "2.0", ID: req.ID,
-				Error: &rpcError{Code: -32001, Message: fmt.Sprintf("stale block: requested %d, server at %d", req.BlockNumber, currentBlock)},
-			})
-			wsWrite(resp)
-			continue
-		}
-
+		req.BlockNumber = currentBlock
 		key := cacheKeyForRequest(req)
+		cached, cacheHit := s.cache.get(key)
+		s.blockMu.RUnlock()
 
-		// Cache hit
-		if cached, ok := s.cache.get(key); ok {
-			s.blockMu.RUnlock()
+		if cacheHit {
 			resp, _ := json.Marshal(jsonRPCResponse{
 				JSONRPC: "2.0", ID: req.ID,
 				Result: map[string]string{"value": cached},
@@ -882,10 +873,9 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
-		// Fetch from upstream
+		// Fetch from upstream (no lock held — won't block block updates)
 		value, err := fetchFromNode(pool, req)
 		if err != nil {
-			s.blockMu.RUnlock()
 			resp, _ := json.Marshal(jsonRPCResponse{
 				JSONRPC: "2.0", ID: req.ID,
 				Error: &rpcError{Code: -32603, Message: err.Error()},
@@ -894,10 +884,10 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			continue
 		}
 
-		if req.BlockNumber == s.cache.getBlockNumber() {
+		// Cache the result if block hasn't changed since we snapped it
+		if s.cache.getBlockNumber() == currentBlock {
 			s.cache.set(key, value)
 		}
-		s.blockMu.RUnlock()
 
 		resp, _ := json.Marshal(jsonRPCResponse{
 			JSONRPC: "2.0", ID: req.ID,

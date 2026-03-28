@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-03-28 — V3 formula: gas-based step limit with implementation-aware per-tick costs
+
+### Problem
+- Pool 0x1147 (PangolinV3, WAVAX/USDC, rank #15) mismatched in dir=1: formula returned
+  non-zero output but EVM reverted at 4.8M gas after 110 swap steps.
+- Pool 0x66A5 (PharaohV3) similarly mismatched: 296 steps, 4.8M gas, EVM reverted.
+- The existing `maxSwapSteps=500` didn't account for actual EVM gas consumption.
+
+### Root cause investigation
+- PangolinV3 and PharaohV3 pool contracts do significantly more work per tick crossing
+  than standard UniswapV3: PangolinV3's `ticks.cross()` writes 6 SSTOREs (including
+  `rewardPerLiquidityOutsideX64`) vs UniswapV3's 5, plus `observations.observeSingle()`
+  with reward tracking on each initialized tick crossing.
+- Calibrated per-step gas from on-chain data:
+  - UniswapV3 pools: ~22-25K gas per initialized tick crossing
+  - PangolinV3 pools: ~44-55K gas per initialized tick crossing (~2x heavier)
+  - PharaohV3 pools: similarly heavy due to extra per-tick overhead
+  - Empty word boundary crossings: ~7K gas (all implementations)
+- A flat per-step gas constant cannot work: 79 init crossings at 55K exceeds 4.8M for
+  PangolinV3, but 125 init crossings at 25K stays under 4.8M for UniswapV3.
+
+### Fix
+- Added `heavyGas` flag to V3 layout detection, set for PangolinV3 (Proxy, Pangolin,
+  PangolinReward layouts) and PharaohV3 (V1, V2 layouts).
+- Gas estimation in `Quote()` uses implementation-aware constants:
+  - Standard UniswapV3: 25K/init step + 7K/empty step + 400K base
+  - Heavy (PangolinV3/PharaohV3): 55K/init step + 7K/empty step + 400K base
+- Keeps existing `maxSwapSteps=500` as a secondary hard cap.
+- Result: 2 fewer mismatches (0x1147 and 0x66A5 now correct), 0 regressions.
+
 ## 2026-03-28 — Algebra formula: gas-based step limit with afterSwap overhead estimation
 
 ### Problem

@@ -41,6 +41,11 @@ type V3Pool struct {
 	// we store the exact computeSwapStep result. Lossless.
 	preStepsDown map[int32]*v3PrecomputedStep // zeroForOne direction
 	preStepsUp   map[int32]*v3PrecomputedStep // oneForZero direction
+
+	// heavyGas is true for PangolinV3/PharaohV3 pools that have extra per-tick
+	// overhead (reward tracking, oracle writes) making each tick crossing ~2x
+	// more expensive than standard UniswapV3.
+	heavyGas bool
 }
 
 func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
@@ -186,6 +191,7 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		tickLiquidityNet: tickLiquidityNet,
 		preStepsDown:     make(map[int32]*v3PrecomputedStep),
 		preStepsUp:       make(map[int32]*v3PrecomputedStep),
+		heavyGas:         layout.heavyGas,
 	}
 
 	// Pre-compute swap steps for empty word boundaries.
@@ -386,8 +392,27 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 		sqrtPriceLimitX96.Sub(u256MaxSqr, uint256.NewInt(1))
 	}
 
-	const maxSwapSteps = 500 // guard against gas-exhaustion in EVM (5M gas ≈ ~50 initialized crossings)
+	// Gas-based step limit: estimate accumulated EVM gas and bail before 5M limit.
+	// Per-tick gas depends on the pool implementation:
+	//   - Standard UniswapV3: ~25K/init step (5 SSTOREs in ticks.cross)
+	//   - PangolinV3/PharaohV3 (heavyGas): ~45K/init step (extra reward tracking,
+	//     oracle writes, 6+ SSTOREs per tick crossing)
+	//   - Empty word boundary: ~7K gas (bitmap SLOAD + getSqrtRatio)
+	// Calibrated from on-chain observations:
+	//   UniswapV3 0x27b5: 151 steps (125 init), 3335K gas → ~22K/init
+	//   PangolinV3 0x1147: 110 steps (79 init), 4847K gas → ~44K/init (reverted)
+	//   PharaohV3 0x66A5: 296 steps (292 init), 4847K gas (reverted)
+	var v3GasPerInitStep int64 = 25_000
+	if p.heavyGas {
+		v3GasPerInitStep = 55_000
+	}
+	const v3GasPerEmptyStep int64 = 7_000
+	const v3BaseGas int64 = 400_000
+	const v3GasLimit int64 = 4_800_000
+	const maxSwapSteps = 500 // hard cap as secondary guard
+
 	steps := 0
+	var estimatedGas int64 = v3BaseGas
 	for !amountRemaining.IsZero() && !sqrtPriceX96.Eq(&sqrtPriceLimitX96) {
 		if steps >= maxSwapSteps {
 			// Too many crossings — EVM would revert from gas exhaustion.
@@ -405,6 +430,17 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 			if liquidity.IsZero() && p.evmWouldComplete(zeroForOne) {
 				return amountOut
 			}
+			return uint256.Int{}
+		}
+
+		// Accumulate gas estimate based on step type.
+		if initialized {
+			estimatedGas += v3GasPerInitStep
+		} else {
+			estimatedGas += v3GasPerEmptyStep
+		}
+		if estimatedGas > v3GasLimit {
+			// Gas estimate exceeded — EVM would revert.
 			return uint256.Int{}
 		}
 
@@ -483,7 +519,6 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 			tick = getTickAtSqrtRatioU256(&sqrtPriceX96)
 		}
 	}
-
 	return amountOut
 }
 

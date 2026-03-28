@@ -27,6 +27,7 @@ type v3Layout struct {
 	ticks     *big.Int // mapping root
 	bitmap    *big.Int // mapping root
 	feeSlot   *big.Int // non-nil for pools with dynamic/mutable fees (e.g. RamsesV3)
+	heavyGas  bool     // true for PangolinV3/PharaohV3 pools with extra per-tick overhead
 }
 
 var (
@@ -41,12 +42,14 @@ var (
 		liquidity: big.NewInt(9),
 		ticks:     big.NewInt(10),
 		bitmap:    big.NewInt(11),
+		heavyGas:  true, // PangolinV3: extra reward tracking per tick crossing
 	}
 	v3LayoutPangolin = v3Layout{
 		slot0:     big.NewInt(5),
 		liquidity: big.NewInt(9),
 		ticks:     big.NewInt(10),
 		bitmap:    big.NewInt(11),
+		heavyGas:  true, // PangolinV3: extra reward tracking per tick crossing
 	}
 	// PangolinV3Pool with RewardSlot between slot0 and feeGrowthGlobal0X128.
 	// The RewardSlot shifts liquidity/ticks/bitmap each by +1.
@@ -55,6 +58,7 @@ var (
 		liquidity: big.NewInt(10),
 		ticks:     big.NewInt(11),
 		bitmap:    big.NewInt(12),
+		heavyGas:  true, // PangolinV3: extra reward tracking per tick crossing
 	}
 	v3LayoutPharaohV1 = func() v3Layout {
 		base := new(big.Int).SetBytes(crypto.Keccak256([]byte("states.storage")))
@@ -63,6 +67,7 @@ var (
 			liquidity: new(big.Int).Add(new(big.Int).Set(base), big.NewInt(13)),
 			ticks:     new(big.Int).Add(new(big.Int).Set(base), big.NewInt(14)),
 			bitmap:    new(big.Int).Add(new(big.Int).Set(base), big.NewInt(15)),
+			heavyGas:  true, // PharaohV3: extra overhead per tick crossing
 		}
 	}()
 	v3LayoutPharaohV2 = func() v3Layout {
@@ -79,6 +84,7 @@ var (
 			ticks:     new(big.Int).Add(new(big.Int).Set(derived), big.NewInt(9)),
 			bitmap:    new(big.Int).Add(new(big.Int).Set(derived), big.NewInt(10)),
 			feeSlot:   new(big.Int).Add(new(big.Int).Set(derived), big.NewInt(2)), // PoolState.fee after Slot0(2 slots)
+			heavyGas:  true, // PharaohV3: extra overhead per tick crossing
 		}
 	}()
 )

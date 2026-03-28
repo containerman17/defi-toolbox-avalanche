@@ -132,10 +132,24 @@ func Connect(url string) (*LiveState, error) {
 	fmt.Fprintf(os.Stderr, "[livestate] initial_dump: block=%d, %d storage, %d accounts\n",
 		dump.BlockNumber, storageCount, accountCount)
 
-	// Wire up the transport's push message handler to our block_diff processor.
+	// Block diffs are processed on a dedicated goroutine, NOT on the readLoop.
+	// This avoids a deadlock: if the readLoop called handlePushMessage directly,
+	// it would try to acquire blockMu.Lock(). But a quoting goroutine might be
+	// holding blockMu.RLock() and waiting for a FetchStorage response — which
+	// the readLoop needs to deliver. Deadlock: readLoop blocked on Lock, quoting
+	// blocked waiting for readLoop to deliver the response.
+	//
+	// By decoupling via a channel, the readLoop stays free to deliver RPC responses
+	// even while block_diffs queue up waiting for the write lock.
+	pushCh := make(chan []byte, 16)
 	transport.SetOnMessage(func(msg []byte) {
-		ls.handlePushMessage(msg)
+		pushCh <- msg
 	})
+	go func() {
+		for msg := range pushCh {
+			ls.handlePushMessage(msg)
+		}
+	}()
 	transport.StartReadLoop()
 
 	return ls, nil

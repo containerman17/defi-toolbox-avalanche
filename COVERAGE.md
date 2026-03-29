@@ -14,9 +14,6 @@ timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1
 # Single pool (< 1 second) — use this when debugging a formula
 timeout 30 go run ./cmd/benchmark/ --pool 0xADDRESS 2>&1
 
-# With coverage debug (shows WHY each pool falls back to EVM)
-timeout 120 go run ./cmd/benchmark/ --limit 1000 --debug-coverage 2>&1
-
 # Multi-block validation (prevents single-block overfitting)
 timeout 600 go run ./cmd/benchmark/ --limit 1000 --blocks 3 2>&1
 
@@ -30,45 +27,41 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 | `--limit N` | Number of pools to test (default 4000) |
 | `--pool 0x...` | Test a single pool only (fastest iteration) |
 | `--blocks N` | Test across N blocks (default 1) |
-| `--debug-coverage` | Log why each pool falls back to EVM |
 | `--skip-formulas` | EVM-only mode (no formula quotes) |
 | `--cpuprofile FILE` | Write CPU profile |
 | `--memprofile FILE` | Write memory profile |
 
-## Current State (2026-03-27)
+## Current State (2026-03-28)
 
-7508 formula / 492 EVM fallback out of 8000 quotes (4000 pools x 2 directions).
-**93.9% formula coverage, 97.5% correctness** (50 mismatches, 1950 match on 1000-pool benchmark).
+**Architecture**: EVM fallback removed. Every pool gets a formula answer (zero = no output).
+The single metric is **mismatches** (formula != EVM ground truth).
 
-### EVM Fallback Breakdown
+**Benchmark** (1000 pools, 3 blocks): **97.7% correct, 1953 match, 47 mismatch.**
+Formula time: ~40ms total (no EVM fallback overhead).
 
-| Reason | Count | Description |
-|--------|-------|-------------|
-| blacklisted | 60 | Registry says -1; remaining are genuine mismatches (formula!=0, evm=0) |
-| quote_fail | 49 | Pool builds OK but Quote() returns (nil,false) — bitmap exhaustion, zero sqrtPrice, etc. |
-| not_in_registry | 10 | Pool types without any formula (wombat, synapse, platypus, trident, balancer_v2) |
-| builder_nil(fid=2) V3 | 6 | Zombie pools: non-zero liquidity but no initialized ticks in bitmap |
-| builder_nil(fid=7) Bal V3 | 2 | `newBalancerV3Pool` returns nil (GyroECLP pools) |
-| builder_nil(fid=4) Algebra | 0 | FIXED: added `case FormulaAlgebra:` to buildQuoter |
-| builder_nil(fid=3) LFJ V2 | 0 | FIXED: added V2.0 storage layout support (3 pools), blacklisted 2 (evm=0) |
-| builder_nil(fid=8) Bal V2 | 0 | FIXED or blacklisted |
-| builder_nil(fid=1) Pharaoh | 0 | FIXED: added 5 missing pools to `pharaoh_v1_registry.go` |
-| builder_nil(fid=0) V2 | 0 | FIXED or blacklisted |
-| builder_nil(fid=5) DODO | 0 | FIXED: graceful nil propagation for degenerate quadratic |
+### Mismatch Breakdown (47 remaining)
 
-### Blacklisted by Pool Type
+| Pattern | Count | Description |
+|---------|-------|-------------|
+| formula=0, evm=nonzero | ~30 | Formula can't compute: bitmap exhaustion, 3-token BalV3, blacklisted, unregistered |
+| formula=nonzero, evm=0 | ~11 | Formula computes but EVM reverts: gas exhaustion, broken tokens, paused pools |
+| both nonzero, different | ~6 | Formula accuracy: PharaohV1 rounding, BalancerV3 rate drift |
 
-| Type | Count | Notes |
-|------|-------|-------|
-| uniswap_v4 (type=9) | 24 | Formula returns non-zero, EVM returns 0 |
-| lfj_v1 (type=2) | 11 | Missing token overrides |
-| v2 family (type=8) | 9 | vapordex(4), hurricane(4), pangolin(1) |
-| uniswap_v3/pharaoh_v3 (type=0) | 6 | Token-drained pools, formula can't detect zero ERC20 balances |
-| algebra (type=1) | 4 | pluginConfig=2 dynamic fee via beforeSwap() hook |
-| lfj_v2 (type=3) | 4 | One-sided liquidity or missing overrides |
-| uniswap_v3 | 8 | 4 drained pools (ERC20 balance=0, unfixable); 4 others |
-| pharaoh_v1 | 5 | Various |
-| balancer_v3 | 5 | GyroECLP unsupported |
+### Blacklisted Pools (47 with :-1)
+
+Pools where un-blacklisting causes worse mismatches (formula returns non-zero but EVM reverts).
+These are pools that are dead, paused, or have broken tokens on-chain.
+
+| Type | Count | Root cause |
+|------|-------|------------|
+| uniswap_v4 | 24 | Pools disabled/paused on-chain |
+| v2 family | 7 | vapordex hooks, broken token transfers |
+| lfj_v2 | 4 | One-sided liquidity, formula mismatch |
+| uniswap_v3/pharaoh_v3 | 5 | Drained or paused |
+| algebra | 1 | ERC20 transfer failure |
+| lfj_v1 | 4 | Broken token transfers |
+| pangolin_v2 | 1 | Transfer failure |
+| lfj_v2 (misc) | 1 | Misc |
 
 ## Root Causes Found
 
@@ -108,16 +101,17 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 
 ## Investigation Tools & Techniques
 
-### Running the coverage diagnostic
+### Analyzing mismatches
 ```bash
-# See which pools fall back to EVM and why
-timeout 120 go run ./cmd/benchmark/ --limit 1000 --debug-coverage 2>&1
+# Count mismatches by pattern
+timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1 | grep MISMATCH | wc -l
 
-# Count by reason
-... | grep EVM_FALLBACK | awk '{print $NF}' | sort | uniq -c | sort -rn
-
-# Count blacklisted by pool type
-... | grep "reason=blacklisted" | grep -oP 'type=\d+\(\w+\)' | sort | uniq -c | sort -rn
+# Find mismatch pools ranked by position in pools.txt
+... | grep MISMATCH | awk '{print $2}' | sort -u | while read p; do
+  addr=$(echo "$p" | tr '[:upper:]' '[:lower:]')
+  line=$(grep -n "$addr" pool-collector/data/pools.txt | head -1 | cut -d: -f1)
+  echo "$line $p"
+done | sort -n
 ```
 
 ### Multi-block validation

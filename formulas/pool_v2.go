@@ -5,6 +5,16 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// brokenTokens lists tokens whose transfer() always reverts due to corrupted
+// internal state (e.g. broken reflection accounting).
+var brokenTokens = map[common.Address]bool{
+	common.HexToAddress("0x704eae6d452ca63ce479c59727177c5f3ba0d90c"): true, // EVDC: SafeMath overflow in reflection _transfer
+	common.HexToAddress("0xe80772eaf6e2e18b651f160bc9158b2a5cafca65"): true, // USD+: rebasing token, rayDiv rounding causes V2 swap reverts
+	common.HexToAddress("0xf7d9281e8e363584973f946201b82ba72c965d27"): true, // gAVAX/yyAVAX: ERC1155-backed ERC20, safeTransferFrom reverts in simulation
+	common.HexToAddress("0xb2a85c5ecea99187a977ac34303b80acbddfa208"): true, // ROCO: reflection token, EVM balance override doesn't set _rOwned correctly
+	common.HexToAddress("0x90842eb834cfd2a1db0b1512b254a18e4d396215"): true, // GoodBridging (GB): reflection token with 1% fee, _rOwned/_rTotal incompatible with EVM override
+}
+
 // V2Pool is a pre-loaded V2 constant product pool.
 // Construction reads slot 8 once. Quote is pure math.
 type V2Pool struct {
@@ -12,6 +22,40 @@ type V2Pool struct {
 	reserve0 uint256.Int
 	reserve1 uint256.Int
 	factor   *uint256.Int // fee factor (9970 for 0.3%, 9950 for 0.5%)
+	balance0 uint256.Int  // actual token0 balance of the pool (0 = unknown)
+	balance1 uint256.Int  // actual token1 balance of the pool (0 = unknown)
+	deadDir0 bool         // true = zeroForOne always reverts on-chain
+	deadDir1 bool         // true = !zeroForOne always reverts on-chain
+}
+
+// SetDeadDirs marks directions where a broken input token causes reverts.
+func (p *V2Pool) SetDeadDirs(token0, token1 common.Address) {
+	if brokenTokens[token0] {
+		p.deadDir0 = true // selling token0 reverts
+	}
+	if brokenTokens[token1] {
+		p.deadDir1 = true // selling token1 reverts
+	}
+}
+
+// SetTokenBalances reads actual token balances via EVM and stores them.
+// If the actual balance is less than the reserve, swaps in that direction
+// will revert on-chain (SafeMath: subtraction overflow), so Quote returns 0.
+func (p *V2Pool) SetTokenBalances(caller EVMCaller, token0, token1 common.Address) {
+	if caller == nil {
+		return
+	}
+	calldata := make([]byte, 36)
+	copy(calldata[:4], balanceOfSelector[:])
+	copy(calldata[16:36], p.addr[:])
+
+	if ret, ok := caller(token0, calldata); ok && len(ret) >= 32 {
+		p.balance0.SetBytes(ret[:32])
+	}
+	if ret, ok := caller(token1, calldata); ok && len(ret) >= 32 {
+		p.balance1.SetBytes(ret[:32])
+	}
+
 }
 
 func newV2Pool(addr common.Address, reader StorageReader) *V2Pool {
@@ -78,13 +122,22 @@ func (p *V2Pool) Address() common.Address {
 }
 
 func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	var reserveIn, reserveOut *uint256.Int
+	if zeroForOne && p.deadDir0 {
+		return uint256.Int{}
+	}
+	if !zeroForOne && p.deadDir1 {
+		return uint256.Int{}
+	}
+
+	var reserveIn, reserveOut, balanceOut *uint256.Int
 	if zeroForOne {
 		reserveIn = &p.reserve0
 		reserveOut = &p.reserve1
+		balanceOut = &p.balance1
 	} else {
 		reserveIn = &p.reserve1
 		reserveOut = &p.reserve0
+		balanceOut = &p.balance0
 	}
 
 	// amountOut = (amountIn * factor * reserveOut) / (reserveIn * 10000 + amountIn * factor)
@@ -106,6 +159,12 @@ func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 
 	var result uint256.Int
 	result.Div(&num, &den)
+
+	// If we know the actual token balance and the output exceeds it,
+	// the on-chain transfer would revert (SafeMath: subtraction overflow).
+	if !balanceOut.IsZero() && result.Gt(balanceOut) {
+		return uint256.Int{}
+	}
 
 	return result
 }

@@ -3,10 +3,13 @@ package formulas
 import (
 	"fmt"
 	"math/big"
+	"os"
 
 	"github.com/ava-labs/libevm/crypto"
 
 )
+
+var algebraDebug = os.Getenv("ALGEBRA_DEBUG") == "1"
 
 //
 //
@@ -42,10 +45,10 @@ var (
 )
 
 
-func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int32, uint32, uint32, error) {
+func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int32, uint32, uint32, uint8, error) {
 	data, err := read(poolAddress, algebraSlotGlobalState)
 	if err != nil {
-		return nil, 0, 0, 0, fmt.Errorf("globalState slot: %w", err)
+		return nil, 0, 0, 0, 0, fmt.Errorf("globalState slot: %w", err)
 	}
 	val := new(big.Int).SetBytes(data[:])
 
@@ -53,7 +56,7 @@ func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int
 	mask160 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1))
 	sqrtPrice := new(big.Int).And(val, mask160)
 	if sqrtPrice.Sign() == 0 {
-		return nil, 0, 0, 0, fmt.Errorf("zero sqrtPrice in storage")
+		return nil, 0, 0, 0, 0, fmt.Errorf("zero sqrtPrice in storage")
 	}
 
 	// bits [160:184] = tick (int24)
@@ -67,10 +70,13 @@ func algebraReadGlobalState(read StateReader, poolAddress string) (*big.Int, int
 	// bits [184:200] = lastFee (uint16)
 	fee := uint32(new(big.Int).Rsh(val, 184).Int64() & 0xFFFF)
 
-	// bits [208:224] = communityFee (uint16) — skip pluginConfig at [200:208]
+	// bits [200:208] = pluginConfig (uint8)
+	pluginConfig := uint8(new(big.Int).Rsh(val, 200).Int64() & 0xFF)
+
+	// bits [208:224] = communityFee (uint16)
 	communityFee := uint32(new(big.Int).Rsh(val, 208).Int64() & 0xFFFF)
 
-	return sqrtPrice, tick, fee, communityFee, nil
+	return sqrtPrice, tick, fee, communityFee, pluginConfig, nil
 }
 
 func algebraReadPackedSlot(read StateReader, poolAddress string) (*big.Int, int32, int32, error) {
@@ -153,7 +159,7 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	}
 
 	// Read globalState from slot 2
-	currentPrice, _, fee, _, err := algebraReadGlobalState(read, poolAddress)
+	currentPrice, _, fee, _, pluginConfig, err := algebraReadGlobalState(read, poolAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +168,53 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 	currentLiquidity, prevInitializedTick, nextInitializedTick, err := algebraReadPackedSlot(read, poolAddress)
 	if err != nil {
 		return nil, err
+	}
+
+	// Gas-based step limit: estimate accumulated EVM gas and bail before 5M limit.
+	// The swap loop costs ~22K gas per step (tick crossing) regardless of pool config.
+	// However, the AFTER_SWAP plugin hook can add significant one-time overhead when
+	// the pool has accumulated pending community fees — the plugin triggers fee
+	// transfers + TWAP oracle updates that can cost 2-3M gas.
+	//
+	// We estimate afterSwap overhead by reading slot 4 (communityFeePending0).
+	// When the pool has AFTER_SWAP enabled and pending fees > threshold, we
+	// deduct an afterSwap penalty from the gas budget.
+	//
+	// Examples:
+	//   Pool 0xA02E: 217 steps, 4.9M gas, afterSwap=cheap (pending=191B) → REVERTS
+	//   Pool 0xC13F: 147 steps, 3.3M gas, afterSwap=cheap (pending=0)   → SUCCEEDS
+	//   Pool 0x4110: 102 steps, 4.9M gas, afterSwap=2.6M (pending=29T)  → REVERTS
+	const gasPerStep int64 = 22_000
+	const algebraBaseGas int64 = 200_000
+	const algebraGasLimit int64 = 4_800_000
+
+	// Estimate afterSwap overhead from pending community fees in slot 4.
+	// Slot 4 layout (Algebra V2 Integral AlgebraPoolBase):
+	//   bits [0:104]   = communityFeePending0 (uint104)
+	//   bits [104:208] = communityFeePending1 (uint104)
+	//   bits [208:240] = lastFeeTransferTimestamp (uint32)
+	var afterSwapGas int64
+	if pluginConfig&0x02 != 0 { // AFTER_SWAP_FLAG
+		data4, err4 := read(poolAddress, big.NewInt(4))
+		if err4 == nil {
+			val4 := new(big.Int).SetBytes(data4[:])
+			mask104 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 104), big.NewInt(1))
+			feePending0 := new(big.Int).And(val4, mask104)
+			// When pending fees exceed ~1e12 wei (1 µToken), the afterSwap
+			// triggers expensive fee transfers + TWAP oracle catch-up.
+			// Observed overhead: ~2.6M gas for pools with high pending fees.
+			if feePending0.Cmp(big.NewInt(1_000_000_000_000)) > 0 {
+				afterSwapGas = 2_600_000
+			}
+		}
+	}
+	effectiveGasLimit := algebraGasLimit - afterSwapGas
+
+	if algebraDebug {
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] pool=%s z4o=%v amt=%s sqrtP=%s liq=%s prev=%d next=%d fee=%d plugin=0x%02x gasPerStep=%dK afterSwap=%dK maxSteps=%d\n",
+			poolAddress, zeroForOne, amountIn.String(), currentPrice.String(), currentLiquidity.String(),
+			prevInitializedTick, nextInitializedTick, fee, pluginConfig, gasPerStep/1000, afterSwapGas/1000,
+			(effectiveGasLimit-algebraBaseGas)/gasPerStep)
 	}
 
 	var limitSqrtPrice *big.Int
@@ -173,8 +226,16 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 
 	amountRemaining := new(big.Int).Set(amountIn)
 	amountOut := new(big.Int)
-
+	steps := 0
 	for amountRemaining.Sign() > 0 && currentPrice.Cmp(limitSqrtPrice) != 0 {
+		steps++
+		if int64(steps)*gasPerStep+algebraBaseGas > effectiveGasLimit {
+			if algebraDebug {
+				fmt.Fprintf(os.Stderr, "[ALGEBRA] gas estimate %dK exceeds limit %dK at step %d (gasPerStep=%dK afterSwap=%dK), out=%s rem=%s\n",
+					(int64(steps)*gasPerStep+algebraBaseGas)/1000, effectiveGasLimit/1000, steps, gasPerStep/1000, afterSwapGas/1000, amountOut.String(), amountRemaining.String())
+			}
+			return big.NewInt(0), nil
+		}
 		var nextTick int32
 		if zeroForOne {
 			nextTick = prevInitializedTick
@@ -208,6 +269,12 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		amountRemaining.Sub(amountRemaining, feeAmount)
 		amountOut.Add(amountOut, outputStep)
 
+		if algebraDebug && steps <= 5 {
+			fmt.Fprintf(os.Stderr, "[ALGEBRA] step %d: tick=%d in=%s out=%s fee=%s rem=%s liq=%s\n",
+				steps, nextTick, inputStep.String(), outputStep.String(), feeAmount.String(),
+				amountRemaining.String(), currentLiquidity.String())
+		}
+
 		if resultPrice.Cmp(nextTickPrice) == 0 {
 			// Read tick data from storage
 			liquidityDelta, prevTick, nextTickVal, err := algebraReadTick(read, poolAddress, nextTick)
@@ -225,8 +292,15 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 			}
 
 			currentLiquidity = new(big.Int).Add(currentLiquidity, liquidityDelta)
-			if currentLiquidity.Sign() <= 0 {
-				// Out of liquidity — EVM would revert
+			if algebraDebug && steps <= 5 {
+				fmt.Fprintf(os.Stderr, "[ALGEBRA]   crossed tick %d: delta=%s newLiq=%s prev=%d next=%d\n",
+					nextTick, liquidityDelta.String(), currentLiquidity.String(), prevTick, nextTickVal)
+			}
+			// Note: liquidity can legitimately be 0 between ticks (gap in LP coverage).
+			// Algebra EVM continues through gaps — computeSwapStep with 0 liquidity
+			// produces 0 amounts and just moves price to the next tick.
+			// Negative liquidity indicates corrupt tick data — bail out.
+			if currentLiquidity.Sign() < 0 {
 				return big.NewInt(0), nil
 			}
 		} else if resultPrice.Cmp(currentPrice) != 0 {
@@ -236,10 +310,11 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 		currentPrice = resultPrice
 	}
 
+	if algebraDebug {
+		fmt.Fprintf(os.Stderr, "[ALGEBRA] DONE: steps=%d out=%s rem=%s\n", steps, amountOut.String(), amountRemaining.String())
+	}
 	return amountOut, nil
 }
-
-
 
 
 

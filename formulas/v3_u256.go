@@ -19,6 +19,7 @@ type v3LayoutBytes struct {
 	bitmap     [32]byte
 	feeSlot    [32]byte // zero if pool has immutable fees
 	hasFeeSlot bool     // true when fee should be read from storage
+	heavyGas   bool     // true for PangolinV3/PharaohV3 with extra per-tick overhead
 }
 
 var (
@@ -43,6 +44,7 @@ func v3GetLayoutBytes(read StateReader, poolAddress string) (*v3LayoutBytes, err
 		lb.feeSlot = bigIntTo32(layout.feeSlot)
 		lb.hasFeeSlot = true
 	}
+	lb.heavyGas = layout.heavyGas
 	v3LayoutBytesCache[poolAddress] = lb
 	return lb, nil
 }

@@ -26,9 +26,10 @@ func newAlgebraPool(addr common.Address, reader StorageReader) *AlgebraPool {
 		return reader(a, slotHash), nil
 	}
 
-	// Pre-read globalState (slot 2) and packed slot (slot 9) to register
-	// dependency tracking. These reads also validate the pool is initialized.
-	sqrtPrice, _, _, _, err := algebraReadGlobalState(stateReader, poolAddress)
+	// Pre-read globalState (slot 2), packed slot (slot 9), and slot 4
+	// (communityFeePending) to register dependency tracking.
+	// These reads also validate the pool is initialized.
+	sqrtPrice, _, _, _, _, err := algebraReadGlobalState(stateReader, poolAddress)
 	if err != nil || sqrtPrice == nil || sqrtPrice.Sign() == 0 {
 		return nil
 	}
@@ -37,6 +38,11 @@ func newAlgebraPool(addr common.Address, reader StorageReader) *AlgebraPool {
 	if err != nil {
 		return nil
 	}
+
+	// Pre-read slot 4 (communityFeePending0 + communityFeePending1 +
+	// lastFeeTransferTimestamp) for dependency tracking. The formula uses
+	// communityFeePending0 to estimate afterSwap gas overhead.
+	stateReader(poolAddress, big.NewInt(4)) //nolint:errcheck
 
 	return &AlgebraPool{
 		addr:        addr,

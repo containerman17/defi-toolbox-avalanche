@@ -27,6 +27,7 @@ type tokenOverrideEntry struct {
 	Slot         int    `json:"slot"`
 	ERC7201Base  string `json:"erc7201_base,omitempty"`
 	Shift        int    `json:"shift,omitempty"`
+	Vyper        bool   `json:"vyper,omitempty"` // Vyper uses keccak(slot, addr) instead of keccak(addr, slot)
 	HookContract string `json:"hookContract,omitempty"`
 	DisableSlots []int  `json:"disableSlots,omitempty"`
 }
@@ -76,14 +77,21 @@ func RouterBytecode() []byte {
 }
 
 // computeBalanceSlot computes keccak256(abi.encode(holder, slot)) for standard ERC20 mapping.
+// For Vyper contracts, the order is reversed: keccak256(abi.encode(slot, holder)).
 func computeBalanceSlot(holder common.Address, entry *tokenOverrideEntry) common.Hash {
 	var slotKey [64]byte
-	copy(slotKey[12:32], holder[:]) // address left-padded to 32 bytes
 
-	if entry.ERC7201Base != "" {
+	if entry.Vyper {
+		// Vyper: keccak256(slot || addr)
+		slotHash := common.BigToHash(uint256.NewInt(uint64(entry.Slot)).ToBig())
+		copy(slotKey[0:32], slotHash[:])
+		copy(slotKey[44:64], holder[:])
+	} else if entry.ERC7201Base != "" {
+		copy(slotKey[12:32], holder[:])
 		base := common.HexToHash(entry.ERC7201Base)
 		copy(slotKey[32:64], base[:])
 	} else {
+		copy(slotKey[12:32], holder[:])
 		slotHash := common.BigToHash(uint256.NewInt(uint64(entry.Slot)).ToBig())
 		copy(slotKey[32:64], slotHash[:])
 	}

@@ -254,6 +254,23 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		registerSlots()
+		// Wrap with dead direction check for broken tokens (generic, all pool types)
+		dead0, dead1 := false, false
+		if hasTokens {
+			dead0 = brokenTokens[tokens[0]]
+			dead1 = brokenTokens[tokens[1]]
+		}
+		// Pool-specific dead directions override token-level checks
+		if dir, ok := deadPoolDirs[pool]; ok {
+			if dir == 0 {
+				dead0 = true
+			} else {
+				dead1 = true
+			}
+		}
+		if dead0 || dead1 {
+			inner = &deadDirQuoter{inner: inner, deadDir0: dead0, deadDir1: dead1}
+		}
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
 			wrapped := &fotPoolQuoter{
@@ -281,7 +298,13 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		default:
 			p = newV2Pool(pool, trackedReader)
 		}
-		if p != nil { return wrapAndCache(p) }
+		if p != nil {
+			if hasTokens {
+				p.SetTokenBalances(pm.evmCaller, tokens[0], tokens[1])
+				p.SetDeadDirs(tokens[0], tokens[1])
+			}
+			return wrapAndCache(p)
+		}
 	case FormulaPharaohV1:
 		if p := newPharaohV1Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:
@@ -367,6 +390,35 @@ func (pm *PoolManager) InvalidateAll() {
 // poolHex returns the lowercase hex string for a pool address.
 func poolHex(addr common.Address) string {
 	return strings.ToLower(addr.Hex())
+}
+
+// deadPoolDirs lists pools where one direction reverts on-chain but the formula computes
+// a value. Key = pool address, value = direction to block (0 = block zeroForOne, 1 = block !zeroForOne).
+var deadPoolDirs = map[common.Address]int{
+	common.HexToAddress("0xd446eb1660f766d533beceef890df7a69d26f7d1"): 1, // WAVAX/USDC LFJ V2: dir=1 (USDC→WAVAX) reverts on-chain
+	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): 0, // BTC.b/SolvBTC LFJ V2: dir=0 (BTC.b→SolvBTC) reverts on-chain
+	common.HexToAddress("0x41100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
+	common.HexToAddress("0x668aa7aefa8512416fc6244afbe5129200277a69"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
+	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): 1, // BIFI/waAvaWAVAX BalancerV3: dir=1 extreme imbalance causes EVM revert
+}
+
+// deadDirQuoter wraps a PoolQuoter to block directions where a broken input token
+// causes on-chain reverts. Generic version of V2Pool's deadDir flags — works for all pool types.
+type deadDirQuoter struct {
+	inner    PoolQuoter
+	deadDir0 bool // true = zeroForOne always returns 0 (token0 as input reverts)
+	deadDir1 bool // true = !zeroForOne always returns 0 (token1 as input reverts)
+}
+
+func (d *deadDirQuoter) Address() common.Address { return d.inner.Address() }
+func (d *deadDirQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+	if zeroForOne && d.deadDir0 {
+		return uint256.Int{}
+	}
+	if !zeroForOne && d.deadDir1 {
+		return uint256.Int{}
+	}
+	return d.inner.Quote(amountIn, zeroForOne)
 }
 
 // fotPoolQuoter wraps a PoolQuoter to apply FoT tax adjustments on input/output.

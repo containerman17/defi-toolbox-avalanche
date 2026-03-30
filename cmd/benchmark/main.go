@@ -212,10 +212,8 @@ func runBlockBenchmark(
 
 			// IMPORTANT: always use QuoteBypassQuoteCache in benchmarks.
 			// The quote cache would hide formula speed regressions/improvements.
-			qt0 := time.Now()
 			result := pm.QuoteBypassQuoteCache(pool.Address, amountIn, zeroForOne)
 			ts.Formula++
-			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
 
 			if result.Eq(&evmResult) {
 				ts.Match++
@@ -248,7 +246,17 @@ func runBlockBenchmark(
 		}
 	}
 
-	_ = t0 // used above for timing
+	// Distribute total wall time across types proportionally by formula count
+	totalElapsedMs := float64(time.Since(t0).Nanoseconds()) / 1e6
+	totalFormula := 0
+	for _, ts := range byType {
+		totalFormula += ts.Formula
+	}
+	if totalFormula > 0 {
+		for _, ts := range byType {
+			ts.HotMs = totalElapsedMs * float64(ts.Formula) / float64(totalFormula)
+		}
+	}
 
 	return &blockResult{
 		blockNum:    blockNum,

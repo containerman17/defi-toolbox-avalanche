@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-03-30 — arb2: new arb bot with dynamic price discovery
+
+### arb2 Stage 1: Price Discovery
+- New `cmd/arb2/` — clean rewrite of arb bot with per-block price discovery
+- Two-wave pricing: wave 1 quotes 0.01 WAVAX into all direct neighbors (~1080 quotes), wave 2 prices remaining tokens through already-priced intermediaries (~320 quotes)
+- 1270 tokens priced in ~1ms (cached) / ~2.5ms (uncached) per block
+- Runs continuously, prices update live every block
+
+### Benchmark timing fix
+- Replaced per-quote `time.Now()` in pass 3 with single timer around whole loop
+- Distributes total time proportionally across pool types
+- Removes ~100μs/quote syscall overhead from measurements
+
+### arb fixes
+- Default RPC URL to `http://localhost:9650/ext/bc/C/rpc`
+- Removed per-pool debug logging from InitRates
+
 ## 2026-03-29 — Stage 3 cross-check verified: local EVM matches node 100%
 
 ### RPC cross-check in dry-run mode

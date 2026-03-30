@@ -94,8 +94,10 @@ func (s *Scanner) InitRates() {
 		}
 	}
 	ok := 0
+	count := 0
 	for pid := range poolSet {
 		addr := s.pt.Addr(pid)
+		count++
 		if s.rates.Update(addr, s.pm) {
 			ok++
 		}

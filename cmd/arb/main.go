@@ -27,7 +27,7 @@ var WAVAX = common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7")
 
 func main() {
 	stateServerURL := "ws://localhost:7449/live"
-	rpcURL := ""
+	rpcURL := "http://localhost:9650/ext/bc/C/rpc"
 	maxHops := 4
 	poolLimit := 1500
 	dryRun := true

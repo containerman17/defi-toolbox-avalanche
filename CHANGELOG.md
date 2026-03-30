@@ -19,6 +19,17 @@
 - Formula accuracy is actually correct — the 3% "mismatches" are pools where output exceeds reserves
 - Formulas need reserve-check: return zero when computed output > pool balance
 
+## 2026-03-30 — Formula reserve check: cap output to pool balance
+
+### Formula fix
+- Added `balanceOf(outputToken, poolAddress)` check at `PoolManager.Quote` level
+- When formula output exceeds the pool's actual token balance, returns zero instead
+- Uses `EVMCaller` to read balances; cached per pool, invalidated with pool
+- Eliminates false positives from tiny-liquidity pools (e.g., formula computes 3×10^28 tokens output but pool holds far less)
+- Benchmark unchanged: 98.7% correct, 26 mismatches (reserve check doesn't trigger at 1 AVAX amounts)
+- arb3 top candidates now show MATCH on all hops (formula = EVM perfectly)
+- Wired `SetEVMCaller` in both arb2 and arb3
+
 ## 2026-03-30 — arb2: multi-hub (WAVAX+USDC), auto-approval, msg.sender fix
 
 ### Bug fix

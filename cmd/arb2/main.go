@@ -919,6 +919,13 @@ func main() {
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
 	pm.SetBlockTimestamp(ls.Timestamp())
+	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		cs := statedb.NewCallState(state)
+		cfg := statedb.EVMConfig{BlockNumber: ls.Block(), Timestamp: ls.Timestamp(), ChainID: 43114, BaseFee: ls.BaseFee(), GasLimit: ls.GasLimit()}
+		ctx := statedb.GetCachedContext(cfg)
+		ret, _, err := ctx.ExecuteWithCallState(cs, common.Address{}, to, data)
+		return ret, err == nil
+	})
 
 	// Build adjacency: token → []pool edges
 	adj := make(map[common.Address][]poolEdge)

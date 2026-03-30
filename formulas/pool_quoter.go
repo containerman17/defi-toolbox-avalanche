@@ -82,6 +82,10 @@ type PoolManager struct {
 	// Quote cache: 16-slot ring buffer per pool. Skipped for LFJ V2 (time-dependent).
 	quoteCaches  map[common.Address]*QuoteCache
 	noQuoteCache map[common.Address]bool // true for LFJ V2 pools
+
+	// Balance cache: pool output token balances for the reserve cap check.
+	// Key: pool address, value: [balance0, balance1]. Invalidated with pool.
+	balanceCache map[common.Address][2]uint256.Int
 }
 
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
@@ -97,6 +101,7 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		depSlots:     make(map[common.Address]map[common.Hash]common.Address),
 		quoteCaches:  make(map[common.Address]*QuoteCache),
 		noQuoteCache: make(map[common.Address]bool),
+		balanceCache: make(map[common.Address][2]uint256.Int),
 	}
 }
 
@@ -181,6 +186,26 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 	quoter := pm.Get(pool)
 	out := quoter.Quote(amountIn, zeroForOne)
 
+	// Balance cap: if output exceeds the pool's actual balance of the output token,
+	// the on-chain transfer would revert. Return zero.
+	if !out.IsZero() && pm.evmCaller != nil {
+		if tokens, ok := pm.poolTokens[pool]; ok {
+			balances, cached := pm.balanceCache[pool]
+			if !cached {
+				balances[0] = pm.readBalanceOf(tokens[0], pool)
+				balances[1] = pm.readBalanceOf(tokens[1], pool)
+				pm.balanceCache[pool] = balances
+			}
+			balIdx := 1
+			if !zeroForOne {
+				balIdx = 0
+			}
+			if !balances[balIdx].IsZero() && out.Gt(&balances[balIdx]) {
+				out = uint256.Int{}
+			}
+		}
+	}
+
 	// Store in quote cache
 	if !pm.noQuoteCache[pool] {
 		cache := pm.quoteCaches[pool]
@@ -192,6 +217,21 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 	}
 
 	return out
+}
+
+// readBalanceOf calls balanceOf(holder) on a token via evmCaller.
+func (pm *PoolManager) readBalanceOf(token, holder common.Address) uint256.Int {
+	// balanceOf(address) selector = 0x70a08231
+	var calldata [36]byte
+	calldata[0], calldata[1], calldata[2], calldata[3] = 0x70, 0xa0, 0x82, 0x31
+	copy(calldata[16:36], holder[:])
+	ret, ok := pm.evmCaller(token, calldata[:])
+	if ok && len(ret) >= 32 {
+		var bal uint256.Int
+		bal.SetBytes(ret[:32])
+		return bal
+	}
+	return uint256.Int{}
 }
 
 // QuoteBypassQuoteCache uses the pool cache but skips the quote cache.
@@ -337,6 +377,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 func (pm *PoolManager) Invalidate(addr common.Address) {
 	delete(pm.pools, addr)
 	delete(pm.quoteCaches, addr)
+	delete(pm.balanceCache, addr)
 	// Clean up depSlots: remove entries pointing to this pool.
 	// On next Get(), buildQuoter will re-record the slots.
 	for contract, slots := range pm.depSlots {
@@ -364,6 +405,7 @@ func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common
 	}
 	delete(pm.pools, poolAddr)
 	delete(pm.quoteCaches, poolAddr)
+	delete(pm.balanceCache, poolAddr)
 	// Remove all depSlots entries for this pool so they get re-recorded on rebuild
 	for c, s := range pm.depSlots {
 		for sl, pa := range s {
@@ -383,6 +425,7 @@ func (pm *PoolManager) InvalidateAll() {
 	pm.pools = make(map[common.Address]PoolQuoter)
 	pm.depSlots = make(map[common.Address]map[common.Hash]common.Address)
 	pm.quoteCaches = make(map[common.Address]*QuoteCache)
+	pm.balanceCache = make(map[common.Address][2]uint256.Int)
 }
 
 // poolHex returns the lowercase hex string for a pool address.

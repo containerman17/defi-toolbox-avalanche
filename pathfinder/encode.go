@@ -143,6 +143,174 @@ func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut 
 	return data
 }
 
+// swapSelector: keccak256("swap(address[],uint8[],address[],uint256[],bytes[],uint256)")[:4]
+var swapSelector = [4]byte{0x9c, 0x03, 0x60, 0x14}
+
+// EncodeExecuteSwapMulti builds executeSwap() calldata for EVM simulation.
+// No transferFrom, no minOutput — the router operates on pool state directly.
+func EncodeExecuteSwapMulti(
+	poolAddrs []common.Address,
+	poolTypes []int,
+	tokenPairs []common.Address,
+	amountIn *uint256.Int,
+	extraDatas []string,
+) []byte {
+	return encodeSwapMultiInner(executeSwapSelector, poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, nil)
+}
+
+// EncodeSwapMulti builds swap() calldata for on-chain execution.
+// swap() = executeSwap's 5 array params + uint256 minOutput.
+func EncodeSwapMulti(
+	poolAddrs []common.Address,
+	poolTypes []int,
+	tokenPairs []common.Address,
+	amountIn *uint256.Int,
+	extraDatas []string,
+	minOutput *uint256.Int,
+) []byte {
+	return encodeSwapMultiInner(swapSelector, poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, minOutput)
+}
+
+func encodeSwapMultiInner(
+	selector [4]byte,
+	poolAddrs []common.Address,
+	poolTypes []int,
+	tokenPairs []common.Address,
+	amountIn *uint256.Int,
+	extraDatas []string,
+	minOutput *uint256.Int, // nil for executeSwap (no minOutput param)
+) []byte {
+	n := len(poolAddrs)
+	hasMinOutput := minOutput != nil
+
+	amounts := make([]*uint256.Int, n)
+	amounts[0] = amountIn
+	for i := 1; i < n; i++ {
+		amounts[i] = uint256.NewInt(0)
+	}
+
+	addrs := make([]common.Address, n)
+	copy(addrs, poolAddrs)
+	encodedExtras := make([][]byte, n)
+	for i := range extraDatas {
+		if poolTypes[i] == 9 && extraDatas[i] != "" {
+			encodedExtras[i] = encodeV4ExtraData(extraDatas[i])
+			addrs[i] = V4PoolManager
+		}
+	}
+
+	nTokenPairs := len(tokenPairs)
+	poolsSize := 32 + n*32
+	typesSize := 32 + n*32
+	tokensSize := 32 + nTokenPairs*32
+	amountsSize := 32 + n*32
+
+	extraOffsetSize := 32 + n*32
+	extraDataSize := 0
+	for _, ed := range encodedExtras {
+		if len(ed) > 0 {
+			padded := ((len(ed) + 31) / 32) * 32
+			extraDataSize += 32 + padded
+		} else {
+			extraDataSize += 32
+		}
+	}
+
+	headWords := 5 // 5 offset words
+	if hasMinOutput {
+		headWords = 6 // + minOutput
+	}
+	headSize := headWords * 32
+	totalPayload := headSize + poolsSize + typesSize + tokensSize + amountsSize + extraOffsetSize + extraDataSize
+	buf := make([]byte, 4+totalPayload)
+
+	copy(buf[0:4], selector[:])
+	base := 4
+
+	dataStart := headSize
+	poolsOff := dataStart
+	typesOff := poolsOff + poolsSize
+	tokensOff := typesOff + typesSize
+	amountsOff := tokensOff + tokensSize
+	extrasOff := amountsOff + amountsSize
+
+	writeWordU64(buf, base+0*32, uint64(poolsOff))
+	writeWordU64(buf, base+1*32, uint64(typesOff))
+	writeWordU64(buf, base+2*32, uint64(tokensOff))
+	writeWordU64(buf, base+3*32, uint64(amountsOff))
+	writeWordU64(buf, base+4*32, uint64(extrasOff))
+	if hasMinOutput {
+		b := minOutput.Bytes32()
+		copy(buf[base+5*32:base+6*32], b[:])
+	}
+
+	pos := base + poolsOff
+	writeWordU64(buf, pos, uint64(n))
+	pos += 32
+	for _, addr := range addrs {
+		writeAddress(buf, pos, addr)
+		pos += 32
+	}
+
+	writeWordU64(buf, pos, uint64(n))
+	pos += 32
+	for _, pt := range poolTypes {
+		writeWordU64(buf, pos, uint64(pt))
+		pos += 32
+	}
+
+	writeWordU64(buf, pos, uint64(nTokenPairs))
+	pos += 32
+	for _, token := range tokenPairs {
+		writeAddress(buf, pos, token)
+		pos += 32
+	}
+
+	writeWordU64(buf, pos, uint64(n))
+	pos += 32
+	for _, amt := range amounts {
+		writeUint256(buf, pos, amt)
+		pos += 32
+	}
+
+	writeWordU64(buf, pos, uint64(n))
+	pos += 32
+	offsetBase := pos
+	offsetDataStart := offsetBase + n*32
+	currentDataPos := offsetDataStart
+	for i, ed := range encodedExtras {
+		writeWordU64(buf, offsetBase+i*32, uint64(currentDataPos-offsetBase))
+		if len(ed) > 0 {
+			padded := ((len(ed) + 31) / 32) * 32
+			currentDataPos += 32 + padded
+		} else {
+			currentDataPos += 32
+		}
+	}
+
+	pos = offsetDataStart
+	for _, ed := range encodedExtras {
+		if len(ed) > 0 {
+			padded := ((len(ed) + 31) / 32) * 32
+			writeWordU64(buf, pos, uint64(len(ed)))
+			pos += 32
+			copy(buf[pos:pos+len(ed)], ed)
+			pos += padded
+		} else {
+			writeWordU64(buf, pos, 0)
+			pos += 32
+		}
+	}
+
+	return buf[:pos]
+}
+
+func writeWordU64(buf []byte, offset int, val uint64) {
+	for i := 0; i < 8; i++ {
+		buf[offset+31-i] = byte(val >> (i * 8))
+	}
+}
+
 func writeWord(buf []byte, offset int, val *big.Int) {
 	b := val.Bytes()
 	start := offset + 32 - len(b)

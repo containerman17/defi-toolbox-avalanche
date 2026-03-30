@@ -15,6 +15,17 @@
 - Compact cycle representation with uint16 pool indices, flat `[]PoolRate` array — no map lookups in hot path
 - Total per-block: s1=2ms + s2=8ms + s3=50ms ≈ 60ms at 1000 pools
 
+### State accuracy verified: local EVM matches RPC with swap() + transferFrom
+- New `cmd/check_state/` — monitors dirty pools per block, quotes via both local EVM and RPC eth_call at same block
+- Tests full `swap()` path including `transferFrom` with balance + allowance overrides
+- **0 mismatches** across all tested blocks including block transitions
+- Confirms two-layer state system (immutable front + mutable back) is correct under live updates
+
+### Shared multi-hop encoder in pathfinder/encode.go
+- `EncodeSwapMulti` — `swap()` calldata for on-chain execution
+- `EncodeExecuteSwapMulti` — `executeSwap()` calldata for simulation
+- Shared by arb, arb2, check_state
+
 ### Benchmark timing fix
 - Replaced per-quote `time.Now()` in pass 3 with single timer around whole loop
 - Distributes total time proportionally across pool types

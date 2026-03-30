@@ -49,6 +49,7 @@ type hubConfig struct {
 	label      string
 	sizes      []*uint256.Int // starting amounts for formula BFS
 	maxBalance *uint256.Int
+	price      *uint256.Int   // price of 1 AVAX in hub token units (for gas cost conversion)
 }
 
 // ── BFS data structures ──
@@ -245,6 +246,34 @@ func evmVerifyPath(
 	}
 }
 
+// quoteAVAXPrice finds the price of 1 AVAX in hub token units by quoting through
+// the best pool connecting WAVAX to the hub token.
+func quoteAVAXPrice(pools []pf.Pool, pm *formulas.PoolManager, wavax, hubToken common.Address, oneAVAX *uint256.Int) *uint256.Int {
+	var bestPrice uint256.Int
+	for i := range pools {
+		p := &pools[i]
+		if len(p.Tokens) < 2 {
+			continue
+		}
+		var zeroForOne bool
+		if p.Tokens[0] == wavax && p.Tokens[1] == hubToken {
+			zeroForOne = true
+		} else if p.Tokens[1] == wavax && p.Tokens[0] == hubToken {
+			zeroForOne = false
+		} else {
+			continue
+		}
+		out := pm.Quote(p.Address, oneAVAX, zeroForOne)
+		if out.Gt(&bestPrice) {
+			bestPrice = out
+		}
+	}
+	if bestPrice.IsZero() {
+		return nil
+	}
+	return new(uint256.Int).Set(&bestPrice)
+}
+
 // binarySearchSize finds the optimal input amount for a given path.
 // Starts at baseAmount, searches between baseAmount/2 and baseAmount*2.
 func binarySearchSize(
@@ -256,6 +285,7 @@ func binarySearchSize(
 	caller common.Address,
 	routerAddr common.Address,
 	baseFee uint64,
+	hubPrice *uint256.Int, // price of 1 AVAX in hub token units
 ) *evmResult {
 	lo := new(uint256.Int).Rsh(baseAmount, 1) // baseAmount / 2
 	hi := new(uint256.Int).Lsh(baseAmount, 1) // baseAmount * 2
@@ -271,7 +301,10 @@ func binarySearchSize(
 		if gross.IsZero() {
 			return -1e18, r
 		}
-		gasCost := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+		// gasCostInToken = gasUsed * baseFee * hubPrice / 1e18
+		gasCostAVAX := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+		gasCost := new(uint256.Int).Mul(gasCostAVAX, hubPrice)
+		gasCost.Div(gasCost, uint256.NewInt(1_000_000_000_000_000_000))
 		if gross.Lt(gasCost) {
 			r.netProfit = -(new(uint256.Int).Sub(gasCost, gross)).Float64()
 			return r.netProfit, r
@@ -638,9 +671,25 @@ func main() {
 	for _, ht := range hubTokens {
 		bal := readBalance(state, evmCtx, caller, ht.addr)
 		fmt.Fprintf(os.Stderr, "[arb3] hub %s: balance=%s\n", ht.label, bal.Dec())
+		// Price of 1 AVAX in hub token units (for gas cost conversion)
+		var price *uint256.Int
+		if ht.addr == WAVAX {
+			price = uint256.NewInt(1_000_000_000_000_000_000) // 1:1
+		} else {
+			// Quote 1 AVAX → hub token through any connecting pool
+			oneAVAX := uint256.NewInt(1_000_000_000_000_000_000)
+			price = quoteAVAXPrice(pools, pm, WAVAX, ht.addr, oneAVAX)
+			if price == nil || price.IsZero() {
+				price = uint256.NewInt(1) // fallback: prevent div-by-zero
+				fmt.Fprintf(os.Stderr, "[arb3] WARNING: no AVAX price for %s\n", ht.label)
+			}
+		}
+		if ht.addr != WAVAX {
+			fmt.Fprintf(os.Stderr, "[arb3] hub %s: AVAX price=%s\n", ht.label, price.Dec())
+		}
 		hubs = append(hubs, hubConfig{
 			token: ht.addr, label: ht.label,
-			sizes: ht.sizes, maxBalance: bal,
+			sizes: ht.sizes, maxBalance: bal, price: price,
 		})
 	}
 	ls.RUnlock()
@@ -726,6 +775,16 @@ func main() {
 			ChainID: 43114, BaseFee: baseFee, GasLimit: gasLimit,
 		}
 		evmCtx := statedb.GetCachedContext(cfg)
+
+		// Update AVAX prices for non-WAVAX hubs
+		oneAVAX := uint256.NewInt(1_000_000_000_000_000_000)
+		for i := range hubs {
+			if hubs[i].token != WAVAX {
+				if p := quoteAVAXPrice(pools, pm, WAVAX, hubs[i].token, oneAVAX); p != nil && !p.IsZero() {
+					hubs[i].price = p
+				}
+			}
+		}
 
 		for _, hub := range hubs {
 			t0 := time.Now()
@@ -834,7 +893,10 @@ func main() {
 				// swap() returns the caller's balance delta for cyclic arbs (tokenIn==tokenOut).
 				// amountOut IS the gross profit, not amountIn + profit.
 				gross := r.amountOut
-				gasCost := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+				// gasCostInToken = gasUsed * baseFee * hubPrice / 1e18
+				gasCostAVAX := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+				gasCost := new(uint256.Int).Mul(gasCostAVAX, hub.price)
+				gasCost.Div(gasCost, uint256.NewInt(1_000_000_000_000_000_000))
 				if debugHops && evmCalls <= 10 {
 					fmt.Fprintf(os.Stderr, "[arb3]   evm: in=%s gross=%s gasCost=%s gas=%d\n",
 						r.amountIn.Dec(), gross.Dec(), gasCost.Dec(), r.gasUsed)
@@ -854,7 +916,7 @@ func main() {
 				t2 := time.Now()
 				sized := binarySearchSize(
 					&best.path, pools, best.amountIn,
-					state, evmCtx, caller, routerAddr, baseFee,
+					state, evmCtx, caller, routerAddr, baseFee, hub.price,
 				)
 				sizeTime := time.Since(t2)
 
@@ -862,9 +924,11 @@ func main() {
 					best = sized
 				}
 
+				div := 1e18
+				if hub.token == USDC { div = 1e6 }
 				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v\n",
-					hub.label, best.amountIn.Float64()/1e18, best.amountOut.Float64()/1e18,
-					best.gasUsed, best.netProfit/1e18, evmCalls, sizeTime.Round(time.Microsecond))
+					hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
+					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond))
 			} else {
 				fmt.Fprintf(os.Stderr, "[arb3] %s evm: no profit, %d calls, %v\n",
 					hub.label, evmCalls, evmTime.Round(time.Microsecond))

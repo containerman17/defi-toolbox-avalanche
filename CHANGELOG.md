@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-03-31 — arb3: fix USDC gas cost comparison + pharaoh_v3 coverage
+
+### Critical bug fix
+- arb3 compared USDC gross profit (6-decimal units) directly against gas cost (18-decimal AVAX wei)
+- This made every USDC arb appear unprofitable (272 USDC units < 19 trillion wei)
+- Fix: convert gas cost to hub token units via `gasCostInToken = gasUsed * baseFee * hubPrice / 1e18`
+- Added `price` field to `hubConfig`, updated per block via formula quote (WAVAX→hub token)
+- USDC arbs now finding real profit: in=1.63 USDC, net=+0.0006 USDC per block
+- Also fixed PROFIT log line to use correct decimal divisor per hub (1e18 for WAVAX, 1e6 for USDC)
+
+### pharaoh_v3 pool coverage
+- Fixed 2 blacklisted pharaoh_v3 pools (0x71bd7525, 0xa20c959b) from formula -1 to formula 2 (V3)
+- These were blacklisted because EVM returned 0 at 1 AVAX test amount (no liquidity at that size)
+- Both confirmed working in evm-quoter registry; back-ported fix to main registry.txt
+- Ran discover with --limit 7500 to register 3 additional missing pools
+- 877 pharaoh_v3 pools remain unregistered (ranked 7500-26591, ancient/low-activity)
+- Restarted state server in tmux session `stateserver` after it crashed during 27k-pool discover run
+
 ## 2026-03-30 — arb3: formula BFS arb bot
 
 ### New bot

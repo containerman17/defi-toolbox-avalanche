@@ -4,8 +4,9 @@
 
 ### arb2 Stage 1: Price Discovery
 - New `cmd/arb2/` — clean rewrite of arb bot with per-block price discovery
-- Two-wave pricing: wave 1 quotes 0.01 WAVAX into all direct neighbors (~1080 quotes), wave 2 prices remaining tokens through already-priced intermediaries (~320 quotes)
-- 1270 tokens priced in ~1ms (cached) / ~2.5ms (uncached) per block
+- Multi-wave pricing (up to 4 waves, early exit when no new tokens found): wave 1 quotes 1 AVAX into all direct WAVAX neighbors, subsequent waves price tokens reachable through already-priced intermediaries
+- Best-of-all-edges selection for most accurate prices (~4100 quotes)
+- 1270 tokens priced in ~17ms (cached) per block
 - Runs continuously, prices update live every block
 
 ### Benchmark timing fix

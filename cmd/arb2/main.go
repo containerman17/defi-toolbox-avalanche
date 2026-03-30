@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 	"strings"
 	"time"
@@ -18,8 +19,8 @@ import (
 
 var WAVAX = common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7")
 
-// Minimum quote: 0.01 AVAX in wei
-var minQuote = uint256.NewInt(10_000_000_000_000_000) // 1e16
+// Minimum quote: 1 AVAX in wei
+var minQuote = uint256.NewInt(1_000_000_000_000_000_000) // 1e18
 
 // Well-known tokens for sanity check output
 var debugTokens = map[common.Address]struct {
@@ -46,67 +47,59 @@ type poolEdge struct {
 
 // stage1 runs price discovery: two waves of quoting to price all tokens in WAVAX terms.
 // Returns tokenPrice map and total quote count.
+const numWaves = 4
+
 func stage1(pm *formulas.PoolManager, adj map[common.Address][]poolEdge) (map[common.Address]*uint256.Int, int) {
 	t0 := time.Now()
 
 	tokenPrice := make(map[common.Address]*uint256.Int)
 	tokenPrice[WAVAX] = new(uint256.Int).Set(minQuote)
 
-	// Wave 1: quote 0.01 WAVAX into every direct neighbor
-	wave1Quotes := 0
-	for _, e := range adj[WAVAX] {
-		if _, priced := tokenPrice[e.tokenOut]; priced {
-			continue
+	totalQuotes := 0
+	for wave := 0; wave < numWaves; wave++ {
+		waveQuotes := 0
+		pricedBefore := len(tokenPrice)
+		for token, edges := range adj {
+			if _, priced := tokenPrice[token]; priced {
+				continue
+			}
+			for _, e := range edges {
+				knownPrice, priced := tokenPrice[e.tokenOut]
+				if !priced {
+					continue
+				}
+				out := pm.Quote(e.pool.Address, knownPrice, !e.dir)
+				waveQuotes++
+				if out.IsZero() {
+					continue
+				}
+				existing, exists := tokenPrice[token]
+				if !exists || out.Gt(existing) {
+					o := new(uint256.Int).Set(&out)
+					tokenPrice[token] = o
+				}
+			}
 		}
-		out := pm.QuoteBypassQuoteCache(e.pool.Address, minQuote, e.dir)
-		wave1Quotes++
-		if out.IsZero() {
-			continue
-		}
-		existing, exists := tokenPrice[e.tokenOut]
-		if !exists || out.Gt(existing) {
-			o := new(uint256.Int).Set(&out)
-			tokenPrice[e.tokenOut] = o
+		totalQuotes += waveQuotes
+		newTokens := len(tokenPrice) - pricedBefore
+		fmt.Fprintf(os.Stderr, "[arb2]   wave %d: %d quotes, +%d tokens (%d total)\n",
+			wave+1, waveQuotes, newTokens, len(tokenPrice))
+		if newTokens == 0 {
+			break // no new tokens discovered, done
 		}
 	}
 
-	// Wave 2: for unpriced tokens, find pools connected to priced tokens
-	wave2Quotes := 0
-	for token, edges := range adj {
-		if _, priced := tokenPrice[token]; priced {
-			continue
-		}
-		for _, e := range edges {
-			knownPrice, priced := tokenPrice[e.tokenOut]
-			if !priced {
-				continue
-			}
-			out := pm.QuoteBypassQuoteCache(e.pool.Address, knownPrice, !e.dir)
-			wave2Quotes++
-			if out.IsZero() {
-				continue
-			}
-			existing, exists := tokenPrice[token]
-			if !exists || out.Gt(existing) {
-				o := new(uint256.Int).Set(&out)
-				tokenPrice[token] = o
-			}
-			break // one price is enough
-		}
-	}
+	fmt.Fprintf(os.Stderr, "[arb2] stage1: %d quotes, %d tokens, %v\n",
+		totalQuotes, len(tokenPrice), time.Since(t0).Round(time.Microsecond))
 
-	total := wave1Quotes + wave2Quotes
-	fmt.Fprintf(os.Stderr, "[arb2] stage1: %d quotes (%d+%d), %d tokens, %v\n",
-		total, wave1Quotes, wave2Quotes, len(tokenPrice), time.Since(t0).Round(time.Microsecond))
-
-	return tokenPrice, total
+	return tokenPrice, totalQuotes
 }
 
 func printPrices(tokenPrice map[common.Address]*uint256.Int) {
 	usdcAddr := common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E")
 	usdcPrice, hasUSDC := tokenPrice[usdcAddr]
 	if hasUSDC {
-		avaxInUSDC := float64(usdcPrice.Uint64()) / 1e6 * 100
+		avaxInUSDC := float64(usdcPrice.Uint64()) / 1e6
 		fmt.Fprintf(os.Stderr, "[arb2] 1 AVAX ≈ $%.2f  |  ", avaxInUSDC)
 	}
 
@@ -118,11 +111,12 @@ func printPrices(tokenPrice map[common.Address]*uint256.Int) {
 		if !hasUSDC {
 			continue
 		}
-		tokensPerAvax := float64(price.ToBig().Int64()) / math.Pow(10, float64(info.decimals)) * 100
+		bf := new(big.Float).SetInt(price.ToBig())
+		tokensPerAvax, _ := bf.Quo(bf, new(big.Float).SetFloat64(math.Pow(10, float64(info.decimals)))).Float64()
 		if tokensPerAvax <= 0 {
 			continue
 		}
-		avaxInUSDCf := float64(usdcPrice.Uint64()) / 1e6 * 100
+		avaxInUSDCf := float64(usdcPrice.Uint64()) / 1e6
 		usd := avaxInUSDCf / tokensPerAvax
 		fmt.Fprintf(os.Stderr, "%s=$%.2f ", info.symbol, usd)
 	}

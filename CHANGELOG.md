@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-30 — Fix: ExecuteWithCallState used wrong msg.sender
+
+### Bug fix
+- `ExecuteWithCallState` always used a cached `0xdEaD` contract as `msg.sender`, ignoring the `from` parameter
+- This caused 100% revert rate in arb2 stage4 because `swap()` → `transferFrom(msg.sender=0xdEaD, ...)` failed (0xdEaD has no WAVAX)
+- The benchmark was unaffected because it uses `executeSwap` which doesn't check msg.sender
+- Fixed: replaced `ctx.callerContract` with `vm.AccountRef(from)`, matching how `Execute` works
+- Removed unused `callerContract` field from `CachedContext`
+
 ## 2026-03-30 — HayabusaRouter fix: cyclic arb underflow
 
 ### Router bug fix

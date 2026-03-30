@@ -16,14 +16,32 @@ import (
 	"defi-toolbox/statedb"
 
 	"bufio"
+	"bytes"
+	"crypto/ecdsa"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net/http"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
 
 var WAVAX = common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7")
+var USDC = common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E")
 var ROUTER = router.DeployedRouter
+
+// hubConfig holds per-hub cycle data, balance cap, and size buckets.
+type hubConfig struct {
+	token      common.Address
+	label      string
+	cycles     []Cycle
+	maxBalance *uint256.Int
+	sizes      []*uint256.Int
+	price      *uint256.Int // price of 1 AVAX in hub token units (updated per block)
+}
 
 // Minimum quote: 1 AVAX in wei
 var minQuote = uint256.NewInt(1_000_000_000_000_000_000) // 1e18
@@ -462,13 +480,19 @@ func expandCycle(c *Cycle, pools []pf.Pool, hub common.Address) (
 	return
 }
 
-// sizeBuckets are the 5 WAVAX input amounts for EVM verification.
-var sizeBuckets = [5]*uint256.Int{
-	uint256.NewInt(1_000_000_000_000_000),                                              // 0.001 AVAX
-	uint256.NewInt(10_000_000_000_000_000),                                             // 0.01 AVAX
-	uint256.NewInt(100_000_000_000_000_000),                                            // 0.1 AVAX
-	uint256.NewInt(1_000_000_000_000_000_000),                                          // 1 AVAX
-	new(uint256.Int).Mul(uint256.NewInt(10), uint256.NewInt(1_000_000_000_000_000_000)), // 10 AVAX
+// Per-hub size buckets for EVM verification.
+var wavaxSizes = []*uint256.Int{
+	uint256.NewInt(1_000_000_000_000_000),    // 0.001 AVAX
+	uint256.NewInt(10_000_000_000_000_000),   // 0.01 AVAX
+	uint256.NewInt(100_000_000_000_000_000),  // 0.1 AVAX
+	uint256.NewInt(1_000_000_000_000_000_000), // 1 AVAX
+}
+
+var usdcSizes = []*uint256.Int{
+	uint256.NewInt(10_000),      // $0.01
+	uint256.NewInt(100_000),     // $0.10
+	uint256.NewInt(1_000_000),   // $1
+	uint256.NewInt(10_000_000),  // $10
 }
 
 // stage4Result holds the best EVM-verified opportunity.
@@ -482,6 +506,8 @@ type stage4Result struct {
 }
 
 // stage4 runs top candidates through local EVM via the router's swap().
+// hubPrice is the price of 1 AVAX in hub token units (from stage1 tokenPrice).
+// For WAVAX hub, pass 1e18. For USDC hub, pass e.g. 8_900_000 (=$8.90).
 func stage4(
 	candidates []stage3Result,
 	cycles []Cycle,
@@ -491,6 +517,9 @@ func stage4(
 	hub common.Address,
 	baseFee uint64,
 	caller common.Address,
+	maxBalance *uint256.Int,
+	sizes []*uint256.Int,
+	hubPrice *uint256.Int,
 ) *stage4Result {
 	t0 := time.Now()
 	totalVerified := 0
@@ -512,8 +541,11 @@ func stage4(
 
 		poolAddrs, poolTypes, tokenPairs, extraDatas := expandCycle(c, pools, hub)
 
-		for s := 0; s < 5; s++ {
-			amountIn := sizeBuckets[s]
+		for s := 0; s < len(sizes); s++ {
+			amountIn := sizes[s]
+			if maxBalance != nil && amountIn.Gt(maxBalance) {
+				continue
+			}
 			calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
 
 			cs := statedb.NewCallState(state)
@@ -555,7 +587,11 @@ func stage4(
 			}
 
 			grossProfit := new(uint256.Int).Sub(amountOut, amountIn)
-			gasCost := new(uint256.Int).Mul(uint256.NewInt(gasUsed), uint256.NewInt(baseFee))
+			// Convert gas cost (AVAX wei) to hub token units:
+			// gasCostInToken = gasUsed * baseFee * hubPrice / 1e18
+			gasCostAVAX := new(uint256.Int).Mul(uint256.NewInt(gasUsed), uint256.NewInt(baseFee))
+			gasCost := new(uint256.Int).Mul(gasCostAVAX, hubPrice)
+			gasCost.Div(gasCost, uint256.NewInt(1_000_000_000_000_000_000))
 			if !grossProfit.Gt(gasCost) {
 				unprofitable++
 				continue
@@ -611,6 +647,161 @@ func printPrices(tokenPrice map[common.Address]*uint256.Int) {
 	fmt.Fprintf(os.Stderr, "\n")
 }
 
+const RPC = "http://localhost:9650/ext/bc/C/rpc"
+
+var chainID = big.NewInt(43114)
+
+// rpcCall sends a JSON-RPC request and returns the raw response body.
+func rpcCall(body interface{}) ([]byte, error) {
+	b, _ := json.Marshal(body)
+	resp, err := http.Post(RPC, "application/json", bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
+
+// rpcAllowance checks ERC-20 allowance(owner, spender) via eth_call.
+func rpcAllowance(token, owner, spender common.Address) *uint256.Int {
+	// allowance(address,address) = 0xdd62ed3e
+	data := "0xdd62ed3e" +
+		"000000000000000000000000" + hex.EncodeToString(owner[:]) +
+		"000000000000000000000000" + hex.EncodeToString(spender[:])
+	resp, err := rpcCall(map[string]interface{}{
+		"jsonrpc": "2.0", "id": 1, "method": "eth_call",
+		"params": []interface{}{map[string]string{"to": token.Hex(), "data": data}, "latest"},
+	})
+	if err != nil {
+		return uint256.NewInt(0)
+	}
+	var rpcResp struct{ Result string }
+	json.Unmarshal(resp, &rpcResp)
+	b, _ := hex.DecodeString(strings.TrimPrefix(rpcResp.Result, "0x"))
+	if len(b) < 32 {
+		return uint256.NewInt(0)
+	}
+	return new(uint256.Int).SetBytes(b[:32])
+}
+
+// rpcNonce fetches the current nonce for an address.
+func rpcNonce(addr common.Address) uint64 {
+	resp, err := rpcCall(map[string]interface{}{
+		"jsonrpc": "2.0", "id": 1, "method": "eth_getTransactionCount",
+		"params": []interface{}{addr.Hex(), "latest"},
+	})
+	if err != nil {
+		return 0
+	}
+	var rpcResp struct{ Result string }
+	json.Unmarshal(resp, &rpcResp)
+	n := new(big.Int)
+	n.SetString(strings.TrimPrefix(rpcResp.Result, "0x"), 16)
+	return n.Uint64()
+}
+
+// rpcBaseFee fetches the current base fee from the latest block.
+func rpcBaseFee() uint64 {
+	resp, err := rpcCall(map[string]interface{}{
+		"jsonrpc": "2.0", "id": 1, "method": "eth_getBlockByNumber",
+		"params": []interface{}{"latest", false},
+	})
+	if err != nil {
+		return 25_000_000_000
+	}
+	var rpcResp struct {
+		Result struct {
+			BaseFeePerGas string `json:"baseFeePerGas"`
+		}
+	}
+	json.Unmarshal(resp, &rpcResp)
+	bf := new(big.Int)
+	bf.SetString(strings.TrimPrefix(rpcResp.Result.BaseFeePerGas, "0x"), 16)
+	return bf.Uint64()
+}
+
+// ensureApprovals checks and issues approve() txs for each hub token if needed.
+// Approves for 1000x the current balance.
+func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubConfig) {
+	routerAddr := router.DeployedRouter
+	signer := types.NewLondonSigner(chainID)
+	nonce := rpcNonce(caller)
+	baseFee := rpcBaseFee()
+
+	for _, hub := range hubs {
+		allowance := rpcAllowance(hub.token, caller, routerAddr)
+		needed := new(uint256.Int).Mul(hub.maxBalance, uint256.NewInt(1000))
+
+		if allowance.Gt(needed) || allowance.Eq(needed) {
+			fmt.Fprintf(os.Stderr, "[arb2] %s allowance OK (%s)\n", hub.label, allowance.Dec())
+			continue
+		}
+
+		fmt.Fprintf(os.Stderr, "[arb2] %s allowance %s < %s, approving...\n",
+			hub.label, allowance.Dec(), needed.Dec())
+
+		// approve(address,uint256) = 0x095ea7b3
+		data := make([]byte, 68)
+		data[0], data[1], data[2], data[3] = 0x09, 0x5e, 0xa7, 0xb3
+		copy(data[4+12:4+32], routerAddr[:])
+		neededBytes := needed.Bytes32()
+		copy(data[36:68], neededBytes[:])
+
+		maxFee := new(big.Int).SetUint64(baseFee*2 + 1_000_000_000)
+		tokenAddr := hub.token
+		tx := types.NewTx(&types.DynamicFeeTx{
+			ChainID:   chainID,
+			Nonce:     nonce,
+			GasTipCap: big.NewInt(0),
+			GasFeeCap: maxFee,
+			Gas:       60_000,
+			To:        &tokenAddr,
+			Value:     big.NewInt(0),
+			Data:      data,
+		})
+		signedTx, err := types.SignTx(tx, signer, key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb2] sign approve %s: %v\n", hub.label, err)
+			continue
+		}
+		rawTx, _ := signedTx.MarshalBinary()
+		rawHex := "0x" + hex.EncodeToString(rawTx)
+		resp, err := rpcCall(map[string]interface{}{
+			"jsonrpc": "2.0", "id": 1, "method": "eth_sendRawTransaction",
+			"params": []string{rawHex},
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb2] send approve %s: %v\n", hub.label, err)
+			continue
+		}
+		var rpcResp struct {
+			Result string
+			Error  *struct{ Message string }
+		}
+		json.Unmarshal(resp, &rpcResp)
+		if rpcResp.Error != nil {
+			fmt.Fprintf(os.Stderr, "[arb2] approve %s failed: %s\n", hub.label, rpcResp.Error.Message)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "[arb2] %s approved, tx=%s nonce=%d\n",
+			hub.label, signedTx.Hash().Hex()[:14], nonce)
+		nonce++
+	}
+}
+
+// readBalance calls balanceOf(owner) on token via local EVM.
+func readBalance(state *statedb.StateDB, evmCtx *statedb.CachedContext, owner, token common.Address) *uint256.Int {
+	var calldata [36]byte
+	calldata[0], calldata[1], calldata[2], calldata[3] = 0x70, 0xa0, 0x82, 0x31
+	copy(calldata[16:36], owner[:])
+	cs := statedb.NewCallState(state)
+	ret, _, err := evmCtx.ExecuteWithCallState(cs, owner, token, calldata[:])
+	if err == nil && len(ret) >= 32 {
+		return new(uint256.Int).SetBytes(ret[:32])
+	}
+	return uint256.NewInt(0)
+}
+
 func main() {
 	stateServerURL := "ws://localhost:7449/live"
 	poolLimit := 4000
@@ -631,12 +822,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[arb2] WARNING: ARB_PRIVATE_KEY not set, stage4 will fail\n")
 	}
 	var caller common.Address
+	var privKey *ecdsa.PrivateKey
 	if privKeyHex != "" {
 		key, err := crypto.HexToECDSA(privKeyHex)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[arb2] bad private key: %v\n", err)
 			os.Exit(1)
 		}
+		privKey = key
 		caller = crypto.PubkeyToAddress(key.PublicKey)
 		fmt.Fprintf(os.Stderr, "[arb2] caller: %s\n", caller.Hex())
 	}
@@ -653,6 +846,17 @@ func main() {
 		os.Exit(1)
 	}
 	state := ls.State()
+
+	// Hub tokens for arb cycles
+	hubTokens := []struct {
+		addr     common.Address
+		label    string
+		decimals int
+		sizes    []*uint256.Int
+	}{
+		{WAVAX, "WAVAX", 18, wavaxSizes},
+		{USDC, "USDC", 6, usdcSizes},
+	}
 
 	// Build PoolManager
 	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
@@ -696,16 +900,47 @@ func main() {
 	maxHops := 4
 	topN := 100
 
-	// One-time cycle enumeration
+	// One-time cycle enumeration + balance read per hub
 	pi := newPoolIndex(pools)
-	cycles := enumerateCycles(adj, WAVAX, maxHops, pi)
-	_ = buildCyclesByPool(cycles) // will use later for dirty-pool filtering
+	var hubs []hubConfig
+
+	ls.RLock()
+	initCfg := statedb.EVMConfig{
+		BlockNumber: ls.Block(),
+		Timestamp:   ls.Timestamp(),
+		ChainID:     43114,
+		BaseFee:     ls.BaseFee(),
+		GasLimit:    ls.GasLimit(),
+	}
+	evmCtx := statedb.GetCachedContext(initCfg)
+	for _, ht := range hubTokens {
+		cycles := enumerateCycles(adj, ht.addr, maxHops, pi)
+		if len(cycles) == 0 {
+			continue
+		}
+		bal := readBalance(state, evmCtx, caller, ht.addr)
+		divisor := math.Pow(10, float64(ht.decimals))
+		fmt.Fprintf(os.Stderr, "[arb2] hub %s: %d cycles, balance=%.4f\n",
+			ht.label, len(cycles), bal.Float64()/divisor)
+		hubs = append(hubs, hubConfig{
+			token:      ht.addr,
+			label:      ht.label,
+			cycles:     cycles,
+			maxBalance: bal,
+			sizes:      ht.sizes,
+		})
+	}
+	ls.RUnlock()
+
+	// Check and issue approvals if needed
+	if privKey != nil {
+		ensureApprovals(privKey, caller, hubs)
+	}
 
 	// Initial stage 1 + 2 + 3 + 4
 	ls.RLock()
 	tokenPrice, _ := stage1(pm, adj)
 	rateTable, _ := stage2(pm, pools, tokenPrice, registry)
-	s3results := stage3(cycles, rateTable, topN)
 	cfg := statedb.EVMConfig{
 		BlockNumber: ls.Block(),
 		Timestamp:   ls.Timestamp(),
@@ -713,17 +948,21 @@ func main() {
 		BaseFee:     ls.BaseFee(),
 		GasLimit:    ls.GasLimit(),
 	}
-	best := stage4(s3results, cycles, pools, state, cfg, WAVAX, ls.BaseFee(), caller)
+	for i := range hubs {
+		if p, ok := tokenPrice[hubs[i].token]; ok {
+			hubs[i].price = p
+		} else {
+			hubs[i].price = uint256.NewInt(1_000_000_000_000_000_000) // fallback: 1:1
+		}
+		s3results := stage3(hubs[i].cycles, rateTable, topN)
+		best := stage4(s3results, hubs[i].cycles, pools, state, cfg, hubs[i].token, ls.BaseFee(), caller, hubs[i].maxBalance, hubs[i].sizes, hubs[i].price)
+		if best != nil {
+			fmt.Fprintf(os.Stderr, "[arb2] %s PROFIT: net=%.0f, in=%s out=%s gas=%d\n",
+				hubs[i].label, best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
+		}
+	}
 	ls.RUnlock()
 	printPrices(tokenPrice)
-	if best != nil {
-		fmt.Fprintf(os.Stderr, "[arb2] PROFIT: net=%.0f wei, in=%s out=%s gas=%d\n",
-			best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
-	} else if len(s3results) > 0 {
-		c := &cycles[s3results[0].cycleIdx]
-		fmt.Fprintf(os.Stderr, "[arb2] no profit, top candidate: product=%.6f hops=%d size=%d\n",
-			s3results[0].product, c.Hops, s3results[0].size)
-	}
 
 	fmt.Fprintf(os.Stderr, "[arb2] ready. Waiting for blocks...\n")
 
@@ -773,15 +1012,20 @@ func main() {
 		ls.RLock()
 		tokenPrice, s1q := stage1(pm, adj)
 		rateTable, s2q := stage2(pm, pools, tokenPrice, registry)
-		s3results := stage3(cycles, rateTable, topN)
-		best := stage4(s3results, cycles, pools, state, cfg, WAVAX, bi.baseFee, caller)
+		for i := range hubs {
+			if p, ok := tokenPrice[hubs[i].token]; ok {
+				hubs[i].price = p
+			}
+			s3results := stage3(hubs[i].cycles, rateTable, topN)
+			best := stage4(s3results, hubs[i].cycles, pools, state, cfg, hubs[i].token, bi.baseFee, caller, hubs[i].maxBalance, hubs[i].sizes, hubs[i].price)
+			if best != nil {
+				fmt.Fprintf(os.Stderr, "[arb2] %s PROFIT: net=%.0f, in=%s out=%s gas=%d\n",
+					hubs[i].label, best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
+			}
+		}
 		ls.RUnlock()
 
 		fmt.Fprintf(os.Stderr, "[arb2] block=%d dirty=%d s1=%d s2=%d  ", bi.block, len(dirtySet), s1q, s2q)
 		printPrices(tokenPrice)
-		if best != nil {
-			fmt.Fprintf(os.Stderr, "  PROFIT: net=%.0f wei, in=%s out=%s gas=%d\n",
-				best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
-		}
 	}
 }

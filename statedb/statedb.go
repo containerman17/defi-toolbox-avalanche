@@ -605,7 +605,6 @@ type CachedContext struct {
 	rules          params.Rules
 	chainCfg       *params.ChainConfig
 	gasPrice       *big.Int
-	callerContract *vm.Contract
 }
 
 var cachedCtx *CachedContext
@@ -650,20 +649,11 @@ func GetCachedContext(cfg EVMConfig) *CachedContext {
 	chainCfg := AvalancheCChainConfig
 	rules := chainCfg.Rules(blockNumber, true, cfg.Timestamp)
 
-	dummySender := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
-	callerContract := vm.NewContract(
-		vm.AccountRef(dummySender),
-		vm.AccountRef(dummySender),
-		uint256.NewInt(0),
-		0,
-	)
-
 	cachedCtx = &CachedContext{
-		blockCtx:       blockCtx,
-		rules:          rules,
-		chainCfg:       chainCfg,
-		gasPrice:       new(big.Int).SetUint64(baseFee),
-		callerContract: callerContract,
+		blockCtx: blockCtx,
+		rules:    rules,
+		chainCfg: chainCfg,
+		gasPrice: new(big.Int).SetUint64(baseFee),
 	}
 	return cachedCtx
 }
@@ -693,6 +683,6 @@ func (ctx *CachedContext) ExecuteWithCallState(cs *CallState, from, to common.Ad
 	cs.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
 	evm := vm.NewEVM(ctx.blockCtx, txCtx, cs, ctx.chainCfg, vm.Config{})
 	gasLimit := uint64(5_000_000)
-	ret, gasLeft, err := evm.Call(ctx.callerContract, to, data, gasLimit, uint256.NewInt(0))
+	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, gasLimit, uint256.NewInt(0))
 	return ret, gasLimit - gasLeft, err
 }

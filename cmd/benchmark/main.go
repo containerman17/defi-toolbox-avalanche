@@ -6,8 +6,10 @@ import (
 	"math/big"
 	"os"
 	"os/exec"
+	"runtime"
 	"runtime/pprof"
 	"strings"
+	"sync"
 	"time"
 
 	"defi-toolbox/formulas"
@@ -99,39 +101,55 @@ func runBlockBenchmark(
 		pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
 
-	// ─── Pass 1: EVM ground truth (not timed) ───
-	evmGround := make(map[quoteKey]uint256.Int)
+	// ─── Pass 1: EVM ground truth (parallel, not timed) ───
+	// EVMPool: N long-lived executors with persistent JUMPDEST cache.
+	// Each executor has its own CallerContract — bytecodes scanned once, cached forever.
+	// The pool channel limits concurrency to N (= NumCPU).
 	evmCtx := statedb.GetCachedContext(cfg)
-	cs := statedb.NewCallState(baseWithOverrides)
+	evmPool := statedb.NewEVMPool(runtime.NumCPU(), evmCtx, baseWithOverrides)
 
-	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth)...")
+	type groundEntry struct {
+		key quoteKey
+		out uint256.Int
+	}
+	var groundMu sync.Mutex
+	evmGround := make(map[quoteKey]uint256.Int)
+
+	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth, %d workers)...", evmPool.Size())
 	p1t0 := time.Now()
+
+	var wg sync.WaitGroup
 	for i := range pools {
 		pool := &pools[i]
 		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
 			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
 				continue
 			}
-			tokenIn := pool.Tokens[tokenIdx[0]]
-			tokenOut := pool.Tokens[tokenIdx[1]]
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
-			cs.Reset()
-			ret, gasUsed, evmErr := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
-			key := quoteKey{pool.Address, tokenIdx[0]}
-			if evmErr == nil && len(ret) >= 32 {
-				var out uint256.Int
-				out.SetBytes(ret[:32])
-				evmGround[key] = out
-			}
-			if len(pools) == 1 {
-				fmt.Fprintf(os.Stderr, "\n  [DEBUG] pool=%s dir=%d evmErr=%v retLen=%d gasUsed=%d ret=%x", pool.Address.Hex(), tokenIdx[0], evmErr, len(ret), gasUsed, ret)
-			}
+			wg.Add(1)
+			go func(p *pathfinder.Pool, ti [2]int) {
+				defer wg.Done()
+				tokenIn := p.Tokens[ti[0]]
+				tokenOut := p.Tokens[ti[1]]
+				amountIn := uint256.NewInt(1_000_000_000_000_000_000)
+				calldata := pathfinder.EncodeSwapSingleWithExtra(p.Address, p.PoolType, tokenIn, tokenOut, amountIn, p.ExtraData)
+
+				ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
+
+				if evmErr == nil && len(ret) >= 32 {
+					var out uint256.Int
+					out.SetBytes(ret[:32])
+					groundMu.Lock()
+					evmGround[quoteKey{p.Address, ti[0]}] = out
+					groundMu.Unlock()
+				}
+			}(pool, tokenIdx)
 		}
 	}
+	wg.Wait()
 	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p1t0).Milliseconds())
 
-	// ─── Pass 2: Warm-up (not timed) ───
+	// ─── Pass 2: Warm-up (not timed, serial) ───
+	cs := statedb.NewCallState(baseWithOverrides) // for skipFormulas EVM path
 	fmt.Fprintf(os.Stderr, "[benchmark] pass 2 (warm-up)...")
 	p2t0 := time.Now()
 	for i := range pools {

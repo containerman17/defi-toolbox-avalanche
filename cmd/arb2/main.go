@@ -388,20 +388,24 @@ func buildCyclesByPool(cycles []Cycle) map[uint16][]int32 {
 	return m
 }
 
+// sizeAVAX maps size index to AVAX amount as float64 for absolute profit scoring.
+var sizeAVAX = [5]float64{0.001, 0.01, 0.1, 1.0, 10.0}
+
 // stage3Result holds one profitable cycle candidate.
 type stage3Result struct {
-	cycleIdx int
-	size     int
-	product  float64
+	cycleIdx    int
+	size        int
+	product     float64
+	absProfit   float64 // (product - 1) * sizeInAVAX
 }
 
 // stage3 scores cached cycles against the rate table.
-// Returns top N candidates sorted by product descending.
+// Returns top N candidates sorted by absolute profit descending.
 func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 	t0 := time.Now()
 
 	results := make([]stage3Result, 0, topN+1)
-	minProduct := 0.0
+	minProfit := 0.0
 	minIdx := 0
 
 	for ci := range cycles {
@@ -425,25 +429,27 @@ func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 				continue
 			}
 
+			absProfit := (product - 1) * sizeAVAX[s]
+
 			if len(results) < topN {
-				results = append(results, stage3Result{ci, s, product})
+				results = append(results, stage3Result{ci, s, product, absProfit})
 				if len(results) == topN {
-					minProduct = results[0].product
+					minProfit = results[0].absProfit
 					minIdx = 0
 					for i, r := range results {
-						if r.product < minProduct {
-							minProduct = r.product
+						if r.absProfit < minProfit {
+							minProfit = r.absProfit
 							minIdx = i
 						}
 					}
 				}
-			} else if product > minProduct {
-				results[minIdx] = stage3Result{ci, s, product}
-				minProduct = results[0].product
+			} else if absProfit > minProfit {
+				results[minIdx] = stage3Result{ci, s, product, absProfit}
+				minProfit = results[0].absProfit
 				minIdx = 0
 				for i, r := range results {
-					if r.product < minProduct {
-						minProduct = r.product
+					if r.absProfit < minProfit {
+						minProfit = r.absProfit
 						minIdx = i
 					}
 				}
@@ -452,7 +458,7 @@ func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 	}
 
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].product > results[j].product
+		return results[i].absProfit > results[j].absProfit
 	})
 
 	fmt.Fprintf(os.Stderr, "[arb2] stage3: %d cycles scored, %d candidates, %v\n",

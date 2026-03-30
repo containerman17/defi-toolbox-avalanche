@@ -109,6 +109,13 @@ func formulaBFS(
 						continue
 					}
 
+					// Sanity: if output > 1000x input, formula is likely wrong
+					var limit uint256.Int
+					limit.Mul(&entry.amount, uint256.NewInt(1000))
+					if !limit.IsZero() && out.Gt(&limit) {
+						continue
+					}
+
 					// Terminal: reached hub token, layer >= 2
 					if edge.tokenOut == hub && layer >= 2 {
 						path := backtrack(allEntries, eid, edge, startAmount)
@@ -266,10 +273,11 @@ func binarySearchSize(
 		if r == nil {
 			return -1e18, nil
 		}
-		if r.amountOut.Lt(r.amountIn) {
+		// swap() returns gross profit directly for cyclic arbs
+		gross := r.amountOut
+		if gross.IsZero() {
 			return -1e18, r
 		}
-		gross := new(uint256.Int).Sub(r.amountOut, r.amountIn)
 		gasCost := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
 		if gross.Lt(gasCost) {
 			r.netProfit = -(new(uint256.Int).Sub(gasCost, gross)).Float64()
@@ -822,18 +830,26 @@ func main() {
 				r := evmVerifyPath(c, pools, c.amountIn, state, evmCtx, caller, routerAddr)
 				evmCalls++
 				if r == nil {
+					if debugHops && evmCalls <= 10 {
+						poolStrs := make([]string, len(c.pools))
+						for j, pidx := range c.pools { poolStrs[j] = pools[pidx].Address.Hex()[:10] }
+						fmt.Fprintf(os.Stderr, "[arb3]   evm REVERT: in=%s pools=%v\n", c.amountIn.Dec(), poolStrs)
+					}
 					continue
 				}
 
-				// Compute net profit
-				if r.amountOut.Gt(r.amountIn) {
-					gross := new(uint256.Int).Sub(r.amountOut, r.amountIn)
-					gasCost := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
-					if gross.Gt(gasCost) {
-						r.netProfit = new(uint256.Int).Sub(gross, gasCost).Float64()
-						if best == nil || r.netProfit > best.netProfit {
-							best = r
-						}
+				// swap() returns the caller's balance delta for cyclic arbs (tokenIn==tokenOut).
+				// amountOut IS the gross profit, not amountIn + profit.
+				gross := r.amountOut
+				gasCost := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+				if debugHops && evmCalls <= 10 {
+					fmt.Fprintf(os.Stderr, "[arb3]   evm: in=%s gross=%s gasCost=%s gas=%d\n",
+						r.amountIn.Dec(), gross.Dec(), gasCost.Dec(), r.gasUsed)
+				}
+				if gross.Gt(gasCost) {
+					r.netProfit = new(uint256.Int).Sub(gross, gasCost).Float64()
+					if best == nil || r.netProfit > best.netProfit {
+						best = r
 					}
 				}
 			}
@@ -853,13 +869,9 @@ func main() {
 					best = sized
 				}
 
-				pnlBps := int64(0)
-				if !best.amountIn.IsZero() {
-					diff := new(uint256.Int).Sub(best.amountOut, best.amountIn)
-					pnlBps = int64(diff.Float64() / best.amountIn.Float64() * 10000)
-				}
+				pnlBps := int64(best.amountOut.Float64() / best.amountIn.Float64() * 10000)
 
-				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%s out=%s pnl=%+dbps gas=%d net=%.0f evm=%d calls sizing=%v\n",
+				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%s gross=%s pnl=%+dbps gas=%d net=%.0f evm=%d calls sizing=%v\n",
 					hub.label, best.amountIn.Dec(), best.amountOut.Dec(), pnlBps,
 					best.gasUsed, best.netProfit, evmCalls, sizeTime.Round(time.Microsecond))
 			} else {

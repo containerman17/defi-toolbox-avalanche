@@ -862,11 +862,9 @@ func main() {
 					best = sized
 				}
 
-				pnlBps := int64(best.amountOut.Float64() / best.amountIn.Float64() * 10000)
-
-				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%s gross=%s pnl=%+dbps gas=%d net=%.0f evm=%d calls sizing=%v\n",
-					hub.label, best.amountIn.Dec(), best.amountOut.Dec(), pnlBps,
-					best.gasUsed, best.netProfit, evmCalls, sizeTime.Round(time.Microsecond))
+				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v\n",
+					hub.label, best.amountIn.Float64()/1e18, best.amountOut.Float64()/1e18,
+					best.gasUsed, best.netProfit/1e18, evmCalls, sizeTime.Round(time.Microsecond))
 			} else {
 				fmt.Fprintf(os.Stderr, "[arb3] %s evm: no profit, %d calls, %v\n",
 					hub.label, evmCalls, evmTime.Round(time.Microsecond))

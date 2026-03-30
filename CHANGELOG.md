@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-30 — HayabusaRouter fix: cyclic arb underflow
+
+### Router bug fix
+- `swap()` panicked with arithmetic underflow for cyclic arb (tokenIn == tokenOut) because `executeSwap` did `balAfter - balBefore` where balBefore included the just-deposited input
+- Fixed: `swap()` now tracks caller's tokenOut balance before/after, `executeSwap` returns 0 instead of underflowing
+- Extracted `_executeSwapInner()` to share loop logic between `swap()` and `executeSwap()`
+- Redeployed to 0xa95996dba292fE3c2eab499CFc7A48AD89905b6C (block 81654607)
+
 ## 2026-03-30 — arb2: new arb bot with dynamic price discovery
 
 ### arb2 Stage 1: Price Discovery

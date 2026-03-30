@@ -12,13 +12,18 @@ import (
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
 	poolcollector "defi-toolbox/pool-collector"
+	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 
+	"bufio"
+
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
 
 var WAVAX = common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7")
+var ROUTER = router.DeployedRouter
 
 // Minimum quote: 1 AVAX in wei
 var minQuote = uint256.NewInt(1_000_000_000_000_000_000) // 1e18
@@ -182,6 +187,29 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 	fmt.Fprintf(os.Stderr, "[arb2] stage2: %d quotes, %d pools, %v\n",
 		totalQuotes, len(pools), time.Since(t0).Round(time.Microsecond))
 	return rates, totalQuotes
+}
+
+// loadEnv reads key=value pairs from a .env file into os environment.
+func loadEnv() {
+	for _, path := range []string{".env", "../.env", "../../.env"} {
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			eq := strings.IndexByte(line, '=')
+			if eq > 0 {
+				os.Setenv(line[:eq], line[eq+1:])
+			}
+		}
+		f.Close()
+		return
+	}
 }
 
 // float64FromU256 converts uint256 to float64, handling large values via bit shifting.
@@ -369,7 +397,7 @@ func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 				}
 				product *= r
 			}
-			if !valid || product < 0.99 {
+			if !valid || product == 0 {
 				continue
 			}
 
@@ -406,6 +434,153 @@ func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 	fmt.Fprintf(os.Stderr, "[arb2] stage3: %d cycles scored, %d candidates, %v\n",
 		len(cycles), len(results), time.Since(t0).Round(time.Microsecond))
 	return results
+}
+
+// expandCycle expands a compact cycle into arrays suitable for EncodeSwapMulti.
+func expandCycle(c *Cycle, pools []pf.Pool, hub common.Address) (
+	poolAddrs []common.Address, poolTypes []int, tokenPairs []common.Address, extraDatas []string,
+) {
+	n := c.Hops
+	poolAddrs = make([]common.Address, n)
+	poolTypes = make([]int, n)
+	extraDatas = make([]string, n)
+	tokenPairs = make([]common.Address, n*2)
+
+	for h := 0; h < n; h++ {
+		p := &pools[c.Pools[h]]
+		poolAddrs[h] = p.Address
+		poolTypes[h] = p.PoolType
+		extraDatas[h] = p.ExtraData
+		if c.Dirs[h] {
+			tokenPairs[h*2] = p.Tokens[0]
+			tokenPairs[h*2+1] = p.Tokens[1]
+		} else {
+			tokenPairs[h*2] = p.Tokens[1]
+			tokenPairs[h*2+1] = p.Tokens[0]
+		}
+	}
+	return
+}
+
+// sizeBuckets are the 5 WAVAX input amounts for EVM verification.
+var sizeBuckets = [5]*uint256.Int{
+	uint256.NewInt(1_000_000_000_000_000),                                              // 0.001 AVAX
+	uint256.NewInt(10_000_000_000_000_000),                                             // 0.01 AVAX
+	uint256.NewInt(100_000_000_000_000_000),                                            // 0.1 AVAX
+	uint256.NewInt(1_000_000_000_000_000_000),                                          // 1 AVAX
+	new(uint256.Int).Mul(uint256.NewInt(10), uint256.NewInt(1_000_000_000_000_000_000)), // 10 AVAX
+}
+
+// stage4Result holds the best EVM-verified opportunity.
+type stage4Result struct {
+	cycleIdx  int
+	size      int
+	amountIn  *uint256.Int
+	amountOut *uint256.Int
+	gasUsed   uint64
+	netProfit float64 // in WAVAX wei as float64
+}
+
+// stage4 runs top candidates through local EVM via the router's swap().
+func stage4(
+	candidates []stage3Result,
+	cycles []Cycle,
+	pools []pf.Pool,
+	state *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	hub common.Address,
+	baseFee uint64,
+	caller common.Address,
+) *stage4Result {
+	t0 := time.Now()
+	totalVerified := 0
+
+	routerAddr := router.DeployedRouter
+	evmCtx := statedb.GetCachedContext(cfg)
+	var best *stage4Result
+	reverted, succeeded, unprofitable := 0, 0, 0
+
+	triedCycles := make(map[int]bool)
+
+	for _, cand := range candidates {
+		if triedCycles[cand.cycleIdx] {
+			continue
+		}
+		triedCycles[cand.cycleIdx] = true
+
+		c := &cycles[cand.cycleIdx]
+
+		poolAddrs, poolTypes, tokenPairs, extraDatas := expandCycle(c, pools, hub)
+
+		for s := 0; s < 5; s++ {
+			amountIn := sizeBuckets[s]
+			calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
+
+			cs := statedb.NewCallState(state)
+			ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, caller, routerAddr, calldata)
+			totalVerified++
+
+			if err != nil || cs.Err() != nil || len(ret) < 32 {
+				reverted++
+				continue
+			}
+
+			amountOut := new(uint256.Int).SetBytes(ret[len(ret)-32:])
+			if amountOut.IsZero() {
+				unprofitable++
+				continue
+			}
+
+			// Log every successful EVM execution
+			pnlBps := int64(0)
+			if !amountIn.IsZero() {
+				diff := new(uint256.Int)
+				if amountOut.Gt(amountIn) {
+					diff.Sub(amountOut, amountIn)
+					pnlBps = int64(diff.Float64() / amountIn.Float64() * 10000)
+				} else {
+					diff.Sub(amountIn, amountOut)
+					pnlBps = -int64(diff.Float64() / amountIn.Float64() * 10000)
+				}
+			}
+			if succeeded < 10 {
+				fmt.Fprintf(os.Stderr, "[arb2]   evm ok: hops=%d size=%d in=%s out=%s pnl=%+dbps gas=%d\n",
+					c.Hops, s, amountIn.Dec(), amountOut.Dec(), pnlBps, gasUsed)
+			}
+
+			if !amountOut.Gt(amountIn) {
+				unprofitable++
+				succeeded++
+				continue
+			}
+
+			grossProfit := new(uint256.Int).Sub(amountOut, amountIn)
+			gasCost := new(uint256.Int).Mul(uint256.NewInt(gasUsed), uint256.NewInt(baseFee))
+			if !grossProfit.Gt(gasCost) {
+				unprofitable++
+				continue
+			}
+			succeeded++
+
+			netProfit := new(uint256.Int).Sub(grossProfit, gasCost)
+			netF := float64FromU256(netProfit)
+
+			if best == nil || netF > best.netProfit {
+				best = &stage4Result{
+					cycleIdx:  cand.cycleIdx,
+					size:      s,
+					amountIn:  new(uint256.Int).Set(amountIn),
+					amountOut: new(uint256.Int).Set(amountOut),
+					gasUsed:   gasUsed,
+					netProfit: netF,
+				}
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[arb2] stage4: %d verified (ok=%d unprof=%d revert=%d), fetches=%d, %v\n",
+		totalVerified, succeeded, unprofitable, reverted, statedb.FetchCount.Load(), time.Since(t0).Round(time.Microsecond))
+	return best
 }
 
 func printPrices(tokenPrice map[common.Address]*uint256.Int) {
@@ -447,6 +622,23 @@ func main() {
 		if arg == "--pool-limit" && i+1 < len(os.Args) {
 			fmt.Sscanf(os.Args[i+1], "%d", &poolLimit)
 		}
+	}
+
+	// Load private key for EVM caller
+	loadEnv()
+	privKeyHex := strings.TrimPrefix(os.Getenv("ARB_PRIVATE_KEY"), "0x")
+	if privKeyHex == "" {
+		fmt.Fprintf(os.Stderr, "[arb2] WARNING: ARB_PRIVATE_KEY not set, stage4 will fail\n")
+	}
+	var caller common.Address
+	if privKeyHex != "" {
+		key, err := crypto.HexToECDSA(privKeyHex)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb2] bad private key: %v\n", err)
+			os.Exit(1)
+		}
+		caller = crypto.PubkeyToAddress(key.PublicKey)
+		fmt.Fprintf(os.Stderr, "[arb2] caller: %s\n", caller.Hex())
 	}
 
 	// Load registry + pools
@@ -509,17 +701,28 @@ func main() {
 	cycles := enumerateCycles(adj, WAVAX, maxHops, pi)
 	_ = buildCyclesByPool(cycles) // will use later for dirty-pool filtering
 
-	// Initial stage 1 + 2 + 3
+	// Initial stage 1 + 2 + 3 + 4
 	ls.RLock()
 	tokenPrice, _ := stage1(pm, adj)
 	rateTable, _ := stage2(pm, pools, tokenPrice, registry)
-	results := stage3(cycles, rateTable, topN)
+	s3results := stage3(cycles, rateTable, topN)
+	cfg := statedb.EVMConfig{
+		BlockNumber: ls.Block(),
+		Timestamp:   ls.Timestamp(),
+		ChainID:     43114,
+		BaseFee:     ls.BaseFee(),
+		GasLimit:    ls.GasLimit(),
+	}
+	best := stage4(s3results, cycles, pools, state, cfg, WAVAX, ls.BaseFee(), caller)
 	ls.RUnlock()
 	printPrices(tokenPrice)
-	if len(results) > 0 {
-		c := &cycles[results[0].cycleIdx]
-		fmt.Fprintf(os.Stderr, "[arb2] top: product=%.6f hops=%d size=%d\n",
-			results[0].product, c.Hops, results[0].size)
+	if best != nil {
+		fmt.Fprintf(os.Stderr, "[arb2] PROFIT: net=%.0f wei, in=%s out=%s gas=%d\n",
+			best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
+	} else if len(s3results) > 0 {
+		c := &cycles[s3results[0].cycleIdx]
+		fmt.Fprintf(os.Stderr, "[arb2] no profit, top candidate: product=%.6f hops=%d size=%d\n",
+			s3results[0].product, c.Hops, s3results[0].size)
 	}
 
 	fmt.Fprintf(os.Stderr, "[arb2] ready. Waiting for blocks...\n")
@@ -559,18 +762,26 @@ func main() {
 			}
 		}
 
+		cfg := statedb.EVMConfig{
+			BlockNumber: bi.block,
+			Timestamp:   bi.timestamp,
+			ChainID:     43114,
+			BaseFee:     bi.baseFee,
+			GasLimit:    bi.gasLimit,
+		}
+
 		ls.RLock()
 		tokenPrice, s1q := stage1(pm, adj)
 		rateTable, s2q := stage2(pm, pools, tokenPrice, registry)
-		results := stage3(cycles, rateTable, topN)
+		s3results := stage3(cycles, rateTable, topN)
+		best := stage4(s3results, cycles, pools, state, cfg, WAVAX, bi.baseFee, caller)
 		ls.RUnlock()
 
 		fmt.Fprintf(os.Stderr, "[arb2] block=%d dirty=%d s1=%d s2=%d  ", bi.block, len(dirtySet), s1q, s2q)
 		printPrices(tokenPrice)
-		if len(results) > 0 {
-			c := &cycles[results[0].cycleIdx]
-			fmt.Fprintf(os.Stderr, "  top: product=%.6f hops=%d size=%d\n",
-				results[0].product, c.Hops, results[0].size)
+		if best != nil {
+			fmt.Fprintf(os.Stderr, "  PROFIT: net=%.0f wei, in=%s out=%s gas=%d\n",
+				best.netProfit, best.amountIn.Dec(), best.amountOut.Dec(), best.gasUsed)
 		}
 	}
 }

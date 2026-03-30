@@ -346,13 +346,22 @@ contract HayabusaRouter {
         uint256 totalIn = amountsIn[0];
         if (totalIn == 0) revert("swap: amountsIn[0] must be nonzero");
 
+        // Snapshot tokenOut balance before any transfers
+        uint256 outBefore = IERC20(tokenOut).balanceOf(msg.sender);
+
         IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
-        executeSwap(pools, poolTypes, tokens, amountsIn, extraDatas);
+        _executeSwapInner(pools, poolTypes, tokens, amountsIn, extraDatas);
 
         // Transfer all tokenOut held by router to caller.
-        uint256 amountOut = IERC20(tokenOut).balanceOf(address(this));
+        uint256 routerBal = IERC20(tokenOut).balanceOf(address(this));
+        if (routerBal > 0) {
+            IERC20(tokenOut).transfer(msg.sender, routerBal);
+        }
+
+        // amountOut = how much tokenOut the caller gained
+        uint256 outAfter = IERC20(tokenOut).balanceOf(msg.sender);
+        uint256 amountOut = outAfter > outBefore ? outAfter - outBefore : 0;
         if (amountOut < minOutput) revert("swap: insufficient output");
-        IERC20(tokenOut).transfer(msg.sender, amountOut);
         return amountOut;
     }
 
@@ -365,6 +374,18 @@ contract HayabusaRouter {
     ) public returns (uint256) {
         address tokenOut = tokens[pools.length * 2 - 1];
         uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
+        _executeSwapInner(pools, poolTypes, tokens, amountsIn, extraDatas);
+        uint256 balAfter = IERC20(tokenOut).balanceOf(address(this));
+        return balAfter > balBefore ? balAfter - balBefore : 0;
+    }
+
+    function _executeSwapInner(
+        address[] calldata pools,
+        uint8[] calldata poolTypes,
+        address[] calldata tokens,
+        uint256[] calldata amountsIn,
+        bytes[] calldata extraDatas
+    ) internal {
         for (uint256 i = 0; i < pools.length;) {
             uint256 j = i * 2;
             uint256 amt = amountsIn[i];
@@ -372,7 +393,6 @@ contract HayabusaRouter {
             _swapLeg(pools[i], poolTypes[i], tokens[j], tokens[j + 1], amt, extraDatas[i]);
             unchecked { ++i; }
         }
-        return IERC20(tokenOut).balanceOf(address(this)) - balBefore;
     }
 
     /// @notice Quote a single pool+direction at multiple amounts.

@@ -109,13 +109,6 @@ func formulaBFS(
 						continue
 					}
 
-					// Sanity: if output > 1000x input, formula is likely wrong
-					var limit uint256.Int
-					limit.Mul(&entry.amount, uint256.NewInt(1000))
-					if !limit.IsZero() && out.Gt(&limit) {
-						continue
-					}
-
 					// Terminal: reached hub token, layer >= 2
 					if edge.tokenOut == hub && layer >= 2 {
 						path := backtrack(allEntries, eid, edge, startAmount)

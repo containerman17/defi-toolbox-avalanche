@@ -30,6 +30,19 @@
 - arb3 top candidates now show MATCH on all hops (formula = EVM perfectly)
 - Wired `SetEVMCaller` in both arb2 and arb3
 
+## 2026-03-30 — arb3: fix BFS cross-decimal filtering + swap() return value
+
+### BFS bug fix
+- The 1000x output/input sanity filter killed legitimate cross-decimal swaps (USDC 6dec → WAVAX 18dec)
+- 8.89 USDC = `8892660` raw → ~1 AVAX = `10^18` raw = ratio 10^11 in raw units, falsely filtered
+- Removed the filter — the reserve check in formulas already handles real overflow cases
+- Fixed swap() return value: for cyclic arbs, swap() returns gross profit directly, not amountIn+profit
+
+### Result
+- arb3 now finds the real arb on block 81672771 (the one our Rust bot executed on block 81672772)
+- WAVAX→USDC→BTC.b→WAVAX: in=1 AVAX, gross=0.000269 AVAX, net=0.000241 AVAX after gas
+- Formula accuracy: all 3 hops MATCH EVM perfectly
+
 ## 2026-03-30 — arb2: multi-hub (WAVAX+USDC), auto-approval, msg.sender fix
 
 ### Bug fix

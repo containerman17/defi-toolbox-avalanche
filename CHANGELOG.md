@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-03-30 — Fix: ExecuteWithCallState used wrong msg.sender
+## 2026-03-30 — arb2: multi-hub (WAVAX+USDC), auto-approval, msg.sender fix
 
 ### Bug fix
 - `ExecuteWithCallState` always used a cached `0xdEaD` contract as `msg.sender`, ignoring the `from` parameter
@@ -8,6 +8,17 @@
 - The benchmark was unaffected because it uses `executeSwap` which doesn't check msg.sender
 - Fixed: replaced `ctx.callerContract` with `vm.AccountRef(from)`, matching how `Execute` works
 - Removed unused `callerContract` field from `CachedContext`
+
+### Multi-hub support
+- WAVAX and USDC as hub tokens, each with own cycle set and size buckets
+- Stages 1-2 shared (token pricing + rate table), stages 3-4 run per hub
+- Per-hub size buckets: WAVAX (0.001–1 AVAX), USDC ($0.01–$10)
+- Gas cost converted to hub token units using live tokenPrice for profit comparison
+- Hub token balances read via EVM `balanceOf()`, sizes exceeding balance skipped
+
+### Auto-approval
+- On startup, checks ERC-20 allowance for each hub token → router
+- If insufficient, sends `approve()` tx for 1000× current balance
 
 ## 2026-03-30 — HayabusaRouter fix: cyclic arb underflow
 

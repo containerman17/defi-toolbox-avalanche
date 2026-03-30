@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,6 +94,318 @@ func stage1(pm *formulas.PoolManager, adj map[common.Address][]poolEdge) (map[co
 		totalQuotes, len(tokenPrice), time.Since(t0).Round(time.Microsecond))
 
 	return tokenPrice, totalQuotes
+}
+
+// AVAX size multipliers relative to minQuote (1 AVAX).
+// 0.001, 0.01, 0.1, 1, 10 AVAX → multiplied by tokenPrice to get input amount.
+var sizeMultipliers = [5]struct {
+	num uint64
+	den uint64
+}{
+	{1, 1000}, // 0.001 AVAX
+	{1, 100},  // 0.01 AVAX
+	{1, 10},   // 0.1 AVAX
+	{1, 1},    // 1 AVAX
+	{10, 1},   // 10 AVAX
+}
+
+// PoolRate stores the output/input rate for a pool at a given direction and size.
+type PoolRate struct {
+	Rate [2][5]float64 // [dir][size] = output/input ratio
+}
+
+// stage2 quotes every pool in both directions at 5 AVAX-equivalent sizes.
+// Returns rate table indexed by pool address.
+// stage2 quotes every pool in both directions at 5 AVAX-equivalent sizes.
+// Returns a flat array indexed by pool index.
+func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Address]*uint256.Int, registry *formulas.Registry) ([]PoolRate, int) {
+	t0 := time.Now()
+	rates := make([]PoolRate, len(pools))
+	totalQuotes := 0
+
+	for i := range pools {
+		p := &pools[i]
+		if len(p.Tokens) < 2 {
+			continue
+		}
+		_, known := registry.GetFormulaID(p.Address)
+		if !known {
+			continue
+		}
+
+		t0Price := tokenPrice[p.Tokens[0]]
+		t1Price := tokenPrice[p.Tokens[1]]
+		if t0Price == nil && t1Price == nil {
+			continue
+		}
+
+		for s := 0; s < 5; s++ {
+			if t0Price != nil {
+				var amountIn uint256.Int
+				amountIn.Mul(t0Price, uint256.NewInt(sizeMultipliers[s].num))
+				if sizeMultipliers[s].den > 1 {
+					amountIn.Div(&amountIn, uint256.NewInt(sizeMultipliers[s].den))
+				}
+				if !amountIn.IsZero() {
+					out := pm.Quote(p.Address, &amountIn, true)
+					totalQuotes++
+					if !out.IsZero() {
+						inF := float64FromU256(&amountIn)
+						outF := float64FromU256(&out)
+						if inF > 0 {
+							rates[i].Rate[0][s] = outF / inF
+						}
+					}
+				}
+			}
+			if t1Price != nil {
+				var amountIn uint256.Int
+				amountIn.Mul(t1Price, uint256.NewInt(sizeMultipliers[s].num))
+				if sizeMultipliers[s].den > 1 {
+					amountIn.Div(&amountIn, uint256.NewInt(sizeMultipliers[s].den))
+				}
+				if !amountIn.IsZero() {
+					out := pm.Quote(p.Address, &amountIn, false)
+					totalQuotes++
+					if !out.IsZero() {
+						inF := float64FromU256(&amountIn)
+						outF := float64FromU256(&out)
+						if inF > 0 {
+							rates[i].Rate[1][s] = outF / inF
+						}
+					}
+				}
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[arb2] stage2: %d quotes, %d pools, %v\n",
+		totalQuotes, len(pools), time.Since(t0).Round(time.Microsecond))
+	return rates, totalQuotes
+}
+
+// float64FromU256 converts uint256 to float64, handling large values via bit shifting.
+func float64FromU256(v *uint256.Int) float64 {
+	if v.IsUint64() {
+		return float64(v.Uint64())
+	}
+	b := v.ToBig()
+	f, _ := new(big.Float).SetInt(b).Float64()
+	return f
+}
+
+// poolIndex maps pool addresses to dense uint16 indices for array-based lookups.
+type poolIndex struct {
+	toIdx map[common.Address]uint16
+	toAddr []common.Address
+}
+
+func newPoolIndex(pools []pf.Pool) *poolIndex {
+	pi := &poolIndex{
+		toIdx:  make(map[common.Address]uint16, len(pools)),
+		toAddr: make([]common.Address, len(pools)),
+	}
+	for i := range pools {
+		pi.toIdx[pools[i].Address] = uint16(i)
+		pi.toAddr[i] = pools[i].Address
+	}
+	return pi
+}
+
+// Cycle is a compact cached cycle: pool indices + directions.
+// 12 bytes per cycle (4 uint16 + 4 bool + 1 hops).
+type Cycle struct {
+	Hops  int
+	Pools [4]uint16 // indices into poolIndex
+	Dirs  [4]bool   // true = zeroForOne
+}
+
+// enumerateCycles does a one-time DFS from hub to find all 2-4 hop cycles.
+func enumerateCycles(adj map[common.Address][]poolEdge, hub common.Address, maxHops int, pi *poolIndex) []Cycle {
+	t0 := time.Now()
+
+	type frame struct {
+		token common.Address
+		depth int
+		pools [4]uint16
+		dirs  [4]bool
+	}
+
+	// Dedup by canonical key
+	seen := make(map[uint64]bool)
+
+	canonicalize := func(c *Cycle) uint64 {
+		minIdx := 0
+		for i := 1; i < c.Hops; i++ {
+			if c.Pools[i] < c.Pools[minIdx] {
+				minIdx = i
+			}
+		}
+		var key uint64
+		for i := 0; i < c.Hops; i++ {
+			key |= uint64(c.Pools[(minIdx+i)%c.Hops]) << (i * 16)
+		}
+		return key
+	}
+
+	var cycles []Cycle
+	stack := make([]frame, 0, 4096)
+
+	for _, e := range adj[hub] {
+		idx, ok := pi.toIdx[e.pool.Address]
+		if !ok {
+			continue
+		}
+		f := frame{token: e.tokenOut, depth: 1}
+		f.pools[0] = idx
+		f.dirs[0] = e.dir
+		stack = append(stack, f)
+	}
+
+	for len(stack) > 0 {
+		f := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		for _, e := range adj[f.token] {
+			idx, ok := pi.toIdx[e.pool.Address]
+			if !ok {
+				continue
+			}
+			dup := false
+			for j := 0; j < f.depth; j++ {
+				if f.pools[j] == idx {
+					dup = true
+					break
+				}
+			}
+			if dup {
+				continue
+			}
+
+			newDepth := f.depth + 1
+
+			if e.tokenOut == hub && newDepth >= 2 {
+				c := Cycle{Hops: newDepth}
+				copy(c.Pools[:], f.pools[:])
+				c.Pools[f.depth] = idx
+				copy(c.Dirs[:], f.dirs[:])
+				c.Dirs[f.depth] = e.dir
+				key := canonicalize(&c)
+				if !seen[key] {
+					seen[key] = true
+					cycles = append(cycles, c)
+				}
+			} else if newDepth < maxHops {
+				nf := frame{token: e.tokenOut, depth: newDepth}
+				copy(nf.pools[:], f.pools[:])
+				nf.pools[f.depth] = idx
+				copy(nf.dirs[:], f.dirs[:])
+				nf.dirs[f.depth] = e.dir
+				stack = append(stack, nf)
+			}
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[arb2] enumerated %d cycles in %v\n",
+		len(cycles), time.Since(t0).Round(time.Millisecond))
+	return cycles
+}
+
+// buildCyclesByPool builds a reverse index: pool index → cycle indices.
+func buildCyclesByPool(cycles []Cycle) map[uint16][]int32 {
+	m := make(map[uint16][]int32)
+	for i := range cycles {
+		var seen [4]uint16
+		nSeen := 0
+		for j := 0; j < cycles[i].Hops; j++ {
+			idx := cycles[i].Pools[j]
+			dup := false
+			for k := 0; k < nSeen; k++ {
+				if seen[k] == idx {
+					dup = true
+					break
+				}
+			}
+			if !dup {
+				seen[nSeen] = idx
+				nSeen++
+				m[idx] = append(m[idx], int32(i))
+			}
+		}
+	}
+	return m
+}
+
+// stage3Result holds one profitable cycle candidate.
+type stage3Result struct {
+	cycleIdx int
+	size     int
+	product  float64
+}
+
+// stage3 scores cached cycles against the rate table.
+// Returns top N candidates sorted by product descending.
+func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
+	t0 := time.Now()
+
+	results := make([]stage3Result, 0, topN+1)
+	minProduct := 0.0
+	minIdx := 0
+
+	for ci := range cycles {
+		c := &cycles[ci]
+		for s := 0; s < 5; s++ {
+			product := 1.0
+			valid := true
+			for h := 0; h < c.Hops; h++ {
+				dir := 0
+				if !c.Dirs[h] {
+					dir = 1
+				}
+				r := rates[c.Pools[h]].Rate[dir][s]
+				if r == 0 {
+					valid = false
+					break
+				}
+				product *= r
+			}
+			if !valid || product < 0.99 {
+				continue
+			}
+
+			if len(results) < topN {
+				results = append(results, stage3Result{ci, s, product})
+				if len(results) == topN {
+					minProduct = results[0].product
+					minIdx = 0
+					for i, r := range results {
+						if r.product < minProduct {
+							minProduct = r.product
+							minIdx = i
+						}
+					}
+				}
+			} else if product > minProduct {
+				results[minIdx] = stage3Result{ci, s, product}
+				minProduct = results[0].product
+				minIdx = 0
+				for i, r := range results {
+					if r.product < minProduct {
+						minProduct = r.product
+						minIdx = i
+					}
+				}
+			}
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].product > results[j].product
+	})
+
+	fmt.Fprintf(os.Stderr, "[arb2] stage3: %d cycles scored, %d candidates, %v\n",
+		len(cycles), len(results), time.Since(t0).Round(time.Microsecond))
+	return results
 }
 
 func printPrices(tokenPrice map[common.Address]*uint256.Int) {
@@ -188,11 +501,26 @@ func main() {
 	ls.RUnlock()
 	fmt.Fprintf(os.Stderr, "[arb2] warmup: %v\n", time.Since(tw).Round(time.Millisecond))
 
-	// Initial stage 1
+	maxHops := 4
+	topN := 100
+
+	// One-time cycle enumeration
+	pi := newPoolIndex(pools)
+	cycles := enumerateCycles(adj, WAVAX, maxHops, pi)
+	_ = buildCyclesByPool(cycles) // will use later for dirty-pool filtering
+
+	// Initial stage 1 + 2 + 3
 	ls.RLock()
 	tokenPrice, _ := stage1(pm, adj)
+	rateTable, _ := stage2(pm, pools, tokenPrice, registry)
+	results := stage3(cycles, rateTable, topN)
 	ls.RUnlock()
 	printPrices(tokenPrice)
+	if len(results) > 0 {
+		c := &cycles[results[0].cycleIdx]
+		fmt.Fprintf(os.Stderr, "[arb2] top: product=%.6f hops=%d size=%d\n",
+			results[0].product, c.Hops, results[0].size)
+	}
 
 	fmt.Fprintf(os.Stderr, "[arb2] ready. Waiting for blocks...\n")
 
@@ -232,10 +560,17 @@ func main() {
 		}
 
 		ls.RLock()
-		tokenPrice, totalQuotes := stage1(pm, adj)
+		tokenPrice, s1q := stage1(pm, adj)
+		rateTable, s2q := stage2(pm, pools, tokenPrice, registry)
+		results := stage3(cycles, rateTable, topN)
 		ls.RUnlock()
 
-		fmt.Fprintf(os.Stderr, "[arb2] block=%d dirty=%d quotes=%d  ", bi.block, len(dirtySet), totalQuotes)
+		fmt.Fprintf(os.Stderr, "[arb2] block=%d dirty=%d s1=%d s2=%d  ", bi.block, len(dirtySet), s1q, s2q)
 		printPrices(tokenPrice)
+		if len(results) > 0 {
+			c := &cycles[results[0].cycleIdx]
+			fmt.Fprintf(os.Stderr, "  top: product=%.6f hops=%d size=%d\n",
+				results[0].product, c.Hops, results[0].size)
+		}
 	}
 }

@@ -9,6 +9,12 @@
 - 1270 tokens priced in ~17ms (cached) per block
 - Runs continuously, prices update live every block
 
+### arb2 Stage 2+3: Rate Table + Cycle Scoring
+- Stage 2: quote every pool × 2 dirs × 5 AVAX-equivalent sizes using token prices from stage 1 (~10K quotes, ~8ms cached)
+- Stage 3: pre-enumerate all cycles once at startup (1.6M cycles at 1000 pools, 889ms), then score per block via flat array lookup (~50ms for 1.6M cycles)
+- Compact cycle representation with uint16 pool indices, flat `[]PoolRate` array — no map lookups in hot path
+- Total per-block: s1=2ms + s2=8ms + s3=50ms ≈ 60ms at 1000 pools
+
 ### Benchmark timing fix
 - Replaced per-quote `time.Now()` in pass 3 with single timer around whole loop
 - Distributes total time proportionally across pool types

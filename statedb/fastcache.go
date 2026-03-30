@@ -18,18 +18,14 @@ type FastCache struct {
 	storage map[StorageKey]common.Hash
 }
 
-// BuildFastCache creates a FastCache from a StateDB's current storage.
-func BuildFastCache(s *StateDB) *FastCache {
+// BuildFastCache creates a FastCache from an ImmutableState's storage.
+func BuildFastCache(im *ImmutableState) *FastCache {
 	fc := &FastCache{storage: make(map[StorageKey]common.Hash)}
-	s.accounts.Range(func(key, value any) bool {
-		addr := key.(common.Address)
-		acct := value.(*account)
-		acct.storage.Range(func(k, v any) bool {
-			fc.storage[MakeStorageKey(addr, k.(common.Hash))] = v.(common.Hash)
-			return true
-		})
-		return true
-	})
+	for addr, slots := range im.Storage {
+		for slot, val := range slots {
+			fc.storage[MakeStorageKey(addr, slot)] = val
+		}
+	}
 	return fc
 }
 

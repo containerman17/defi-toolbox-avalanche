@@ -818,7 +818,6 @@ func main() {
 // ---------------------------------------------------------------------------
 
 func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http.Request) {
-	// Wait for server initialization (block info fetch)
 	<-s.ready
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -828,93 +827,114 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 	}
 	defer conn.Close()
 
-	// Hold blockMu.RLock during dump+add to prevent a block update from racing
-	s.blockMu.RLock()
-	blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
-	dumpMsg, _ := json.Marshal(map[string]interface{}{
-		"type":        "initial_dump",
-		"blockNumber": blockNum,
-		"timestamp":   ts,
-		"baseFee":     baseFee,
-		"gasLimit":    gasLimit,
-		"entries":     entries,
-	})
-	_ = conn.WriteMessage(websocket.TextMessage, dumpMsg)
+	// Read first message to determine connection type.
+	// {"subscribe": true} → subscriber (gets dump + block_diffs).
+	// JSON-RPC request → worker (pure request/response, no dump).
+	_, firstMsg, err := conn.ReadMessage()
+	if err != nil {
+		return
+	}
 
-	wmu := s.clients.add(conn)
-	s.blockMu.RUnlock()
-	defer s.clients.remove(conn)
-
+	wmu := &sync.Mutex{}
 	wsWrite := func(msg []byte) {
 		wmu.Lock()
 		_ = conn.WriteMessage(websocket.TextMessage, msg)
 		wmu.Unlock()
 	}
-	logJSON(map[string]interface{}{
-		"event": "client_connected", "path": r.URL.Path,
-		"dumpSize": len(entries), "block": blockNum,
-	})
 
-	// Read loop
+	var peek struct {
+		Subscribe bool   `json:"subscribe"`
+		Method    string `json:"method"`
+	}
+	json.Unmarshal(firstMsg, &peek)
+
+	if peek.Subscribe {
+		// Subscriber: send initial_dump, add to broadcast list for block_diffs
+		s.blockMu.RLock()
+		blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
+		dumpMsg, _ := json.Marshal(map[string]interface{}{
+			"type":        "initial_dump",
+			"blockNumber": blockNum,
+			"timestamp":   ts,
+			"baseFee":     baseFee,
+			"gasLimit":    gasLimit,
+			"entries":     entries,
+		})
+		_ = conn.WriteMessage(websocket.TextMessage, dumpMsg)
+		s.clients.add(conn)
+		s.blockMu.RUnlock()
+		defer s.clients.remove(conn)
+
+		logJSON(map[string]interface{}{
+			"event": "subscriber_connected", "path": r.URL.Path,
+			"dumpSize": len(entries), "block": blockNum,
+		})
+	} else if peek.Method != "" {
+		// Worker: first message is already a JSON-RPC request — handle it
+		logJSON(map[string]interface{}{
+			"event": "worker_connected", "path": r.URL.Path,
+		})
+		handleClientRequest(pool, s, firstMsg, wsWrite)
+	}
+
+	// Read loop (same for subscriber and worker)
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
 			break
 		}
+		handleClientRequest(pool, s, data, wsWrite)
+	}
+}
 
-		req, rpcErr := parseRequest(data)
-		if rpcErr != nil {
-			resp, _ := json.Marshal(jsonRPCResponse{
-				JSONRPC: "2.0", ID: nil, Error: rpcErr,
-			})
-			wsWrite(resp)
-			continue
-		}
-
-		// Snap current block and check cache under blockMu.RLock.
-		// Release BEFORE upstream fetch to avoid blocking block updates.
-		s.blockMu.RLock()
-		currentBlock := s.cache.getBlockNumber()
-		req.BlockNumber = currentBlock
-		key := cacheKeyForRequest(req)
-		cached, cacheHit := s.cache.get(key)
-		s.blockMu.RUnlock()
-
-		if cacheHit {
-			resp, _ := json.Marshal(jsonRPCResponse{
-				JSONRPC: "2.0", ID: req.ID,
-				Result: map[string]string{"value": cached},
-			})
-			wsWrite(resp)
-			continue
-		}
-
-		// Fetch from upstream (no lock held — won't block block updates)
-		value, err := fetchFromNode(pool, req)
-		if err != nil {
-			resp, _ := json.Marshal(jsonRPCResponse{
-				JSONRPC: "2.0", ID: req.ID,
-				Error: &rpcError{Code: -32603, Message: err.Error()},
-			})
-			wsWrite(resp)
-			continue
-		}
-
-		// Cache the result if block hasn't changed since we snapped it.
-		// Hold blockMu.RLock during the check+set to prevent a block update
-		// from racing between the check and the write (TOCTOU).
-		s.blockMu.RLock()
-		if s.cache.getBlockNumber() == currentBlock {
-			s.cache.set(key, value)
-		}
-		s.blockMu.RUnlock()
-
+// handleClientRequest processes a single JSON-RPC request.
+func handleClientRequest(pool *rpcPool, s *stateServer, data []byte, wsWrite func([]byte)) {
+	req, rpcErr := parseRequest(data)
+	if rpcErr != nil {
 		resp, _ := json.Marshal(jsonRPCResponse{
-			JSONRPC: "2.0", ID: req.ID,
-			Result: map[string]string{"value": value},
+			JSONRPC: "2.0", ID: nil, Error: rpcErr,
 		})
 		wsWrite(resp)
+		return
 	}
+
+	s.blockMu.RLock()
+	currentBlock := s.cache.getBlockNumber()
+	req.BlockNumber = currentBlock
+	key := cacheKeyForRequest(req)
+	cached, cacheHit := s.cache.get(key)
+	s.blockMu.RUnlock()
+
+	if cacheHit {
+		resp, _ := json.Marshal(jsonRPCResponse{
+			JSONRPC: "2.0", ID: req.ID,
+			Result: map[string]string{"value": cached},
+		})
+		wsWrite(resp)
+		return
+	}
+
+	value, err := fetchFromNode(pool, req)
+	if err != nil {
+		resp, _ := json.Marshal(jsonRPCResponse{
+			JSONRPC: "2.0", ID: req.ID,
+			Error: &rpcError{Code: -32603, Message: err.Error()},
+		})
+		wsWrite(resp)
+		return
+	}
+
+	s.blockMu.RLock()
+	if s.cache.getBlockNumber() == currentBlock {
+		s.cache.set(key, value)
+	}
+	s.blockMu.RUnlock()
+
+	resp, _ := json.Marshal(jsonRPCResponse{
+		JSONRPC: "2.0", ID: req.ID,
+		Result: map[string]string{"value": value},
+	})
+	wsWrite(resp)
 }
 
 // ---------------------------------------------------------------------------

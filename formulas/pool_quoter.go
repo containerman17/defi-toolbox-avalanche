@@ -308,9 +308,7 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	case FormulaPharaohV1:
 		if p := newPharaohV1Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaV3:
-		fmt.Fprintf(os.Stderr, "V3DEBUG: building V3 pool %s\n", pool.Hex())
 		if p := newV3Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
-		fmt.Fprintf(os.Stderr, "V3DEBUG: newV3Pool returned nil for %s\n", pool.Hex())
 	case FormulaDODO:
 		var token0 common.Address
 		if hasTokens {

@@ -89,6 +89,17 @@ func (t *WSTransport) SetOnMessage(fn func([]byte)) {
 	t.onMessage = fn
 }
 
+// WriteSubscribe sends {"subscribe": true} on the connection.
+// The state server only sends initial_dump and block_diffs to connections
+// that subscribe. Worker connections don't subscribe — they're pure RPC.
+func (t *WSTransport) WriteSubscribe() error {
+	msg, _ := json.Marshal(map[string]bool{"subscribe": true})
+	t.mu.Lock()
+	err := t.conn.WriteMessage(websocket.TextMessage, msg)
+	t.mu.Unlock()
+	return err
+}
+
 // ReadRawMessage reads a single raw message from the WebSocket.
 // Used during connection setup to read the initial_dump synchronously
 // before the read goroutine is started.

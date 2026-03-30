@@ -270,12 +270,7 @@ func (s *CallState) GetCodeSize(addr common.Address) int {
 // ─── Nonce — delegate to base with error propagation ────────────────
 
 func (s *CallState) GetNonce(addr common.Address) uint64 {
-	a, err := s.base.getOrFetchWithErr(addr)
-	if err != nil {
-		s.lastErr = err
-		return 0
-	}
-	return a.nonce
+	return s.base.GetNonce(addr)
 }
 
 func (s *CallState) SetNonce(addr common.Address, n uint64) {}

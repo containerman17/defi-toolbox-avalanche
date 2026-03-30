@@ -1,29 +1,30 @@
 package statedb
 
-// StateDB — Thread-safe EVM state with on-demand fetching.
+// StateDB — EVM state with lock-free reads via immutable snapshots.
 //
-// Concurrency model: two universes.
+// Two-layer architecture:
 //
-//  1. Block updates — apply a diff of slot overwrites. Happens every ~2s on Avalanche.
-//     Must be atomic: no quoting while a block is being applied.
+//  1. Immutable layer (fast): plain Go maps, swapped atomically on block updates.
+//     100% lock-free reads. This is where 99.9% of accesses go after warm-up.
 //
-//  2. Quoting — N goroutines reading/fetching slots concurrently. Any read can miss
-//     the cache and trigger a fetch, which writes the result back. This is safe because
-//     all writes are idempotent: within the same block, fetching the same slot always
-//     returns the same value. Two goroutines writing the same slot write the same bytes.
+//  2. Backfill layer (slow): RWMutex-protected maps for on-demand cache misses.
+//     When a read misses the immutable layer, it fetches from the network and
+//     stores here. On the next block update, backfill is merged into the new
+//     immutable state and cleared. After warm-up, this layer is empty.
 //
-// The separation between these universes is enforced by LiveState's sync.RWMutex
-// (not by StateDB itself). StateDB uses sync.Map for accounts and storage so that
-// concurrent access from multiple quoting goroutines is safe without any mutexes.
+// Block updates: CloneWithDiff creates a new ImmutableState (COW per changed
+// account), merges the backfill, swaps the atomic pointer. Old state stays
+// valid for in-flight readers until GC.
 //
-// Example: Balancer V3 pools share a single vault contract for storage. Quoting
-// pool A and pool B concurrently both fetch slots from the same vault address.
-// With sync.Map, these concurrent writes to the same account's storage are safe.
+// The EVM's vm.StateDB interface requires mutable operations (SetState, SetCode,
+// SubBalance, etc.). These go through the backfill layer or are handled by
+// CallState (the per-EVM-call overlay with journal-based snapshot/revert).
 
 import (
 	"fmt"
 	"math/big"
 	"sync"
+	"sync/atomic"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
@@ -39,8 +40,6 @@ import (
 var _ vm.StateDB = (*StateDB)(nil)
 
 // Fetcher is the interface for on-demand state fetching.
-// All methods return (value, error) — errors propagate to CallState.lastErr
-// so the caller can check after EVM execution whether any fetch failed.
 type Fetcher interface {
 	FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error)
 	FetchBalance(addr common.Address) (*uint256.Int, error)
@@ -49,249 +48,81 @@ type Fetcher interface {
 	FetchBlockHash(num uint64) (common.Hash, error)
 }
 
-type account struct {
-	balance  *uint256.Int
-	nonce    uint64
-	code     []byte
-	codeHash common.Hash
-	// storage uses sync.Map for thread-safe concurrent access.
-	// Multiple quoting goroutines may fetch different slots on the same contract
-	// (e.g. Balancer vault) and write results concurrently. All writes are idempotent
-	// (same block = same value), so no mutex is needed beyond sync.Map's built-in safety.
-	storage sync.Map // common.Hash → common.Hash
-	exists  bool     // true if we know this account exists (was fetched or created)
-}
-
-// StateDB implements vm.StateDB with on-demand fetching via a Fetcher.
-//
-// Thread-safety: accounts and storage use sync.Map for safe concurrent access
-// from multiple quoting goroutines. No fetchMu needed — all writes are idempotent
-// within a block (fetching the same slot/account always returns the same value).
+// StateDB implements vm.StateDB with immutable snapshots + backfill.
 type StateDB struct {
-	// accounts uses sync.Map for safe concurrent account creation during parallel fetches.
-	accounts sync.Map // common.Address → *account
+	// Fast layer: immutable, lock-free reads. Swapped atomically on block update.
+	immutable atomic.Pointer[ImmutableState]
+
+	// Slow layer: cache misses stored here, merged into immutable on next block.
+	backfillMu sync.RWMutex
+	bfStorage  map[common.Address]map[common.Hash]common.Hash
+	bfCode     map[common.Address][]byte
+	bfCodeHash map[common.Address]common.Hash
+	bfBalance  map[common.Address]*uint256.Int
+	bfNonce    map[common.Address]uint64
+
+	fetcher Fetcher
+
+	// Per-call EVM state (access list, refund, logs, snapshots, transient storage).
+	// These are used by the vm.StateDB interface for direct EVM execution.
+	// CallState has its own copies of these for the overlay pattern.
 	accessList       map[common.Address]map[common.Hash]bool
 	refund           uint64
-	fetcher          Fetcher
 	logs             []*types.Log
-
-	// Snapshot support (used by vm.StateDB interface, not by CallState which uses journals)
-	snapshots []snapshot
-	snapID    int
-
-	// Transient storage (EIP-1153) — per-transaction, not concurrent
+	snapshots        []stateSnapshot
+	snapID           int
 	transientStorage map[common.Address]map[common.Hash]common.Hash
 }
 
-type snapshot struct {
-	id       int
-	accounts map[common.Address]*account // deep copy at snapshot time
-	refund   uint64
+type stateSnapshot struct {
+	id        int
+	immutable *ImmutableState // snapshot of immutable at this point
+	refund    uint64
 }
 
+// NewStateDB creates a new StateDB backed by the given fetcher.
 func NewStateDB(fetcher Fetcher) *StateDB {
-	return &StateDB{
-		accessList:       make(map[common.Address]map[common.Hash]bool),
+	s := &StateDB{
 		fetcher:          fetcher,
+		bfStorage:        make(map[common.Address]map[common.Hash]common.Hash),
+		bfCode:           make(map[common.Address][]byte),
+		bfCodeHash:       make(map[common.Address]common.Hash),
+		bfBalance:        make(map[common.Address]*uint256.Int),
+		bfNonce:          make(map[common.Address]uint64),
+		accessList:       make(map[common.Address]map[common.Hash]bool),
 		transientStorage: make(map[common.Address]map[common.Hash]common.Hash),
 	}
+	s.immutable.Store(NewImmutableState(0, 0))
+	return s
 }
 
-// loadAccount returns the account for addr if it exists in the local map, or nil.
-func (s *StateDB) loadAccount(addr common.Address) *account {
-	v, ok := s.accounts.Load(addr)
-	if !ok {
-		return nil
-	}
-	return v.(*account)
+// Immutable returns the current immutable state snapshot.
+func (s *StateDB) Immutable() *ImmutableState {
+	return s.immutable.Load()
 }
 
-// loadOrCreateAccount atomically loads or creates an account entry.
-// The returned account may have exists=false if it was just created.
-func (s *StateDB) loadOrCreateAccount(addr common.Address) *account {
-	a := &account{balance: uint256.NewInt(0)}
-	v, _ := s.accounts.LoadOrStore(addr, a)
-	return v.(*account)
+// SetImmutable replaces the immutable state (used during initial dump loading).
+func (s *StateDB) SetImmutable(im *ImmutableState) {
+	s.immutable.Store(im)
 }
 
-func (s *StateDB) getOrFetch(addr common.Address) *account {
-	a, _ := s.getOrFetchWithErr(addr)
-	return a
+// ApplyBlockDiff creates a new immutable state from the current one + diff + backfill,
+// then atomically swaps it in and clears the backfill.
+func (s *StateDB) ApplyBlockDiff(diff *BlockDiff) {
+	old := s.immutable.Load()
+	s.backfillMu.Lock()
+	newState := old.CloneWithDiff(diff, s.bfStorage, s.bfCode, s.bfBalance, s.bfNonce)
+	s.immutable.Store(newState)
+	s.bfStorage = make(map[common.Address]map[common.Hash]common.Hash)
+	s.bfCode = make(map[common.Address][]byte)
+	s.bfCodeHash = make(map[common.Address]common.Hash)
+	s.bfBalance = make(map[common.Address]*uint256.Int)
+	s.bfNonce = make(map[common.Address]uint64)
+	s.backfillMu.Unlock()
 }
 
-func (s *StateDB) getOrFetchWithErr(addr common.Address) (*account, error) {
-	if a := s.loadAccount(addr); a != nil {
-		if !a.exists && s.fetcher != nil {
-			// Account exists locally but hasn't been fully fetched yet
-			// (created by SetStorageSlot with only storage overrides).
-			// Concurrent fetches are idempotent — same block, same values.
-			bal, err := s.fetcher.FetchBalance(addr)
-			if err != nil {
-				return a, fmt.Errorf("FetchBalance(%s): %w", addr.Hex()[:10], err)
-			}
-			a.balance = bal
-			nonce, err := s.fetcher.FetchNonce(addr)
-			if err != nil {
-				return a, fmt.Errorf("FetchNonce(%s): %w", addr.Hex()[:10], err)
-			}
-			a.nonce = nonce
-			code, err := s.fetcher.FetchCode(addr)
-			if err != nil {
-				return a, fmt.Errorf("FetchCode(%s): %w", addr.Hex()[:10], err)
-			}
-			a.code = code
-			if len(a.code) > 0 {
-				a.codeHash = crypto.Keccak256Hash(a.code)
-			}
-			a.exists = true
-		}
-		return a, nil
-	}
-	// Not in local map — create and fetch from remote.
-	// Use LoadOrStore so concurrent fetches for the same address share one account.
-	a := s.loadOrCreateAccount(addr)
-	if a.exists {
-		// Another goroutine already fetched this account.
-		return a, nil
-	}
-	if s.fetcher != nil {
-		bal, err := s.fetcher.FetchBalance(addr)
-		if err != nil {
-			return a, fmt.Errorf("FetchBalance(%s): %w", addr.Hex()[:10], err)
-		}
-		a.balance = bal
-		nonce, err := s.fetcher.FetchNonce(addr)
-		if err != nil {
-			return a, fmt.Errorf("FetchNonce(%s): %w", addr.Hex()[:10], err)
-		}
-		a.nonce = nonce
-		code, err := s.fetcher.FetchCode(addr)
-		if err != nil {
-			return a, fmt.Errorf("FetchCode(%s): %w", addr.Hex()[:10], err)
-		}
-		a.code = code
-		if len(a.code) > 0 {
-			a.codeHash = crypto.Keccak256Hash(a.code)
-		}
-		a.exists = a.balance.Sign() > 0 || a.nonce > 0 || len(a.code) > 0
-	}
-	return a, nil
-}
+// ─── Storage ─────────────────────────────────────────────────────────
 
-// SetAccount sets account data directly (used for prefilling from initial_dump).
-func (s *StateDB) SetAccount(addr common.Address, balance *uint256.Int, nonce uint64, code []byte) {
-	a := s.loadOrCreateAccount(addr)
-	a.balance = balance
-	a.nonce = nonce
-	a.code = code
-	a.exists = true
-	if len(code) > 0 {
-		a.codeHash = crypto.Keccak256Hash(code)
-	}
-	// Storage is preserved — loadOrCreateAccount returns existing account if present.
-}
-
-// SetStorageSlot sets a storage slot directly (used for prefilling from initial_dump
-// and for in-place block_diff application).
-func (s *StateDB) SetStorageSlot(addr common.Address, slot, value common.Hash) {
-	a := s.loadOrCreateAccount(addr)
-	a.storage.Store(slot, value)
-}
-
-// Balance
-func (s *StateDB) CreateAccount(addr common.Address) {
-	a := s.getOrFetch(addr)
-	a.exists = true
-}
-
-func (s *StateDB) SubBalance(addr common.Address, amount *uint256.Int) {
-	a := s.getOrFetch(addr)
-	a.balance = new(uint256.Int).Sub(a.balance, amount)
-}
-
-func (s *StateDB) AddBalance(addr common.Address, amount *uint256.Int) {
-	a := s.getOrFetch(addr)
-	a.balance = new(uint256.Int).Add(a.balance, amount)
-}
-
-func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
-	return new(uint256.Int).Set(s.getOrFetch(addr).balance)
-}
-
-func (s *StateDB) getBalanceWithErr(addr common.Address) (*uint256.Int, error) {
-	a, err := s.getOrFetchWithErr(addr)
-	if err != nil {
-		return uint256.NewInt(0), err
-	}
-	return new(uint256.Int).Set(a.balance), nil
-}
-
-// Nonce
-func (s *StateDB) GetNonce(addr common.Address) uint64    { return s.getOrFetch(addr).nonce }
-func (s *StateDB) SetNonce(addr common.Address, n uint64) { s.getOrFetch(addr).nonce = n }
-
-// Code
-
-func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
-	code := s.GetCode(addr)
-	if len(code) == 0 {
-		return common.Hash{}
-	}
-	a := s.loadAccount(addr)
-	if a != nil && a.codeHash == (common.Hash{}) {
-		a.codeHash = crypto.Keccak256Hash(code)
-	}
-	if a != nil {
-		return a.codeHash
-	}
-	return crypto.Keccak256Hash(code)
-}
-
-// GetCode returns the contract bytecode, fetching on demand if the account was
-// loaded from a dump without code (e.g. balance-only entries from block diffs).
-// Concurrent calls are safe — duplicate fetches return the same value (idempotent).
-func (s *StateDB) GetCode(addr common.Address) []byte {
-	code, _ := s.getCodeWithErr(addr)
-	return code
-}
-
-func (s *StateDB) getCodeWithErr(addr common.Address) ([]byte, error) {
-	a, err := s.getOrFetchWithErr(addr)
-	if err != nil {
-		return nil, err
-	}
-	if a.exists && len(a.code) == 0 && s.fetcher != nil {
-		// Account was loaded from dump without code — fetch on demand.
-		// Concurrent fetches are idempotent: same block = same bytecode.
-		code, fetchErr := s.fetcher.FetchCode(addr)
-		if fetchErr != nil {
-			return nil, fetchErr
-		}
-		if len(code) > 0 {
-			a.code = code
-			a.codeHash = crypto.Keccak256Hash(code)
-		}
-	}
-	return a.code, nil
-}
-
-func (s *StateDB) SetCode(addr common.Address, code []byte) {
-	a := s.getOrFetch(addr)
-	a.code = code
-	if len(code) > 0 {
-		a.codeHash = crypto.Keccak256Hash(code)
-	} else {
-		a.codeHash = common.Hash{}
-	}
-}
-func (s *StateDB) GetCodeSize(addr common.Address) int { return len(s.GetCode(addr)) }
-
-// Refund
-func (s *StateDB) AddRefund(gas uint64) { s.refund += gas }
-func (s *StateDB) SubRefund(gas uint64) { s.refund -= gas }
-func (s *StateDB) GetRefund() uint64    { return s.refund }
-
-// Storage
 func (s *StateDB) GetCommittedState(addr common.Address, key common.Hash, _ ...stateconf.StateDBStateOption) common.Hash {
 	return s.getStorage(addr, key)
 }
@@ -306,35 +137,232 @@ func (s *StateDB) getStorage(addr common.Address, key common.Hash) common.Hash {
 }
 
 func (s *StateDB) getStorageWithErr(addr common.Address, key common.Hash) (common.Hash, error) {
-	// Check local storage first (includes overlay overrides from SetStorageSlot)
-	if a := s.loadAccount(addr); a != nil {
-		if val, ok := a.storage.Load(key); ok {
-			return val.(common.Hash), nil
+	// 1. Immutable (lock-free)
+	im := s.immutable.Load()
+	if val, ok := im.GetStorage(addr, key); ok {
+		return val, nil
+	}
+	// 2. Backfill (RLock)
+	s.backfillMu.RLock()
+	if slots, ok := s.bfStorage[addr]; ok {
+		if val, ok := slots[key]; ok {
+			s.backfillMu.RUnlock()
+			return val, nil
 		}
 	}
-	// Not in local storage — ensure account exists, then check again
-	a := s.getOrFetch(addr)
-	if val, ok := a.storage.Load(key); ok {
-		return val.(common.Hash), nil
-	}
-	// Fetch from remote. Concurrent fetches for the same slot are idempotent.
+	s.backfillMu.RUnlock()
+	// 3. Fetch from network
 	if s.fetcher != nil {
 		val, err := s.fetcher.FetchStorage(addr, key)
 		if err != nil {
 			return common.Hash{}, fmt.Errorf("FetchStorage(%s, %s): %w", addr.Hex()[:10], key.Hex()[:14], err)
 		}
-		a.storage.Store(key, val)
+		s.backfillMu.Lock()
+		if s.bfStorage[addr] == nil {
+			s.bfStorage[addr] = make(map[common.Hash]common.Hash)
+		}
+		s.bfStorage[addr][key] = val
+		s.backfillMu.Unlock()
 		return val, nil
 	}
 	return common.Hash{}, nil
 }
 
 func (s *StateDB) SetState(addr common.Address, key, value common.Hash, _ ...stateconf.StateDBStateOption) {
-	a := s.getOrFetch(addr)
-	a.storage.Store(key, value)
+	s.backfillMu.Lock()
+	if s.bfStorage[addr] == nil {
+		s.bfStorage[addr] = make(map[common.Hash]common.Hash)
+	}
+	s.bfStorage[addr][key] = value
+	s.backfillMu.Unlock()
 }
 
-// Transient storage
+// SetStorageSlot sets a storage slot (used for initial dump loading and block diffs).
+func (s *StateDB) SetStorageSlot(addr common.Address, slot, value common.Hash) {
+	s.backfillMu.Lock()
+	if s.bfStorage[addr] == nil {
+		s.bfStorage[addr] = make(map[common.Hash]common.Hash)
+	}
+	s.bfStorage[addr][slot] = value
+	s.backfillMu.Unlock()
+}
+
+// HasStorageSlot returns true if the slot is cached in either layer.
+func (s *StateDB) HasStorageSlot(addr common.Address, slot common.Hash) bool {
+	if s.immutable.Load().HasStorageSlot(addr, slot) {
+		return true
+	}
+	s.backfillMu.RLock()
+	defer s.backfillMu.RUnlock()
+	if slots, ok := s.bfStorage[addr]; ok {
+		_, ok = slots[slot]
+		return ok
+	}
+	return false
+}
+
+// ─── Balance ─────────────────────────────────────────────────────────
+
+func (s *StateDB) GetBalance(addr common.Address) *uint256.Int {
+	bal, _ := s.getBalanceWithErr(addr)
+	return bal
+}
+
+func (s *StateDB) getBalanceWithErr(addr common.Address) (*uint256.Int, error) {
+	// 1. Immutable
+	if bal, ok := s.immutable.Load().GetBalance(addr); ok {
+		return new(uint256.Int).Set(bal), nil
+	}
+	// 2. Backfill
+	s.backfillMu.RLock()
+	if bal, ok := s.bfBalance[addr]; ok {
+		s.backfillMu.RUnlock()
+		return new(uint256.Int).Set(bal), nil
+	}
+	s.backfillMu.RUnlock()
+	// 3. Fetch
+	if s.fetcher != nil {
+		bal, err := s.fetcher.FetchBalance(addr)
+		if err != nil {
+			return uint256.NewInt(0), err
+		}
+		s.backfillMu.Lock()
+		s.bfBalance[addr] = bal
+		s.backfillMu.Unlock()
+		return new(uint256.Int).Set(bal), nil
+	}
+	return uint256.NewInt(0), nil
+}
+
+func (s *StateDB) SubBalance(addr common.Address, amount *uint256.Int) {
+	bal := s.GetBalance(addr)
+	newBal := new(uint256.Int).Sub(bal, amount)
+	s.backfillMu.Lock()
+	s.bfBalance[addr] = newBal
+	s.backfillMu.Unlock()
+}
+
+func (s *StateDB) AddBalance(addr common.Address, amount *uint256.Int) {
+	bal := s.GetBalance(addr)
+	newBal := new(uint256.Int).Add(bal, amount)
+	s.backfillMu.Lock()
+	s.bfBalance[addr] = newBal
+	s.backfillMu.Unlock()
+}
+
+func (s *StateDB) CreateAccount(addr common.Address) {}
+
+// ─── Nonce ───────────────────────────────────────────────────────────
+
+func (s *StateDB) GetNonce(addr common.Address) uint64 {
+	// 1. Immutable
+	if n, ok := s.immutable.Load().GetNonce(addr); ok {
+		return n
+	}
+	// 2. Backfill
+	s.backfillMu.RLock()
+	if n, ok := s.bfNonce[addr]; ok {
+		s.backfillMu.RUnlock()
+		return n
+	}
+	s.backfillMu.RUnlock()
+	// 3. Fetch
+	if s.fetcher != nil {
+		n, err := s.fetcher.FetchNonce(addr)
+		if err != nil {
+			return 0
+		}
+		s.backfillMu.Lock()
+		s.bfNonce[addr] = n
+		s.backfillMu.Unlock()
+		return n
+	}
+	return 0
+}
+
+func (s *StateDB) SetNonce(addr common.Address, n uint64) {
+	s.backfillMu.Lock()
+	s.bfNonce[addr] = n
+	s.backfillMu.Unlock()
+}
+
+// ─── Code ────────────────────────────────────────────────────────────
+
+func (s *StateDB) GetCode(addr common.Address) []byte {
+	code, _ := s.getCodeWithErr(addr)
+	return code
+}
+
+func (s *StateDB) getCodeWithErr(addr common.Address) ([]byte, error) {
+	// 1. Immutable
+	if code, ok := s.immutable.Load().GetCode(addr); ok {
+		return code, nil
+	}
+	// 2. Backfill
+	s.backfillMu.RLock()
+	if code, ok := s.bfCode[addr]; ok {
+		s.backfillMu.RUnlock()
+		return code, nil
+	}
+	s.backfillMu.RUnlock()
+	// 3. Fetch
+	if s.fetcher != nil {
+		code, err := s.fetcher.FetchCode(addr)
+		if err != nil {
+			return nil, err
+		}
+		s.backfillMu.Lock()
+		s.bfCode[addr] = code
+		if len(code) > 0 {
+			s.bfCodeHash[addr] = crypto.Keccak256Hash(code)
+		}
+		s.backfillMu.Unlock()
+		return code, nil
+	}
+	return nil, nil
+}
+
+func (s *StateDB) GetCodeHash(addr common.Address) common.Hash {
+	// 1. Immutable
+	if h, ok := s.immutable.Load().GetCodeHash(addr); ok {
+		return h
+	}
+	// 2. Backfill
+	s.backfillMu.RLock()
+	if h, ok := s.bfCodeHash[addr]; ok {
+		s.backfillMu.RUnlock()
+		return h
+	}
+	s.backfillMu.RUnlock()
+	// 3. Fetch code to compute hash
+	code := s.GetCode(addr)
+	if len(code) == 0 {
+		return common.Hash{}
+	}
+	return crypto.Keccak256Hash(code)
+}
+
+func (s *StateDB) SetCode(addr common.Address, code []byte) {
+	s.backfillMu.Lock()
+	s.bfCode[addr] = code
+	if len(code) > 0 {
+		s.bfCodeHash[addr] = crypto.Keccak256Hash(code)
+	} else {
+		delete(s.bfCodeHash, addr)
+	}
+	s.backfillMu.Unlock()
+}
+
+func (s *StateDB) GetCodeSize(addr common.Address) int { return len(s.GetCode(addr)) }
+
+// ─── Refund ──────────────────────────────────────────────────────────
+
+func (s *StateDB) AddRefund(gas uint64) { s.refund += gas }
+func (s *StateDB) SubRefund(gas uint64) { s.refund -= gas }
+func (s *StateDB) GetRefund() uint64    { return s.refund }
+
+// ─── Transient storage (EIP-1153) ────────────────────────────────────
+
 func (s *StateDB) GetTransientState(addr common.Address, key common.Hash) common.Hash {
 	if m, ok := s.transientStorage[addr]; ok {
 		return m[key]
@@ -349,23 +377,30 @@ func (s *StateDB) SetTransientState(addr common.Address, key, value common.Hash)
 	s.transientStorage[addr][key] = value
 }
 
-// Self-destruct
+// ─── Self-destruct ───────────────────────────────────────────────────
+
 func (s *StateDB) SelfDestruct(addr common.Address)           {}
 func (s *StateDB) HasSelfDestructed(addr common.Address) bool { return false }
 func (s *StateDB) Selfdestruct6780(addr common.Address)       {}
 
-// Account queries
+// ─── Account queries ─────────────────────────────────────────────────
+
 func (s *StateDB) Exist(addr common.Address) bool {
-	a := s.getOrFetch(addr)
-	return a.exists || a.balance.Sign() > 0 || a.nonce > 0 || len(a.code) > 0
+	if s.GetCodeSize(addr) > 0 {
+		return true
+	}
+	if s.GetBalance(addr).Sign() > 0 {
+		return true
+	}
+	return false
 }
 
 func (s *StateDB) Empty(addr common.Address) bool {
-	a := s.getOrFetch(addr)
-	return a.balance.IsZero() && a.nonce == 0 && len(a.code) == 0
+	return s.GetBalance(addr).IsZero() && s.GetNonce(addr) == 0 && s.GetCodeSize(addr) == 0
 }
 
-// Access list
+// ─── Access list ─────────────────────────────────────────────────────
+
 func (s *StateDB) AddressInAccessList(addr common.Address) bool {
 	_, ok := s.accessList[addr]
 	return ok
@@ -413,13 +448,17 @@ func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, d
 	}
 }
 
-// Snapshots
+// ─── Snapshots ───────────────────────────────────────────────────────
+// Note: For EVM execution, prefer CallState which has journal-based
+// snapshots (O(mutations) not O(state)). These StateDB-level snapshots
+// exist for the vm.StateDB interface but are rarely used in practice.
+
 func (s *StateDB) Snapshot() int {
 	s.snapID++
-	snap := snapshot{
-		id:       s.snapID,
-		accounts: s.deepCopyAccounts(),
-		refund:   s.refund,
+	snap := stateSnapshot{
+		id:        s.snapID,
+		immutable: s.immutable.Load(),
+		refund:    s.refund,
 	}
 	s.snapshots = append(s.snapshots, snap)
 	return s.snapID
@@ -428,11 +467,7 @@ func (s *StateDB) Snapshot() int {
 func (s *StateDB) RevertToSnapshot(id int) {
 	for i := len(s.snapshots) - 1; i >= 0; i-- {
 		if s.snapshots[i].id == id {
-			// Replace accounts sync.Map with plain map snapshot
-			s.accounts = sync.Map{}
-			for addr, a := range s.snapshots[i].accounts {
-				s.accounts.Store(addr, a)
-			}
+			s.immutable.Store(s.snapshots[i].immutable)
 			s.refund = s.snapshots[i].refund
 			s.snapshots = s.snapshots[:i]
 			return
@@ -440,35 +475,15 @@ func (s *StateDB) RevertToSnapshot(id int) {
 	}
 }
 
-func (s *StateDB) deepCopyAccounts() map[common.Address]*account {
-	cp := make(map[common.Address]*account)
-	s.accounts.Range(func(key, value any) bool {
-		addr := key.(common.Address)
-		a := value.(*account)
-		na := &account{
-			balance:  new(uint256.Int).Set(a.balance),
-			nonce:    a.nonce,
-			code:     a.code, // code is immutable, share the slice
-			codeHash: a.codeHash,
-			exists:   a.exists,
-		}
-		a.storage.Range(func(k, v any) bool {
-			na.storage.Store(k, v)
-			return true
-		})
-		cp[addr] = na
-		return true
-	})
-	return cp
-}
+// ─── Logs ────────────────────────────────────────────────────────────
 
-// Logs
 func (s *StateDB) AddLog(log *types.Log) {
 	s.logs = append(s.logs, log)
 }
 func (s *StateDB) AddPreimage(hash common.Hash, data []byte) {}
 
-// GetBlockHash uses the fetcher to get block hashes.
+// ─── Block hash ──────────────────────────────────────────────────────
+
 func (s *StateDB) GetBlockHash(num uint64) common.Hash {
 	if s.fetcher != nil {
 		h, _ := s.fetcher.FetchBlockHash(num)
@@ -477,21 +492,7 @@ func (s *StateDB) GetBlockHash(num uint64) common.Hash {
 	return common.Hash{}
 }
 
-// HasStorageSlot returns true if the slot is already cached locally.
-// Used by block loop: only overwrite slots already in cache (cache grows
-// only through explicit fetches, not through diffs).
-func (s *StateDB) HasStorageSlot(addr common.Address, slot common.Hash) bool {
-	a := s.loadAccount(addr)
-	if a == nil {
-		return false
-	}
-	_, ok := a.storage.Load(slot)
-	return ok
-}
-
-// ─── StateDB as Fetcher (for overlay pattern) ─────────────────────
-// A StateDB can back another StateDB: overlay checks itself first,
-// then delegates to the base. Base delegates to the remote fetcher.
+// ─── StateDB as Fetcher (for overlay pattern) ────────────────────────
 
 func (s *StateDB) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
 	return s.getStorageWithErr(addr, slot)
@@ -502,11 +503,8 @@ func (s *StateDB) FetchBalance(addr common.Address) (*uint256.Int, error) {
 }
 
 func (s *StateDB) FetchNonce(addr common.Address) (uint64, error) {
-	a, err := s.getOrFetchWithErr(addr)
-	if err != nil {
-		return 0, err
-	}
-	return a.nonce, nil
+	n := s.GetNonce(addr)
+	return n, nil
 }
 
 func (s *StateDB) FetchCode(addr common.Address) ([]byte, error) {
@@ -520,39 +518,51 @@ func (s *StateDB) FetchBlockHash(num uint64) (common.Hash, error) {
 	return common.Hash{}, nil
 }
 
+// ─── Overlay creation ────────────────────────────────────────────────
+
 // NewOverlay creates a fresh StateDB backed by this one.
-// Writes go to the overlay; reads fall through to the base on miss.
 func (s *StateDB) NewOverlay() *StateDB {
 	return NewStateDB(s)
 }
 
 // NewReusableOverlay creates an overlay that can be Reset() between calls.
-// Pre-allocates maps to avoid per-call allocation.
 func (s *StateDB) NewReusableOverlay() *StateDB {
-	return &StateDB{
-		accessList:       make(map[common.Address]map[common.Hash]bool, 16),
-		fetcher:          s,
-		transientStorage: make(map[common.Address]map[common.Hash]common.Hash),
-	}
+	o := NewStateDB(s)
+	return o
 }
 
-// Reset clears all state in this overlay without allocating new maps.
-// The fetcher (base) is preserved. Use between EVM calls to reuse the overlay.
+// Reset clears per-call state for reuse between EVM calls.
 func (s *StateDB) Reset() {
-	s.accounts = sync.Map{}
-	for k := range s.accessList {
-		delete(s.accessList, k)
-	}
-	for k := range s.transientStorage {
-		delete(s.transientStorage, k)
-	}
+	s.backfillMu.Lock()
+	s.bfStorage = make(map[common.Address]map[common.Hash]common.Hash)
+	s.bfCode = make(map[common.Address][]byte)
+	s.bfCodeHash = make(map[common.Address]common.Hash)
+	s.bfBalance = make(map[common.Address]*uint256.Int)
+	s.bfNonce = make(map[common.Address]uint64)
+	s.backfillMu.Unlock()
+	s.accessList = make(map[common.Address]map[common.Hash]bool)
+	s.transientStorage = make(map[common.Address]map[common.Hash]common.Hash)
 	s.refund = 0
 	s.logs = s.logs[:0]
 	s.snapshots = s.snapshots[:0]
 	s.snapID = 0
 }
 
-// ─── EVM execution ─────────────────────────────────────────────────
+// SetAccount sets account metadata (used for initial dump loading).
+func (s *StateDB) SetAccount(addr common.Address, balance *uint256.Int, nonce uint64, code []byte) {
+	s.backfillMu.Lock()
+	if balance != nil {
+		s.bfBalance[addr] = balance
+	}
+	s.bfNonce[addr] = nonce
+	if len(code) > 0 {
+		s.bfCode[addr] = code
+		s.bfCodeHash[addr] = crypto.Keccak256Hash(code)
+	}
+	s.backfillMu.Unlock()
+}
+
+// ─── EVM execution ──────────────────────────────────────────────────
 
 // EVMConfig holds configuration for EVM execution.
 type EVMConfig struct {
@@ -590,17 +600,11 @@ func ExecuteCall(state *StateDB, cfg EVMConfig, from, to common.Address, data []
 }
 
 // CachedContext holds pre-allocated EVM context for a given block config.
-// Reuse across calls to avoid per-call allocations.
 type CachedContext struct {
-	blockCtx vm.BlockContext
-	rules    params.Rules
-	chainCfg *params.ChainConfig
-	gasPrice *big.Int
-	// CallerContract is a *vm.Contract used as the EVM caller.
-	// When the EVM creates child contracts via NewContract(), it checks
-	// if the caller is a *Contract — if so, it shares the jumpdests map.
-	// This means all calls reusing this context share JUMPDEST analysis.
-	// Without this, every call re-scans contract bytecodes (~15% CPU).
+	blockCtx       vm.BlockContext
+	rules          params.Rules
+	chainCfg       *params.ChainConfig
+	gasPrice       *big.Int
 	callerContract *vm.Contract
 }
 
@@ -646,9 +650,6 @@ func GetCachedContext(cfg EVMConfig) *CachedContext {
 	chainCfg := AvalancheCChainConfig
 	rules := chainCfg.Rules(blockNumber, true, cfg.Timestamp)
 
-	// Create a caller contract for JUMPDEST sharing across all EVM calls.
-	// Using *vm.Contract instead of AccountRef means child calls inherit
-	// the jumpdests bitvector, avoiding redundant bytecode scanning.
 	dummySender := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 	callerContract := vm.NewContract(
 		vm.AccountRef(dummySender),
@@ -673,15 +674,11 @@ func (ctx *CachedContext) Execute(state *StateDB, from, to common.Address, data 
 		Origin:   from,
 		GasPrice: ctx.gasPrice,
 	}
-
 	precompiles := vm.ActivePrecompiles(ctx.rules)
 	state.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
-
 	evm := vm.NewEVM(ctx.blockCtx, txCtx, state, ctx.chainCfg, vm.Config{})
-
 	gasLimit := uint64(5_000_000)
 	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, gasLimit, uint256.NewInt(0))
-
 	return ret, gasLimit - gasLeft, err
 }
 
@@ -692,15 +689,10 @@ func (ctx *CachedContext) ExecuteWithCallState(cs *CallState, from, to common.Ad
 		Origin:   from,
 		GasPrice: ctx.gasPrice,
 	}
-
 	precompiles := vm.ActivePrecompiles(ctx.rules)
 	cs.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
-
 	evm := vm.NewEVM(ctx.blockCtx, txCtx, cs, ctx.chainCfg, vm.Config{})
-
 	gasLimit := uint64(5_000_000)
-	// Use CallerContract instead of AccountRef — shares JUMPDEST analysis
 	ret, gasLeft, err := evm.Call(ctx.callerContract, to, data, gasLimit, uint256.NewInt(0))
-
 	return ret, gasLimit - gasLeft, err
 }

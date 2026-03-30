@@ -192,8 +192,10 @@ func runBlockBenchmark(
 				ts.NonZero++
 			}
 
+			// IMPORTANT: always use QuoteBypassQuoteCache in benchmarks.
+			// The quote cache would hide formula speed regressions/improvements.
 			qt0 := time.Now()
-			result := pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+			result := pm.QuoteBypassQuoteCache(pool.Address, amountIn, zeroForOne)
 			ts.Formula++
 			ts.HotMs += float64(time.Since(qt0).Nanoseconds()) / 1e6
 

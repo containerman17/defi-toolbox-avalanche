@@ -95,8 +95,13 @@ func Connect(url string) (*LiveState, error) {
 		return nil, err
 	}
 
-	// Read initial_dump synchronously before starting the read goroutine.
-	// This is always the first message from the state server.
+	// Subscribe to receive initial_dump + block_diffs.
+	if err := transport.WriteSubscribe(); err != nil {
+		transport.Close()
+		return nil, fmt.Errorf("write subscribe: %w", err)
+	}
+
+	// Read initial_dump from the server.
 	raw, err := transport.ReadRawMessage()
 	if err != nil {
 		transport.Close()
@@ -117,18 +122,17 @@ func Connect(url string) (*LiveState, error) {
 		transport: transport,
 	}
 
-	// The StateDB is backed by this LiveState as its Fetcher.
-	// Cache misses during quoting route through FetchStorage etc -> transport.Call().
 	ls.state = NewStateDB(ls)
+
+	// Build initial ImmutableState from the dump — goes directly into the fast layer.
+	im := NewImmutableState(dump.BlockNumber, dump.Timestamp)
+	storageCount, accountCount := loadDumpEntries(im, dump.Entries)
+	ls.state.SetImmutable(im)
 
 	ls.block.Store(dump.BlockNumber)
 	ls.timestamp.Store(dump.Timestamp)
 	ls.baseFee.Store(dump.BaseFee)
 	ls.gasLimit.Store(dump.GasLimit)
-
-	// Parse initial_dump entries into the StateDB.
-	// Entry key prefixes: s: = storage, b: = balance, n: = nonce, c: = code.
-	storageCount, accountCount := loadDumpEntries(ls.state, dump.Entries)
 	fmt.Fprintf(os.Stderr, "[livestate] initial_dump: block=%d, %d storage, %d accounts\n",
 		dump.BlockNumber, storageCount, accountCount)
 
@@ -175,7 +179,7 @@ func Connect(url string) (*LiveState, error) {
 //   - "b:<addr>" -> hex value         (balance)
 //   - "n:<addr>" -> hex value         (nonce)
 //   - "c:<addr>" -> hex bytecode      (contract code)
-func loadDumpEntries(state *StateDB, entries [][2]string) (int, int) {
+func loadDumpEntries(state *ImmutableState, entries [][2]string) (int, int) {
 	storageCount := 0
 	accountData := make(map[string]map[string]string)
 
@@ -187,7 +191,7 @@ func loadDumpEntries(state *StateDB, entries [][2]string) (int, int) {
 				addr := common.HexToAddress(parts[1])
 				slot := common.HexToHash(parts[2])
 				val := common.HexToHash(value)
-				state.SetStorageSlot(addr, slot, val)
+				state.SetStorage(addr, slot, val)
 				storageCount++
 			}
 		} else if strings.HasPrefix(key, "b:") {
@@ -238,7 +242,7 @@ func loadDumpEntries(state *StateDB, entries [][2]string) (int, int) {
 }
 
 // handlePushMessage processes a server push message (block_diff).
-// Called from the transport's read goroutine.
+// Called from a dedicated goroutine (not the readLoop — see Connect).
 func (ls *LiveState) handlePushMessage(msg []byte) {
 	var m serverMessage
 	if json.Unmarshal(msg, &m) != nil {
@@ -248,13 +252,17 @@ func (ls *LiveState) handlePushMessage(msg []byte) {
 		return
 	}
 
-	// Acquire exclusive lock — blocks all quoting goroutines.
-	// In-flight quotes finish first (RWMutex guarantee), then we proceed.
+	// Acquire exclusive lock — in-flight quotes finish first (RWMutex guarantee).
 	ls.blockMu.Lock()
 
-	// Apply storage updates. Only overwrite slots already in cache — the cache
-	// grows only through explicit fetches, not through diffs. This prevents
-	// unbounded memory growth from slots we never actually need.
+	// Build a BlockDiff from the entries.
+	diff := &BlockDiff{
+		BlockNum:  m.BlockNumber,
+		BlockTime: m.Timestamp,
+		Storage:   make(map[common.Address]map[common.Hash]common.Hash),
+		Balance:   make(map[common.Address]*uint256.Int),
+		Nonce:     make(map[common.Address]uint64),
+	}
 	for _, entry := range m.Entries {
 		key, value := entry[0], entry[1]
 		if strings.HasPrefix(key, "s:") {
@@ -262,21 +270,37 @@ func (ls *LiveState) handlePushMessage(msg []byte) {
 			if len(parts) == 3 {
 				addr := common.HexToAddress(parts[1])
 				slot := common.HexToHash(parts[2])
-				if ls.state.HasStorageSlot(addr, slot) {
-					ls.state.SetStorageSlot(addr, slot, common.HexToHash(value))
+				if diff.Storage[addr] == nil {
+					diff.Storage[addr] = make(map[common.Hash]common.Hash)
 				}
+				diff.Storage[addr][slot] = common.HexToHash(value)
+			}
+		} else if strings.HasPrefix(key, "b:") {
+			addr := common.HexToAddress(key[2:])
+			bi, _ := new(big.Int).SetString(strings.TrimPrefix(value, "0x"), 16)
+			if bi != nil {
+				bal, _ := uint256.FromBig(bi)
+				diff.Balance[addr] = bal
+			}
+		} else if strings.HasPrefix(key, "n:") {
+			addr := common.HexToAddress(key[2:])
+			ni, _ := new(big.Int).SetString(strings.TrimPrefix(value, "0x"), 16)
+			if ni != nil {
+				diff.Nonce[addr] = ni.Uint64()
 			}
 		}
 	}
 
-	// Update block metadata atomically.
+	// Atomic swap: CloneWithDiff merges diff + backfill → new immutable state.
+	ls.state.ApplyBlockDiff(diff)
+
+	// Update block metadata.
 	ls.block.Store(m.BlockNumber)
 	ls.timestamp.Store(m.Timestamp)
 	ls.baseFee.Store(m.BaseFee)
 	ls.gasLimit.Store(m.GasLimit)
 
 	// Notify consumer (e.g. arb bot does pool invalidation here).
-	// Called with write lock held — consumer MUST NOT call RLock.
 	if ls.onBlock != nil {
 		ls.onBlock(ls, m.Entries)
 	}

@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-03-30 — arb3: formula BFS arb bot
+
+### New bot
+- `cmd/arb3/` — complete rewrite using formula-based BFS instead of rate tables
+- 4-layer Bellman-Ford BFS from hub token, top-3 amounts per token per layer
+- Hop-by-hop formula quoting with real cascading amounts (no rate table products)
+- 5 starting sizes per hub (1/0.1/0.01/0.001/0.0001 AVAX, 10/1/0.1/0.01/0.001 USDC)
+- Candidates sorted by absolute gross profit, not percentage
+- EVM verification of top 30 paths via full `swap()` calls
+- Binary search for optimal input sizing on winning path
+- `--pools` flag to restrict BFS to specific pools for debugging
+- `--debug-hops` flag for per-hop formula vs EVM comparison
+- Multi-hub (WAVAX+USDC), auto-approval, `--block` for single-block mode
+
+### Investigation findings
+- arb2's rate table has ~7000 false positives above real arbs (rates don't compose across hops)
+- Formula accuracy is actually correct — the 3% "mismatches" are pools where output exceeds reserves
+- Formulas need reserve-check: return zero when computed output > pool balance
+
 ## 2026-03-30 — arb2: multi-hub (WAVAX+USDC), auto-approval, msg.sender fix
 
 ### Bug fix

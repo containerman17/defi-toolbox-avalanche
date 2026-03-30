@@ -138,10 +138,9 @@ type PoolRate struct {
 }
 
 // stage2 quotes every pool in both directions at 5 AVAX-equivalent sizes.
-// Returns rate table indexed by pool address.
-// stage2 quotes every pool in both directions at 5 AVAX-equivalent sizes.
+// Rates are decimal-normalized: rate = (rawOut / 10^decOut) / (rawIn / 10^decIn).
 // Returns a flat array indexed by pool index.
-func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Address]*uint256.Int, registry *formulas.Registry) ([]PoolRate, int) {
+func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Address]*uint256.Int, registry *formulas.Registry, decimals map[common.Address]uint8) ([]PoolRate, int) {
 	t0 := time.Now()
 	rates := make([]PoolRate, len(pools))
 	totalQuotes := 0
@@ -162,6 +161,9 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 			continue
 		}
 
+		dec0 := decimalScale(decimals[p.Tokens[0]])
+		dec1 := decimalScale(decimals[p.Tokens[1]])
+
 		for s := 0; s < 5; s++ {
 			if t0Price != nil {
 				var amountIn uint256.Int
@@ -173,8 +175,10 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 					out := pm.Quote(p.Address, &amountIn, true)
 					totalQuotes++
 					if !out.IsZero() {
-						inF := float64FromU256(&amountIn)
-						outF := float64FromU256(&out)
+						// dir=0: token0 in, token1 out
+						// normalized rate = (rawOut/10^dec1) / (rawIn/10^dec0)
+						inF := float64FromU256(&amountIn) / dec0
+						outF := float64FromU256(&out) / dec1
 						if inF > 0 {
 							rates[i].Rate[0][s] = outF / inF
 						}
@@ -191,8 +195,10 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 					out := pm.Quote(p.Address, &amountIn, false)
 					totalQuotes++
 					if !out.IsZero() {
-						inF := float64FromU256(&amountIn)
-						outF := float64FromU256(&out)
+						// dir=1: token1 in, token0 out
+						// normalized rate = (rawOut/10^dec0) / (rawIn/10^dec1)
+						inF := float64FromU256(&amountIn) / dec1
+						outF := float64FromU256(&out) / dec0
 						if inF > 0 {
 							rates[i].Rate[1][s] = outF / inF
 						}
@@ -789,6 +795,38 @@ func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubCon
 	}
 }
 
+// readDecimals calls decimals() on a token via local EVM. Returns 18 as default.
+func readDecimals(state *statedb.StateDB, evmCtx *statedb.CachedContext, token common.Address) uint8 {
+	// decimals() selector = 0x313ce567
+	calldata := []byte{0x31, 0x3c, 0xe5, 0x67}
+	cs := statedb.NewCallState(state)
+	ret, _, err := evmCtx.ExecuteWithCallState(cs, common.Address{}, token, calldata)
+	if err == nil && len(ret) >= 32 {
+		d := ret[31]
+		if d <= 77 { // sanity check
+			return d
+		}
+	}
+	return 18
+}
+
+// buildDecimalsMap reads decimals for all tokens in the adjacency map.
+func buildDecimalsMap(state *statedb.StateDB, evmCtx *statedb.CachedContext, adj map[common.Address][]poolEdge) map[common.Address]uint8 {
+	t0 := time.Now()
+	decimals := make(map[common.Address]uint8, len(adj))
+	for token := range adj {
+		decimals[token] = readDecimals(state, evmCtx, token)
+	}
+	fmt.Fprintf(os.Stderr, "[arb2] decimals: %d tokens, %v\n",
+		len(decimals), time.Since(t0).Round(time.Millisecond))
+	return decimals
+}
+
+// decimalScale returns 10^decimals as float64.
+func decimalScale(d uint8) float64 {
+	return math.Pow(10, float64(d))
+}
+
 // readBalance calls balanceOf(owner) on token via local EVM.
 func readBalance(state *statedb.StateDB, evmCtx *statedb.CachedContext, owner, token common.Address) *uint256.Int {
 	var calldata [36]byte
@@ -805,6 +843,7 @@ func readBalance(state *statedb.StateDB, evmCtx *statedb.CachedContext, owner, t
 func main() {
 	stateServerURL := "ws://localhost:7449/live"
 	poolLimit := 4000
+	singleBlock := false
 
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) {
@@ -812,6 +851,10 @@ func main() {
 		}
 		if arg == "--pool-limit" && i+1 < len(os.Args) {
 			fmt.Sscanf(os.Args[i+1], "%d", &poolLimit)
+		}
+		if arg == "--block" && i+1 < len(os.Args) {
+			stateServerURL = fmt.Sprintf("ws://localhost:7449/debug/%s", os.Args[i+1])
+			singleBlock = true
 		}
 	}
 
@@ -888,12 +931,21 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "[arb2] adjacency: %d tokens\n", len(adj))
 
-	// Warmup: build all pool quoters
+	// Warmup: build all pool quoters + read token decimals
 	tw := time.Now()
 	ls.RLock()
 	for i := range pools {
 		pm.Get(pools[i].Address)
 	}
+	warmupCfg := statedb.EVMConfig{
+		BlockNumber: ls.Block(),
+		Timestamp:   ls.Timestamp(),
+		ChainID:     43114,
+		BaseFee:     ls.BaseFee(),
+		GasLimit:    ls.GasLimit(),
+	}
+	warmupCtx := statedb.GetCachedContext(warmupCfg)
+	tokenDecimals := buildDecimalsMap(state, warmupCtx, adj)
 	ls.RUnlock()
 	fmt.Fprintf(os.Stderr, "[arb2] warmup: %v\n", time.Since(tw).Round(time.Millisecond))
 
@@ -940,7 +992,7 @@ func main() {
 	// Initial stage 1 + 2 + 3 + 4
 	ls.RLock()
 	tokenPrice, _ := stage1(pm, adj)
-	rateTable, _ := stage2(pm, pools, tokenPrice, registry)
+	rateTable, _ := stage2(pm, pools, tokenPrice, registry, tokenDecimals)
 	cfg := statedb.EVMConfig{
 		BlockNumber: ls.Block(),
 		Timestamp:   ls.Timestamp(),
@@ -964,6 +1016,9 @@ func main() {
 	ls.RUnlock()
 	printPrices(tokenPrice)
 
+	if singleBlock {
+		return
+	}
 	fmt.Fprintf(os.Stderr, "[arb2] ready. Waiting for blocks...\n")
 
 	// Block loop
@@ -1011,7 +1066,7 @@ func main() {
 
 		ls.RLock()
 		tokenPrice, s1q := stage1(pm, adj)
-		rateTable, s2q := stage2(pm, pools, tokenPrice, registry)
+		rateTable, s2q := stage2(pm, pools, tokenPrice, registry, tokenDecimals)
 		for i := range hubs {
 			if p, ok := tokenPrice[hubs[i].token]; ok {
 				hubs[i].price = p

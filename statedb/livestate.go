@@ -373,8 +373,12 @@ func (ls *LiveState) Close() error { return ls.transport.Close() }
 // Ensure interface compliance at compile time.
 var _ Fetcher = (*LiveState)(nil)
 
+// FetchCount tracks the total number of network fetches (for debugging).
+var FetchCount atomic.Int64
+
 // FetchStorage fetches a storage slot from the state server.
 func (ls *LiveState) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
+	FetchCount.Add(1)
 	block := ls.block.Load()
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
@@ -396,6 +400,7 @@ func (ls *LiveState) FetchStorage(addr common.Address, slot common.Hash) (common
 
 // FetchBalance fetches an account balance from the state server.
 func (ls *LiveState) FetchBalance(addr common.Address) (*uint256.Int, error) {
+	FetchCount.Add(1)
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": ls.block.Load(),
@@ -418,6 +423,7 @@ func (ls *LiveState) FetchBalance(addr common.Address) (*uint256.Int, error) {
 
 // FetchNonce fetches an account nonce from the state server.
 func (ls *LiveState) FetchNonce(addr common.Address) (uint64, error) {
+	FetchCount.Add(1)
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": ls.block.Load(),
@@ -439,6 +445,7 @@ func (ls *LiveState) FetchNonce(addr common.Address) (uint64, error) {
 
 // FetchCode fetches contract bytecode from the state server.
 func (ls *LiveState) FetchCode(addr common.Address) ([]byte, error) {
+	FetchCount.Add(1)
 	params := map[string]interface{}{
 		"address":     addr.Hex(),
 		"blockNumber": ls.block.Load(),

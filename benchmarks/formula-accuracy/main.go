@@ -609,9 +609,9 @@ func main() {
 	out, _ := json.MarshalIndent(jsonResult, "", "  ")
 	fmt.Println(string(out))
 
-	// Append to benchmark_results/benchmark.log
+	// Append to results.log
 	if logResult == "" && !*skipFormulas {
-		logResult = "benchmark_results/benchmark.log"
+		logResult = "benchmarks/formula-accuracy/results.log"
 	}
 	if logResult != "" {
 		gitHash := "unknown"
@@ -621,7 +621,6 @@ func main() {
 		logTs := time.Now().Format("2006-01-02_15:04")
 		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
 			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstMatch, firstMismatch, firstCorrectPct, firstNzPct)
-		os.MkdirAll("benchmark_results", 0o755)
 		logF, logErr := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if logErr == nil {
 			logF.WriteString(line)

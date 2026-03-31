@@ -7,10 +7,7 @@ node_modules
 **/proxy_cache/
 cache/
 archive/quoting-go/quoting-go
-tools/state-proxy/state-proxy
 benchmarks/swap-replay/payloads/
-evm-quoter/bin/
-benchmark_results.yaml
 temp-scripts/
 /native
 /benchmark

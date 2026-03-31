@@ -515,3 +515,4 @@ time=2026-03-31_12:00 git=a7a42b3b blocks=3 ms_per_pool=0.0153 total_ms=53.5 poo
 time=2026-03-31_12:02 git=5fda427d blocks=1 ms_per_pool=0.0146 total_ms=51.2 pools=3500 formula=7000 match=6558 mismatch=442 correctness=93.7 nonzero=89.7
 time=2026-03-31_12:16 git=5fda427d blocks=1 ms_per_pool=0.0161 total_ms=56.4 pools=3500 formula=7000 match=6558 mismatch=442 correctness=93.7 nonzero=89.7
 time=2026-03-31_12:36 git=b21df1d7 blocks=1 ms_per_pool=0.0171 total_ms=60.0 pools=3500 formula=7000 match=6558 mismatch=442 correctness=93.7 nonzero=89.7
+time=2026-03-31_12:43 git=1980fed4 blocks=1 ms_per_pool=0.0158 total_ms=55.4 pools=3500 formula=7000 match=6558 mismatch=442 correctness=93.7 nonzero=89.7

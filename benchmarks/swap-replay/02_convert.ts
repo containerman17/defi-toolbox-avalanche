@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { createPublicClient, http, decodeAbiParameters, encodeAbiParameters, type Hex, type Log } from "viem";
 import { wsPool } from "./ws-pool.ts";
 import { avalanche } from "viem/chains";
-import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "../../../tools/pool-collector/index.ts";
+import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "../../tools/pool-collector/index.ts";
 
 // --- Constants ---
 
@@ -1569,7 +1569,7 @@ function buildPayload(
 async function main() {
   const txsFile = process.argv[2] ?? path.join(import.meta.dirname!, "txs.txt");
   const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
-  const poolsPath = path.resolve(import.meta.dirname!, "../../../tools/pool-collector/data/pools.txt");
+  const poolsPath = path.resolve(import.meta.dirname!, "../../tools/pool-collector/data/pools.txt");
   const outDir = path.join(import.meta.dirname!, "payloads");
 
   const { pools: poolMap } = loadPools(poolsPath);

@@ -1,7 +1,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "../../../../router/index.ts";
-import { type PoolType, loadPools } from "../../../../tools/pool-collector/index.ts";
+import { quoteRoute } from "../../../router/index.ts";
+import { type PoolType, loadPools } from "../../../tools/pool-collector/index.ts";
 import * as path from "node:path";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
@@ -34,7 +34,7 @@ const V4_FEE32 = "id=0x8dc096ecc5cb7565daa9615d6b6b4e6d1ffb3b16cca4e0971dfaf0ed9
 const USDC_AMOUNT = 33849097n;
 
 async function main() {
-  const poolsPath = path.join(import.meta.dirname!, "../../../tools/pool-collector/data/pools.txt");
+  const poolsPath = path.join(import.meta.dirname!, "../../tools/pool-collector/data/pools.txt");
   const { pools: poolMap } = loadPools(poolsPath);
   
   console.log(`Converting ${USDC_AMOUNT} USDC → USDt`);

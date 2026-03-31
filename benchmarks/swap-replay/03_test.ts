@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { createPublicClient, type Hex, decodeAbiParameters } from "viem";
 import { wsPool, closePool, getPoolStats } from "./ws-pool.ts";
 import { avalanche } from "viem/chains";
-import { quoteRoute, quoteFlat, getBalanceOverride, getAllowanceOverride, getRouterBytecode, type FlatStep } from "../../../router/index.ts";
+import { quoteRoute, quoteFlat, getBalanceOverride, getAllowanceOverride, getRouterBytecode, type FlatStep } from "../../router/index.ts";
 
 // LFJ backrunning uses a fake address so bytecode is always injected.
 // If injection fails, we get empty code (obvious revert) instead of outdated code (silent failure).
@@ -24,7 +24,7 @@ function withRouterCode(extra?: Record<string, any>): Record<string, any> {
   merged[BACKRUN_ROUTER] = { ...(merged[BACKRUN_ROUTER] ?? {}), code };
   return merged;
 }
-import { type StoredPool, type PoolType, POOL_TYPE_TRANSFER_FROM } from "../../../tools/pool-collector/index.ts";
+import { type StoredPool, type PoolType, POOL_TYPE_TRANSFER_FROM } from "../../tools/pool-collector/index.ts";
 
 // Bridge-equivalent tokens: .e versions have 1:1 value with their native counterparts
 const BRIDGE_EQUIVALENTS: Record<string, string> = {

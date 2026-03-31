@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/ava-labs/libevm v1.13.15-0.20251016142715-1bccf4f2ddb2
-	github.com/gorilla/websocket v1.4.2
+	github.com/gorilla/websocket v1.5.3
 	github.com/holiman/uint256 v1.3.2
 )
 

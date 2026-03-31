@@ -6,7 +6,7 @@ Keep [CHANGELOG.md](CHANGELOG.md) updated after every significant change, invest
 
 ## Coverage Investigation
 
-When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), read [COVERAGE.md](COVERAGE.md) first. It contains:
+When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), read [benchmarks/formula-accuracy/COVERAGE.md](benchmarks/formula-accuracy/COVERAGE.md) first. It contains:
 - Current coverage state and breakdown
 - Root causes already identified
 - Investigation tools and techniques
@@ -14,6 +14,13 @@ When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), rea
 - Priority fix order
 
 **Agents working on coverage MUST update COVERAGE.md** with any new findings, tools, or techniques they discover.
+
+## Project Structure
+
+- `cmd/` — long-running services and production entrypoints (state-server, arb bots, quoter)
+- `tools/` — run-once utilities that do a job and exit (discover, pool-collector)
+- `benchmarks/` — performance and accuracy benchmarks
+- `experiments/` — archived or in-progress prototypes
 
 ## Go Build Rules
 

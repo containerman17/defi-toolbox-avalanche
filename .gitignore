@@ -15,10 +15,11 @@ temp-scripts/
 /native
 /benchmark
 /state-server
+/discover
 /out/
-discover
 /arb2
 /arb3
 /arb4
 /check_state
+/check_arb
 /pool_watcher

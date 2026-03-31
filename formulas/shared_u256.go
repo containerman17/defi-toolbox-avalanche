@@ -3,6 +3,7 @@ package formulas
 import (
 	"encoding/binary"
 	"math/big"
+	"sync"
 
 	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
@@ -65,14 +66,16 @@ func init() {
 
 // Cache for getSqrtRatioAtTickU256 — ticks are int24 so max 16M entries,
 // but in practice only a few thousand unique ticks are used.
-var sqrtRatioCache = make(map[int32]uint256.Int, 4096)
+// Uses sync.Map for concurrent safety: write-once-read-many pattern,
+// so Load() on the hot path is essentially free (atomic pointer read).
+var sqrtRatioCache sync.Map
 
 func getSqrtRatioAtTickU256(tick int32) uint256.Int {
-	if cached, ok := sqrtRatioCache[tick]; ok {
-		return cached
+	if cached, ok := sqrtRatioCache.Load(tick); ok {
+		return cached.(uint256.Int)
 	}
 	result := getSqrtRatioAtTickU256Compute(tick)
-	sqrtRatioCache[tick] = result
+	sqrtRatioCache.Store(tick, result)
 	return result
 }
 

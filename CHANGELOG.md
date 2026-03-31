@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-03-31 — quoter-example: Multi-frontend quoter
+
+### New: `cmd/quoter-example/`
+- Shared quoter core wrapping `pathfinder.FindBestRoute()` — two-way quotes (A→B and B→A), cyclic detection
+- **HTTP frontend** (`cmd/quoter-example/http/`): `GET /quote?tokenIn=&tokenOut=&amountIn=` returns JSON
+- **Native frontend** (`cmd/quoter-example/native/`): reads JSON lines from stdin, writes JSON to stdout, owns WebSocket connection via `--state-server` flag
+- **WASM frontend** (`cmd/quoter-example/wasm/`): connects to state-server via browser WebSocket API, exposes `connect(url)` and `quote(tokenIn, tokenOut, amountIn)` on `globalThis`
+- All three frontends are paper-thin I/O adapters; all logic lives in `shared/`
+
+### statedb exports for WASM
+- `NewLiveStateFromState()` — construct LiveState from pre-built StateDB (no gorilla dependency)
+- `HandleBlockDiff()` — feed raw block_diff JSON from external transport
+- `LoadDumpEntries()` — exported wrapper for parsing initial_dump entries
+- `ServerMessage` — exported type alias for wire format
+
 ## 2026-03-31 — State machine fixes, node verification, arb reliability
 
 ### Critical bug fixes in statedb

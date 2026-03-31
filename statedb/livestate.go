@@ -470,3 +470,34 @@ func (ls *LiveState) FetchCode(addr common.Address) ([]byte, error) {
 func (ls *LiveState) FetchBlockHash(num uint64) (common.Hash, error) {
 	return common.Hash{}, nil
 }
+
+// ─── External construction (for WASM and other non-gorilla transports) ──
+
+// NewLiveStateFromState creates a LiveState from a pre-built StateDB.
+// Used by WASM (or other environments) where gorilla/websocket is unavailable.
+// The caller is responsible for feeding block diffs via HandleBlockDiff.
+func NewLiveStateFromState(state *StateDB, block, timestamp, baseFee, gasLimit uint64) *LiveState {
+	ls := &LiveState{state: state}
+	ls.block.Store(block)
+	ls.timestamp.Store(timestamp)
+	ls.baseFee.Store(baseFee)
+	ls.gasLimit.Store(gasLimit)
+	return ls
+}
+
+// HandleBlockDiff processes a raw block_diff JSON message from an external source.
+// This is the external equivalent of the internal handlePushMessage method.
+func (ls *LiveState) HandleBlockDiff(msg []byte) {
+	ls.handlePushMessage(msg)
+}
+
+// LoadDumpEntries populates an ImmutableState from initial_dump entries.
+// Returns (storageCount, accountCount). This is the exported wrapper of
+// loadDumpEntries, for use by WASM and other external constructors.
+func LoadDumpEntries(state *ImmutableState, entries [][2]string) (int, int) {
+	return loadDumpEntries(state, entries)
+}
+
+// ServerMessage is the exported alias of the wire format for state server messages.
+// Used by WASM to parse initial_dump and block_diff messages externally.
+type ServerMessage = serverMessage

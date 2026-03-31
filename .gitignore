@@ -23,3 +23,5 @@ temp-scripts/
 /check_arb
 /pool_watcher
 /formula-accuracy
+/quoter-example
+*.wasm

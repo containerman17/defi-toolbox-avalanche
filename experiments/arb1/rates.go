@@ -92,14 +92,6 @@ func (rt *RateTable) Get(pool common.Address, direction int, size int) float64 {
 	return r[direction][size]
 }
 
-// GetDirection returns 0 if tokenIn is token0 (zeroForOne), 1 otherwise.
-func (rt *RateTable) GetDirection(pool, tokenIn common.Address) int {
-	if t0, ok := rt.poolToken0[pool]; ok && t0 == tokenIn {
-		return 0
-	}
-	return 1
-}
-
 // ScreenCycle multiplies rates along a cycle for a given size bucket.
 // Returns the product (> 1.0 means profitable before gas).
 func (rt *RateTable) ScreenCycle(c *Cycle, pt *PoolTable, size int) float64 {

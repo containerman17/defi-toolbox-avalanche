@@ -30,9 +30,6 @@ type Verifier struct {
 	verbose bool
 }
 
-// SetVerbose enables detailed logging of each EVM verification attempt.
-func (v *Verifier) SetVerbose(on bool) { v.verbose = on }
-
 func NewVerifier(
 	state *statedb.StateDB,
 	cfg statedb.EVMConfig,
@@ -50,23 +47,6 @@ func NewVerifier(
 		pt:         pt,
 		hub:        hub,
 	}
-}
-
-// Block returns the block number this verifier is configured for.
-func (v *Verifier) Block() uint64 { return v.cfg.BlockNumber }
-
-// Verify executes a full multi-hop cycle through the HayabusaRouter via EVM.
-// Returns (amountOut, gasUsed, success).
-func (v *Verifier) Verify(c *Cycle, amountIn *uint256.Int) (*uint256.Int, uint64, bool) {
-	r := v.VerifyFull(c, amountIn)
-	if r.Reverted || len(r.RetData) < 32 {
-		return nil, r.GasUsed, false
-	}
-	amountOut := new(uint256.Int).SetBytes(r.RetData[len(r.RetData)-32:])
-	if amountOut.IsZero() {
-		return nil, r.GasUsed, false
-	}
-	return amountOut, r.GasUsed, true
 }
 
 // VerifyFull executes a cycle and returns the full EVMResult including calldata,

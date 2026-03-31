@@ -81,9 +81,7 @@ func NewScanner(cycles []Cycle, pm *formulas.PoolManager, pt *PoolTable, hub com
 	return s
 }
 
-func (s *Scanner) PoolTable() *PoolTable { return s.pt }
 func (s *Scanner) RateTable() *RateTable { return s.rates }
-func (s *Scanner) CycleCount() int       { return len(s.cycles) }
 
 // InitRates does a full rate table sweep (all pools are dirty on startup).
 func (s *Scanner) InitRates() {

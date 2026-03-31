@@ -48,8 +48,6 @@ func (pt *PoolTable) Lookup(addr common.Address) (uint16, bool) {
 	i, ok := pt.index[addr]
 	return i, ok
 }
-func (pt *PoolTable) Len() int { return len(pt.addr) }
-
 // Cycle is a compact representation: fixed-size arrays, pool indices instead of addresses.
 // 18 bytes per cycle (vs ~300+ with slices).
 type Cycle struct {
@@ -57,9 +55,6 @@ type Cycle struct {
 	Pools [4]uint16   // pool indices (only [0..Hops-1] valid)
 	Dirs  [4]bool     // zeroForOne per hop
 }
-
-// PoolAddr returns the pool address at hop i.
-func (c *Cycle) PoolAddr(pt *PoolTable, i int) common.Address { return pt.Addr(c.Pools[i]) }
 
 // TokenAt returns the token at position i in the path (0 = hub, Hops = hub).
 func (c *Cycle) TokenAt(pt *PoolTable, hub common.Address, i int) common.Address {
@@ -108,13 +103,6 @@ func (c *Cycle) ExpandExtraDatas(pt *PoolTable) []string {
 		eds[i] = pt.ExtraData(c.Pools[i])
 	}
 	return eds
-}
-
-// ExpandDirs returns a slice of dirs.
-func (c *Cycle) ExpandDirs() []bool {
-	dirs := make([]bool, c.Hops)
-	copy(dirs, c.Dirs[:c.Hops])
-	return dirs
 }
 
 // ─── Edge table for formula-only graph ─────────────────────────────

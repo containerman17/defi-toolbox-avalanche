@@ -1,7 +1,7 @@
 // Test different routing options for step 1 of 447a payload
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
-import { quoteRoute } from "../../../router/index.ts";
+import { quoteRoute } from "../lib/quote.ts";
 import { type StoredPool, type PoolType } from "../../../tools/pool-collector/index.ts";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";

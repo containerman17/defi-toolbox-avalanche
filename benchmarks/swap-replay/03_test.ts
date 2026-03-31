@@ -11,7 +11,9 @@ import * as path from "node:path";
 import { createPublicClient, type Hex, decodeAbiParameters } from "viem";
 import { wsPool, closePool, getPoolStats } from "./ws-pool.ts";
 import { avalanche } from "viem/chains";
-import { quoteRoute, quoteFlat, getBalanceOverride, getAllowanceOverride, getRouterBytecode, type FlatStep } from "../../router/index.ts";
+import { quoteRoute, quoteFlat } from "./lib/quote.ts";
+import { getBalanceOverride, getAllowanceOverride, getRouterBytecode } from "./lib/overrides.ts";
+import { type FlatStep } from "./lib/encode.ts";
 
 // LFJ backrunning uses a fake address so bytecode is always injected.
 // If injection fails, we get empty code (obvious revert) instead of outdated code (silent failure).

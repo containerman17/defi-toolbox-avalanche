@@ -1,7 +1,7 @@
 import { type PublicClient, type Hex, decodeAbiParameters } from "viem";
 import { encodeSwap, encodeSwapFlat, type RouteStep, type FlatStep } from "./encode.ts";
 import { buildStateOverrides, getBalanceOverrideAsync, getHookOverrides, isReflectionToken } from "./overrides.ts";
-import addressJson from "./contracts/address.json" with { type: "json" };
+import addressJson from "../../../contracts/address.json" with { type: "json" };
 
 // Single source of truth: imported from contracts/address.json (shared with Go via go:embed)
 export const ROUTER_ADDRESS = addressJson.address.toLowerCase();

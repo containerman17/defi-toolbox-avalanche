@@ -29,7 +29,7 @@ let _overrides: Map<string, TokenOverrideEntry> | null = null;
 let _routerBytecodeCache: Hex | undefined;
 export function getRouterBytecode(): Hex {
   if (!_routerBytecodeCache) {
-    const hex = readFileSync(join(import.meta.dirname!, "contracts", "bytecode.hex"), "utf-8").trim();
+    const hex = readFileSync(join(import.meta.dirname!, "../../../contracts/bytecode.hex"), "utf-8").trim();
     _routerBytecodeCache = `0x${hex}` as Hex;
   }
   return _routerBytecodeCache;
@@ -37,7 +37,7 @@ export function getRouterBytecode(): Hex {
 
 function loadOverrides(): Map<string, TokenOverrideEntry> {
   if (_overrides) return _overrides;
-  const jsonPath = join(import.meta.dirname!, "data/token_overrides.json");
+  const jsonPath = join(import.meta.dirname!, "../../../contracts/token_overrides.json");
   const entries: TokenOverrideEntry[] = JSON.parse(readFileSync(jsonPath, "utf-8"));
   _overrides = new Map();
   for (const e of entries) {

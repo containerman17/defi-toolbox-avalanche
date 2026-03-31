@@ -25,3 +25,4 @@ temp-scripts/
 /formula-accuracy
 /quoter-example
 *.wasm
+wasm_exec.js

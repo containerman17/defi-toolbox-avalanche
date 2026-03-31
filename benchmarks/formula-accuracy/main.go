@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"math/big"
@@ -528,86 +527,6 @@ func main() {
 		firstNzPct = float64(firstNonZero) / float64(firstQ) * 100
 	}
 	msPerPool := firstHotMs / float64(len(pools))
-
-	jsonResult := map[string]interface{}{
-		"pools":       len(pools),
-		"quotes":      firstQ,
-		"formula":     firstFmla,
-		"totalMs":     fmt.Sprintf("%.1f", firstHotMs),
-		"msPerPool":   fmt.Sprintf("%.4f", msPerPool),
-		"match":       firstMatch,
-		"mismatch":    firstMismatch,
-		"correctness": fmt.Sprintf("%.1f", firstCorrectPct),
-		"nonZeroPct":  fmt.Sprintf("%.1f", firstNzPct),
-	}
-
-	if numBlocks > 1 {
-		jsonResult["blocks"] = numBlocks
-
-		// Per-block array
-		perBlock := make([]map[string]interface{}, 0, numBlocks)
-		for _, res := range results {
-			bq, bm, bmm, bnz, bms := 0, 0, 0, 0, 0.0
-			for _, s := range res.byType {
-				bq += s.Quotes
-				bm += s.Match
-				bmm += s.Mismatch
-				bnz += s.NonZero
-				bms += s.HotMs
-			}
-			bc := 0.0
-			if bm+bmm > 0 {
-				bc = float64(bm) / float64(bm+bmm) * 100
-			}
-			bnzp := 0.0
-			if bq > 0 {
-				bnzp = float64(bnz) / float64(bq) * 100
-			}
-			perBlock = append(perBlock, map[string]interface{}{
-				"block":       res.blockNum,
-				"match":       bm,
-				"mismatch":    bmm,
-				"correctness": fmt.Sprintf("%.1f", bc),
-				"nonZeroPct":  fmt.Sprintf("%.1f", bnzp),
-				"totalMs":     fmt.Sprintf("%.1f", bms),
-			})
-		}
-		jsonResult["perBlock"] = perBlock
-
-		// Aggregate correctness
-		aggMatch, aggMismatch := 0, 0
-		for i := range pools {
-			pool := &pools[i]
-			for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-				if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-					continue
-				}
-				key := quoteKey{pool.Address, tokenIdx[0]}
-				anyMismatch := false
-				for _, res := range results {
-					if res.mismatchSet[key] {
-						anyMismatch = true
-						break
-					}
-				}
-				if anyMismatch {
-					aggMismatch++
-				} else {
-					aggMatch++
-				}
-			}
-		}
-		aggPct := 0.0
-		if aggMatch+aggMismatch > 0 {
-			aggPct = float64(aggMatch) / float64(aggMatch+aggMismatch) * 100
-		}
-		jsonResult["aggregateMatch"] = aggMatch
-		jsonResult["aggregateMismatch"] = aggMismatch
-		jsonResult["aggregateCorrectness"] = fmt.Sprintf("%.1f", aggPct)
-	}
-
-	out, _ := json.MarshalIndent(jsonResult, "", "  ")
-	fmt.Println(string(out))
 
 	// Append to results.log
 	if logResult == "" && !*skipFormulas {

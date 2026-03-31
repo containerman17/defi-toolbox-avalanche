@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"defi-toolbox/formulas"
@@ -197,6 +198,46 @@ type evmResult struct {
 	amountOut *uint256.Int
 	gasUsed   uint64
 	netProfit float64
+	calldata  []byte // swap() calldata ready for on-chain submission
+}
+
+// submitArb signs and broadcasts a swap transaction. Returns tx hash or error.
+func submitArb(key *ecdsa.PrivateKey, nonce uint64, routerAddr common.Address,
+	calldata []byte, gasLimit uint64, baseFee uint64) (string, error) {
+
+	maxFee := new(big.Int).SetUint64(baseFee*2 + 1_000_000_000)
+	to := routerAddr
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   chainID,
+		Nonce:     nonce,
+		GasTipCap: big.NewInt(0),
+		GasFeeCap: maxFee,
+		Gas:       gasLimit * 12 / 10, // 20% headroom
+		To:        &to,
+		Data:      calldata,
+	})
+	signedTx, err := types.SignTx(tx, types.LatestSignerForChainID(chainID), key)
+	if err != nil {
+		return "", fmt.Errorf("sign: %w", err)
+	}
+	rawTx, _ := signedTx.MarshalBinary()
+	rawHex := "0x" + hex.EncodeToString(rawTx)
+	resp, err := rpcCallJSON(map[string]interface{}{
+		"jsonrpc": "2.0", "id": 1, "method": "eth_sendRawTransaction",
+		"params": []string{rawHex},
+	})
+	if err != nil {
+		return "", err
+	}
+	var rpcResp struct {
+		Result string
+		Error  *struct{ Message string }
+	}
+	json.Unmarshal(resp, &rpcResp)
+	if rpcResp.Error != nil {
+		return "", fmt.Errorf("rpc: %s", rpcResp.Error.Message)
+	}
+	return rpcResp.Result, nil
 }
 
 // evmVerifyPath runs a full swap() call for a given path.
@@ -243,6 +284,7 @@ func evmVerifyPath(
 		amountIn:  new(uint256.Int).Set(amountIn),
 		amountOut: amountOut,
 		gasUsed:   gasUsed,
+		calldata:  calldata,
 	}
 }
 
@@ -287,8 +329,8 @@ func binarySearchSize(
 	baseFee uint64,
 	hubPrice *uint256.Int, // price of 1 AVAX in hub token units
 ) *evmResult {
-	lo := new(uint256.Int).Rsh(baseAmount, 1) // baseAmount / 2
-	hi := new(uint256.Int).Lsh(baseAmount, 1) // baseAmount * 2
+	lo := new(uint256.Int).Div(baseAmount, uint256.NewInt(5)) // baseAmount / 5
+	hi := new(uint256.Int).Mul(baseAmount, uint256.NewInt(5)) // baseAmount * 5
 
 	// Evaluate at lo, mid, hi
 	evalAt := func(amt *uint256.Int) (netProfit float64, result *evmResult) {
@@ -526,6 +568,7 @@ func main() {
 	singleBlock := false
 	var filterPools []common.Address // --pools 0xabc,0xdef to restrict BFS to specific pools
 	debugHops := false               // --debug-hops to print per-hop formula vs EVM comparison
+	exitOnTx := false                // --exit-on-tx to stop after first submitted tx
 
 	for i, arg := range os.Args {
 		if arg == "--state-server" && i+1 < len(os.Args) {
@@ -545,6 +588,9 @@ func main() {
 		}
 		if arg == "--debug-hops" {
 			debugHops = true
+		}
+		if arg == "--exit-on-tx" {
+			exitOnTx = true
 		}
 	}
 
@@ -768,6 +814,8 @@ func main() {
 			amountIn.Dec(), currentFormula.Dec(), amountIn.Dec(), currentEVM.Dec())
 	}
 
+	dryRun := privKey == nil
+
 	// ── Run one block ──
 	runBlock := func(block, timestamp, baseFee, gasLimit uint64) {
 		cfg := statedb.EVMConfig{
@@ -857,7 +905,6 @@ func main() {
 
 			// Pass 2: EVM verify top 30 paths as full swap() calls
 			t1 := time.Now()
-			var best *evmResult
 			evmCalls := 0
 
 			// Dedup paths (same pool sequence)
@@ -866,6 +913,10 @@ func main() {
 				p0, p1, p2, p3 uint16
 			}
 			seen := make(map[pathKey]bool)
+
+			// Collect top 5 profitable candidates for binary search
+			var topCandidates []*evmResult
+			const maxSizingCandidates = 5
 
 			for i := 0; i < len(allCandidates) && i < 30; i++ {
 				c := &allCandidates[i]
@@ -903,32 +954,75 @@ func main() {
 				}
 				if gross.Gt(gasCost) {
 					r.netProfit = new(uint256.Int).Sub(gross, gasCost).Float64()
-					if best == nil || r.netProfit > best.netProfit {
-						best = r
+					if len(topCandidates) < maxSizingCandidates {
+						topCandidates = append(topCandidates, r)
+					} else {
+						// Replace the worst if this one is better
+						worstIdx := 0
+						for j := 1; j < len(topCandidates); j++ {
+							if topCandidates[j].netProfit < topCandidates[worstIdx].netProfit {
+								worstIdx = j
+							}
+						}
+						if r.netProfit > topCandidates[worstIdx].netProfit {
+							topCandidates[worstIdx] = r
+						}
 					}
 				}
 			}
 
 			evmTime := time.Since(t1)
 
-			if best != nil {
-				// Binary search for optimal size
+			if len(topCandidates) > 0 {
+				// Binary search for optimal size on top 5 candidates (parallel)
 				t2 := time.Now()
-				sized := binarySearchSize(
-					&best.path, pools, best.amountIn,
-					state, evmCtx, caller, routerAddr, baseFee, hub.price,
-				)
-				sizeTime := time.Since(t2)
-
-				if sized != nil && sized.netProfit > best.netProfit {
-					best = sized
+				results := make([]*evmResult, len(topCandidates))
+				var wg sync.WaitGroup
+				for ci, cand := range topCandidates {
+					wg.Add(1)
+					go func(idx int, c *evmResult) {
+						defer wg.Done()
+						// Each goroutine gets its own CachedContext
+						localCtx := statedb.GetCachedContext(cfg)
+						sized := binarySearchSize(
+							&c.path, pools, c.amountIn,
+							state, localCtx, caller, routerAddr, baseFee, hub.price,
+						)
+						if sized != nil && sized.netProfit > c.netProfit {
+							results[idx] = sized
+						} else {
+							results[idx] = c
+						}
+					}(ci, cand)
 				}
+				wg.Wait()
+				var best *evmResult
+				for _, r := range results {
+					if r != nil && (best == nil || r.netProfit > best.netProfit) {
+						best = r
+					}
+				}
+				sizeTime := time.Since(t2)
 
 				div := 1e18
 				if hub.token == USDC { div = 1e6 }
 				fmt.Fprintf(os.Stderr, "[arb3] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v\n",
 					hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
 					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond))
+
+				// Submit transaction
+				if !dryRun && best.calldata != nil {
+					n := rpcNonce(caller)
+					txHash, err := submitArb(privKey, n, routerAddr, best.calldata, best.gasUsed, baseFee)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "[arb3] %s TX FAILED: %v\n", hub.label, err)
+					} else {
+						fmt.Fprintf(os.Stderr, "[arb3] %s TX SENT: %s nonce=%d\n", hub.label, txHash, n)
+						if exitOnTx {
+							os.Exit(0)
+						}
+					}
+				}
 			} else {
 				fmt.Fprintf(os.Stderr, "[arb3] %s evm: no profit, %d calls, %v\n",
 					hub.label, evmCalls, evmTime.Round(time.Microsecond))

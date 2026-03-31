@@ -1569,7 +1569,7 @@ function buildPayload(
 async function main() {
   const txsFile = process.argv[2] ?? path.join(import.meta.dirname!, "txs.txt");
   const rpcUrl = process.env.RPC_URL ?? "http://localhost:9650/ext/bc/C/rpc";
-  const poolsPath = path.resolve(import.meta.dirname!, "../../pools/data/pools.txt");
+  const poolsPath = path.resolve(import.meta.dirname!, "../../../tools/pool-collector/data/pools.txt");
   const outDir = path.join(import.meta.dirname!, "payloads");
 
   const { pools: poolMap } = loadPools(poolsPath);

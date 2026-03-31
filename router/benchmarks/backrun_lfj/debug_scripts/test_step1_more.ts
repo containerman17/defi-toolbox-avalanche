@@ -1,7 +1,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
 import { quoteRoute } from "../../../../router/index.ts";
-import { type PoolType } from "../../../../pool-collector/index.ts";
+import { type PoolType } from "../../../../tools/pool-collector/index.ts";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
 const client = createPublicClient({ chain: avalanche, transport: http(RPC_URL) });

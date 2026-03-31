@@ -1,7 +1,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
 import { quoteRoute } from "../../../../router/index.ts";
-import { type PoolType, loadPools } from "../../../../pool-collector/index.ts";
+import { type PoolType, loadPools } from "../../../../tools/pool-collector/index.ts";
 import * as path from "node:path";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
@@ -31,7 +31,7 @@ const ALG_177 = "0x177a7376860a04eea6bf7fb3f39bf10c49d3b42c";
 const AMOUNT_IN = 3810485938212452485n;
 
 async function main() {
-  const poolsPath = path.join(import.meta.dirname!, "../../pools/data/pools.txt");
+  const poolsPath = path.join(import.meta.dirname!, "../../../tools/pool-collector/data/pools.txt");
   const pools = loadPools(poolsPath);
   
   const POOL_V4 = "0x06380C0e0912312B5150364B9DC4542BA0DbBc85";

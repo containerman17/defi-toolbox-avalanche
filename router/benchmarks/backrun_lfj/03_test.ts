@@ -24,7 +24,7 @@ function withRouterCode(extra?: Record<string, any>): Record<string, any> {
   merged[BACKRUN_ROUTER] = { ...(merged[BACKRUN_ROUTER] ?? {}), code };
   return merged;
 }
-import { type StoredPool, type PoolType, POOL_TYPE_TRANSFER_FROM } from "../../../pool-collector/index.ts";
+import { type StoredPool, type PoolType, POOL_TYPE_TRANSFER_FROM } from "../../../tools/pool-collector/index.ts";
 
 // Bridge-equivalent tokens: .e versions have 1:1 value with their native counterparts
 const BRIDGE_EQUIVALENTS: Record<string, string> = {

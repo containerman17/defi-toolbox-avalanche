@@ -2,7 +2,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
 import { quoteRoute } from "../../../../router/index.ts";
-import { type StoredPool, type PoolType } from "../../../../pool-collector/index.ts";
+import { type StoredPool, type PoolType } from "../../../../tools/pool-collector/index.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 

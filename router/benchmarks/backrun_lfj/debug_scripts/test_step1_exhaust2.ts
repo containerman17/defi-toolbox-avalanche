@@ -1,7 +1,7 @@
 import { createPublicClient, http } from "viem";
 import { avalanche } from "viem/chains";
 import { quoteRoute } from "../../../../router/index.ts";
-import { type PoolType, loadPools } from "../../../../pool-collector/index.ts";
+import { type PoolType, loadPools } from "../../../../tools/pool-collector/index.ts";
 import * as path from "node:path";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
@@ -35,7 +35,7 @@ const V4_FEE18 = "id=0xfe74ff9963652d64086e4467e64ceae7847ebf0139cb4046bcbe02c86
 const V4_FEE32 = "id=0x8dc096ecc5cb7565daa9615d6b6b4e6d1ffb3b16cca4e0971dfaf0ed9cb55c63,fee=32,ts=1,hooks=0x0000000000000000000000000000000000000000";
 
 async function main() {
-  const poolsPath = path.join(import.meta.dirname!, "../../pools/data/pools.txt");
+  const poolsPath = path.join(import.meta.dirname!, "../../../tools/pool-collector/data/pools.txt");
   const { pools: poolMap } = loadPools(poolsPath);
   
   console.log("Testing all USDC→USDt and USDC.e→USDt pools...");

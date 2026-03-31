@@ -257,6 +257,8 @@ async function createWasmBackend(stateServerUrl, onBlock?) {
         }
       };
       stateWs.on("message", handler);
+      // Must subscribe before server sends initial_dump
+      stateWs.send(JSON.stringify({ subscribe: true }));
     });
   }
 
@@ -375,12 +377,24 @@ async function createWasmBackend(stateServerUrl, onBlock?) {
         });
       });
     },
+    findRoute(tokenIn, tokenOut, amountInHex) {
+      return new Promise((resolve, reject) => {
+        if (typeof globalThis.__goFindRoute !== "function") {
+          reject(new Error("__goFindRoute not available"));
+          return;
+        }
+        globalThis.__goFindRoute(tokenIn, tokenOut, amountInHex, (resultJson) => {
+          try { resolve(JSON.parse(resultJson)); }
+          catch (e) { reject(e); }
+        });
+      });
+    },
     close() {
       closed = true;
       if (stateWs) stateWs.close();
       for (const name of [
         "increment", "__goReady", "__goEthCall", "__goEthCallBatch",
-        "__goSetBlock", "__goPrefillStorage", "__goPrefillAccount",
+        "__goSetBlock", "__goPrefillStorage", "__goPrefillAccount", "__goFindRoute",
         "__goFetchStorageAsync", "__goFetchBalanceAsync", "__goFetchNonceAsync",
         "__goFetchCodeAsync", "__goFetchBlockHashAsync",
       ]) delete globalThis[name];
@@ -434,6 +448,16 @@ export async function createQuoter(mode, opts = {}) {
       });
       results.cacheMisses = batch.cacheMisses || 0;
       return results;
+    },
+
+    /** Find best route from tokenIn to tokenOut (WASM only) */
+    async findRoute(tokenIn, tokenOut, amountIn) {
+      if (!backend.findRoute) throw new Error("findRoute not available in this backend");
+      const amountHex = "0x" + amountIn.toString(16);
+      const result = await backend.findRoute(tokenIn.toLowerCase(), tokenOut.toLowerCase(), amountHex);
+      if (result.error) return null;
+      if (result.amountOut) result.amountOut = BigInt(result.amountOut);
+      return result;
     },
 
     /** Raw ethCall (for advanced use) */

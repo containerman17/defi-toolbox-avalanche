@@ -391,69 +391,9 @@ func v3GetNextPriceFromInputOverflowU256(sqrtPX96, liquidity, amountIn *uint256.
 // Key: mappingSlot bytes (first 8 bytes, enough to distinguish) + int64 key
 // Uses a compact key to minimize map overhead.
 
-var keccakSlotCacheU256 = make(map[keccakCacheKey]*big.Int, 8192)
-
 type keccakCacheKey struct {
 	key         int64
 	mappingSlot uint64 // first 8 bytes of mapping slot (sufficient for uniqueness)
-}
-
-func cachedKeccakMappingSlot(key int64, mappingSlot *big.Int) *big.Int {
-	// Extract first 8 bytes from Bits() without allocating (Bits() returns internal slice)
-	words := mappingSlot.Bits()
-	var msKey uint64
-	if len(words) > 0 {
-		msKey = uint64(words[0])
-	}
-
-	ck := keccakCacheKey{key: key, mappingSlot: msKey}
-	if v, ok := keccakSlotCacheU256[ck]; ok {
-		return v
-	}
-
-	var data [64]byte
-	if key >= 0 {
-		data[24] = byte(key >> 56)
-		data[25] = byte(key >> 48)
-		data[26] = byte(key >> 40)
-		data[27] = byte(key >> 32)
-		data[28] = byte(key >> 24)
-		data[29] = byte(key >> 16)
-		data[30] = byte(key >> 8)
-		data[31] = byte(key)
-	} else {
-		for i := 0; i < 24; i++ {
-			data[i] = 0xFF
-		}
-		data[24] = byte(key >> 56)
-		data[25] = byte(key >> 48)
-		data[26] = byte(key >> 40)
-		data[27] = byte(key >> 32)
-		data[28] = byte(key >> 24)
-		data[29] = byte(key >> 16)
-		data[30] = byte(key >> 8)
-		data[31] = byte(key)
-	}
-	// Write mappingSlot as big-endian bytes into data[32:64]
-	for i, w := range words {
-		off := 56 - i*8 // words are little-endian, write big-endian
-		if off < 0 {
-			break
-		}
-		data[off+0] = byte(w >> 56)
-		data[off+1] = byte(w >> 48)
-		data[off+2] = byte(w >> 40)
-		data[off+3] = byte(w >> 32)
-		data[off+4] = byte(w >> 24)
-		data[off+5] = byte(w >> 16)
-		data[off+6] = byte(w >> 8)
-		data[off+7] = byte(w)
-	}
-
-	hash := crypto.Keccak256(data[:])
-	result := new(big.Int).SetBytes(hash)
-	keccakSlotCacheU256[ck] = result
-	return result
 }
 
 // ─── Bytes-based keccak cache (no big.Int) ───

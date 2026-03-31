@@ -109,12 +109,6 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 	}
 }
 
-// SetReader replaces the storage reader function. Called after state snapshot swaps
-// so the PoolManager reads from the new immutable state.
-func (pm *PoolManager) SetReader(reader StorageReader) {
-	pm.reader = reader
-}
-
 // SetEVMCaller provides an EVM execution function used for calling rate providers
 // in Balancer V3 WITH_RATE token pools. Must be called before Get() for those pools.
 func (pm *PoolManager) SetEVMCaller(fn EVMCaller) {
@@ -437,16 +431,6 @@ func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common
 	return poolAddr
 }
 
-// InvalidateAll drops all cached pool structs and slot tracking.
-func (pm *PoolManager) InvalidateAll() {
-	pm.pools = make(map[common.Address]PoolQuoter)
-	pm.depSlots = make(map[common.Address]map[common.Hash]common.Address)
-	pm.cacheMu.Lock()
-	pm.quoteCaches = make(map[common.Address]*QuoteCache)
-	pm.balanceCache = make(map[common.Address][2]uint256.Int)
-	pm.cacheMu.Unlock()
-}
-
 // poolHex returns the lowercase hex string for a pool address.
 func poolHex(addr common.Address) string {
 	return strings.ToLower(addr.Hex())
@@ -530,8 +514,3 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.In
 	return out
 }
 
-// Exported wrappers for experiments
-func CachedKeccakSlotBytes(key int64, mappingSlot [32]byte) [32]byte {
-	return cachedKeccakSlotBytes(key, mappingSlot)
-}
-func V3FloorDivExported(a, b int) int { return v3FloorDiv(a, b) }

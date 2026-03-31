@@ -72,36 +72,6 @@ func getSqrtRatioAtTick(tick int32) *big.Int {
 	return result
 }
 
-func getTickAtSqrtRatio(sqrtPriceX96 *big.Int) int32 {
-	ratio := new(big.Int).Set(sqrtPriceX96)
-	var msb int
-	for _, t := range []struct{ bits int; value string }{
-		{128, "100000000000000000000000000000000"}, {64, "10000000000000000"},
-		{32, "100000000"}, {16, "10000"}, {8, "100"}, {4, "10"}, {2, "4"}, {1, "2"},
-	} {
-		v, _ := new(big.Int).SetString(t.value, 16)
-		if ratio.Cmp(v) >= 0 { msb += t.bits; ratio.Rsh(ratio, uint(t.bits)) }
-	}
-	if msb >= 128 { ratio = new(big.Int).Rsh(sqrtPriceX96, uint(msb-127)) } else { ratio = new(big.Int).Lsh(sqrtPriceX96, uint(127-msb)) }
-	log2 := new(big.Int).Lsh(big.NewInt(int64(msb)-128), 64)
-	for i := 63; i >= 50; i-- {
-		ratio.Mul(ratio, ratio); ratio.Rsh(ratio, 127)
-		f := new(big.Int).Rsh(ratio, 128)
-		log2.Or(log2, new(big.Int).Lsh(f, uint(i)))
-		ratio.Rsh(ratio, uint(f.Uint64()))
-	}
-	c1, _ := new(big.Int).SetString("255738958999603826347141", 10)
-	logSqrt10001 := new(big.Int).Mul(log2, c1)
-	c2, _ := new(big.Int).SetString("3402992956809132418596140100660247210", 10)
-	tickLow := new(big.Int).Sub(logSqrt10001, c2); tickLow.Rsh(tickLow, 128)
-	c3, _ := new(big.Int).SetString("291339464771989622907027621153398088495", 10)
-	tickHi := new(big.Int).Add(logSqrt10001, c3); tickHi.Rsh(tickHi, 128)
-	tl, th := int32(tickLow.Int64()), int32(tickHi.Int64())
-	if tl == th { return tl }
-	if getSqrtRatioAtTick(th).Cmp(sqrtPriceX96) <= 0 { return th }
-	return tl
-}
-
 func mulDiv(a, b, denominator *big.Int) *big.Int {
 	return new(big.Int).Div(new(big.Int).Mul(a, b), denominator)
 }
@@ -117,24 +87,6 @@ func unsafeDivRoundingUp(a, b *big.Int) *big.Int {
 	result := new(big.Int).Div(a, b)
 	if new(big.Int).Mod(a, b).Sign() != 0 { result.Add(result, big.NewInt(1)) }
 	return result
-}
-
-func decodeInt24(data []byte) int32  { return algebraDecodeInt24(data) }
-func encodeInt24(tick int32) []byte  { return algebraEncodeInt24(tick) }
-func decodeInt128(data []byte) *big.Int { return algebraDecodeInt128(data) }
-
-// v3ComputeSwapStep delegates to computeSwapStep in v3.go.
-func v3ComputeSwapStep(
-	a, b, c, d *big.Int, e uint32,
-) (*big.Int, *big.Int, *big.Int, *big.Int) {
-	return computeSwapStep(a, b, c, d, e)
-}
-
-// v3SwapStep delegates to computeSwapStep in v3.go.
-func v3SwapStep(
-	a, b, c, d *big.Int, e uint32,
-) (*big.Int, *big.Int, *big.Int, *big.Int) {
-	return computeSwapStep(a, b, c, d, e)
 }
 
 func sGetNextSqrtPriceFromInput(sqrtPX96, liquidity, amountIn *big.Int, zeroForOne bool) *big.Int {
@@ -168,32 +120,3 @@ func sGetAmount1Delta(sqrtRatioAX96, sqrtRatioBX96, liquidity *big.Int, roundUp 
 	return mulDiv(liquidity, diff, q96)
 }
 
-// Aliases for v4.go compatibility
-func v3GetAmount0Delta(a, b, c *big.Int, d bool) *big.Int { return sGetAmount0Delta(a, b, c, d) }
-func v3GetAmount1Delta(a, b, c *big.Int, d bool) *big.Int { return sGetAmount1Delta(a, b, c, d) }
-func v3GetNextSqrtPriceFromInput(a, b, c *big.Int, d bool) *big.Int { return sGetNextSqrtPriceFromInput(a, b, c, d) }
-func v3GetNextSqrtPriceFromAmount0RoundingUp(sqrtPX96, liquidity, amount *big.Int, add bool) *big.Int {
-	if amount.Sign() == 0 {
-		return new(big.Int).Set(sqrtPX96)
-	}
-	n1 := new(big.Int).Lsh(liquidity, 96)
-	if add {
-		prod := new(big.Int).Mul(amount, sqrtPX96)
-		denom := new(big.Int).Add(n1, prod)
-		return mulDivRoundingUp(n1, sqrtPX96, denom)
-	}
-	// subtract case
-	prod := new(big.Int).Mul(amount, sqrtPX96)
-	denom := new(big.Int).Sub(n1, prod)
-	return mulDivRoundingUp(n1, sqrtPX96, denom)
-}
-
-func v3GetNextSqrtPriceFromAmount1RoundingDown(sqrtPX96, liquidity, amount *big.Int, add bool) *big.Int {
-	q96 := new(big.Int).Lsh(big.NewInt(1), 96)
-	if add {
-		quotient := mulDiv(amount, q96, liquidity)
-		return new(big.Int).Add(sqrtPX96, quotient)
-	}
-	quotient := mulDivRoundingUp(amount, q96, liquidity)
-	return new(big.Int).Sub(sqrtPX96, quotient)
-}

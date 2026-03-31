@@ -12,26 +12,6 @@ import (
 // math from its transfer() function. This avoids rounding mismatches that
 // occur when approximating with a single bps rate.
 
-// FotCalcFee returns the exact fee for a token transfer.
-// Returns (fee, true) if token has FoT, (0, false) otherwise.
-func FotCalcFee(token string, amount *big.Int) (*big.Int, bool) {
-	calc, ok := fotCalculators[token]
-	if !ok {
-		return nil, false
-	}
-	return calc.calcFee(amount), true
-}
-
-// IsFotToken returns true if the token has a fee-on-transfer tax
-// (either static in fotCalculators or stateful in reflectionTokenConfigs).
-func IsFotToken(token string) bool {
-	if _, ok := fotCalculators[token]; ok {
-		return true
-	}
-	_, ok := reflectionTokenConfigs[token]
-	return ok
-}
-
 // IsFotExemptPool returns true if the pool is exempt from FoT adjustments.
 func IsFotExemptPool(pool string) bool {
 	return FotExemptPools[pool]

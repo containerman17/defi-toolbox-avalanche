@@ -57,15 +57,6 @@ const (
 	balV2SpecTwoToken       = 2
 )
 
-// balV2PoolSpecialization extracts the specialization from a poolId.
-// poolId layout: | 20B pool addr | 2B specialization | 10B nonce |   (MSB to LSB)
-// In bytes32 big-endian: bytes[0..19] = addr, bytes[20..21] = spec, bytes[22..31] = nonce.
-func balV2PoolSpecialization(poolId [32]byte) int {
-	// spec is at bytes 20-21 (big-endian), i.e., bits 80-95 from LSB.
-	spec := (int(poolId[20]) << 8) | int(poolId[21])
-	return spec
-}
-
 // balV2MappingSlot computes keccak256(key ++ slot32) for a simple mapping(bytes32 => ...).
 // key is 32 bytes, slot is the mapping's storage slot number.
 func balV2MappingSlot32(key [32]byte, slot int) common.Hash {

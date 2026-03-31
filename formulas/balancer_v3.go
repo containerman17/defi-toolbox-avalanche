@@ -295,26 +295,6 @@ func leLn36(x *big.Int) *big.Int {
 
 // ── FixedPoint power functions ──
 
-func fpPowDown(x, y *big.Int) *big.Int {
-	if y.Cmp(fpONE) == 0 {
-		return new(big.Int).Set(x)
-	}
-	if y.Cmp(fpTWO) == 0 {
-		return fpMulDown(x, x)
-	}
-	if y.Cmp(fpFOUR) == 0 {
-		sq := fpMulDown(x, x)
-		return fpMulDown(sq, sq)
-	}
-
-	raw := lePow(x, y)
-	maxError := new(big.Int).Add(fpMulUp(raw, fpMaxPowRelativeError), big.NewInt(1))
-	if raw.Cmp(maxError) < 0 {
-		return big.NewInt(0)
-	}
-	return new(big.Int).Sub(raw, maxError)
-}
-
 func fpPowUp(x, y *big.Int) *big.Int {
 	if y.Cmp(fpONE) == 0 {
 		return new(big.Int).Set(x)

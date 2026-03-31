@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"math/big"
 	"os"
@@ -12,11 +13,11 @@ import (
 	"sync"
 	"time"
 
+	router "defi-toolbox/contracts"
 	"defi-toolbox/formulas"
 	"defi-toolbox/pathfinder"
-	poolcollector "defi-toolbox/tools/pool-collector"
-	router "defi-toolbox/contracts"
 	"defi-toolbox/statedb"
+	poolcollector "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/crypto"
@@ -239,7 +240,9 @@ func runBlockBenchmark(
 					scaled.Mul(&diff, uint256.NewInt(100_000_000))
 				}
 				denom := &evmResult
-				if result.Gt(&evmResult) { denom = &result }
+				if result.Gt(&evmResult) {
+					denom = &result
+				}
 				if !denom.IsZero() && scaled.Lt(denom) {
 					ts.Match++
 				} else {
@@ -304,7 +307,9 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 		}
 		pc := s.Quotes / 2
 		nzPct := 0.0
-		if s.Quotes > 0 { nzPct = float64(s.NonZero) / float64(s.Quotes) * 100 }
+		if s.Quotes > 0 {
+			nzPct = float64(s.NonZero) / float64(s.Quotes) * 100
+		}
 		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
 			name, pc, s.Quotes, s.Formula, s.HotMs, s.Match, s.Mismatch, nzPct)
 		totalQuotes += s.Quotes
@@ -317,7 +322,9 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 
 	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 74))
 	totalNzPct := 0.0
-	if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+	if totalQuotes > 0 {
+		totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+	}
 	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
 		"TOTAL", poolCount, totalQuotes, totalFmla, totalHotMs, totalMatch, totalMismatch, totalNzPct)
 	return
@@ -326,22 +333,28 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 // ─── Main ──────────────────────────────────────────────────────────
 
 func main() {
-	poolLimit := 4000
-	skipFormulas := false
-	numBlocks := 1
-	var singlePool string
-	stateServerHost := "localhost:7449"
-	useCache := false
+	poolLimit := flag.Int("limit", 3500, "max pools to load")
+	skipFormulas := flag.Bool("skip-formulas", false, "skip formula pass")
+	numBlocksFlag := flag.Int("blocks", 3, "number of blocks to test")
+	singlePoolFlag := flag.String("pool", "", "test a single pool address")
+	stateServerFlag := flag.String("state-server", "localhost:7449", "state server host:port")
+	useCacheFlag := flag.Bool("cache", false, "use formula quote cache")
+	cpuProfileFlag := flag.String("cpuprofile", "", "write CPU profile to file")
+	memProfileFlag := flag.String("memprofile", "", "write memory profile to file")
+	logResultFlag := flag.String("log", "", "append results to file")
+	flag.Parse()
 
-	for i, arg := range os.Args {
-		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
-		if arg == "--skip-formulas" { skipFormulas = true }
-		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
-		if arg == "--pool" && i+1 < len(os.Args) { singlePool = os.Args[i+1] }
-		if arg == "--state-server" && i+1 < len(os.Args) { stateServerHost = os.Args[i+1] }
-		if arg == "--cache" { useCache = true }
+	numBlocks := *numBlocksFlag
+	singlePool := *singlePoolFlag
+	stateServerHost := *stateServerFlag
+	useCache := *useCacheFlag
+	cpuProfile := *cpuProfileFlag
+	memProfile := *memProfileFlag
+	logResult := *logResultFlag
+	_ = logResult
+	if numBlocks < 1 {
+		numBlocks = 1
 	}
-	if numBlocks < 1 { numBlocks = 1 }
 
 	// Compute block numbers
 	blocks := make([]uint64, numBlocks)
@@ -350,7 +363,7 @@ func main() {
 	}
 
 	registry := formulas.LoadEmbeddedRegistry()
-	pools := poolcollector.EmbeddedPools(poolLimit)
+	pools := poolcollector.EmbeddedPools(*poolLimit)
 
 	// Filter to single pool if --pool specified
 	if singlePool != "" {
@@ -379,12 +392,6 @@ func main() {
 	// Build token overrides (block-independent)
 	overrides := router.BuildTokenOverrides(ROUTER, pools)
 
-	// Profiling flags
-	var cpuProfile, memProfile string
-	for i, arg := range os.Args {
-		if arg == "--cpuprofile" && i+1 < len(os.Args) { cpuProfile = os.Args[i+1] }
-		if arg == "--memprofile" && i+1 < len(os.Args) { memProfile = os.Args[i+1] }
-	}
 	if cpuProfile != "" {
 		f, _ := os.Create(cpuProfile)
 		pprof.StartCPUProfile(f)
@@ -405,7 +412,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "\n=== Block %d (%d/%d) ===\n", blockNum, idx+1, numBlocks)
 		}
 
-		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas, stateServerHost, useCache)
+		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, *skipFormulas, stateServerHost, useCache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)
@@ -420,9 +427,13 @@ func main() {
 		// Print per-type breakdown for this block
 		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(res.byType, len(pools))
 		correctPct := 0.0
-		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
+		if totalMatch+totalMismatch > 0 {
+			correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100
+		}
 		totalNzPct := 0.0
-		if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+		if totalQuotes > 0 {
+			totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+		}
 		fmt.Fprintf(os.Stderr, "\n[result] block %d: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
 			blockNum, correctPct, totalMatch, totalMismatch, totalNzPct)
 	}
@@ -434,7 +445,9 @@ func main() {
 		// A pool+direction is "correct" only if it matched EVM on ALL blocks
 		aggByType := make(map[int]*typeStats)
 		aggGetStats := func(poolType int) *typeStats {
-			if s, ok := aggByType[poolType]; ok { return s }
+			if s, ok := aggByType[poolType]; ok {
+				return s
+			}
 			s := &typeStats{}
 			aggByType[poolType] = s
 			return s
@@ -483,9 +496,13 @@ func main() {
 
 		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(aggByType, len(pools))
 		correctPct := 0.0
-		if totalMatch+totalMismatch > 0 { correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100 }
+		if totalMatch+totalMismatch > 0 {
+			correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100
+		}
 		totalNzPct := 0.0
-		if totalQuotes > 0 { totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100 }
+		if totalQuotes > 0 {
+			totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+		}
 		fmt.Fprintf(os.Stderr, "\n[result] AGGREGATE: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
 			correctPct, totalMatch, totalMismatch, totalNzPct)
 	}
@@ -503,9 +520,13 @@ func main() {
 		firstHotMs += s.HotMs
 	}
 	firstCorrectPct := 0.0
-	if firstMatch+firstMismatch > 0 { firstCorrectPct = float64(firstMatch) / float64(firstMatch+firstMismatch) * 100 }
+	if firstMatch+firstMismatch > 0 {
+		firstCorrectPct = float64(firstMatch) / float64(firstMatch+firstMismatch) * 100
+	}
 	firstNzPct := 0.0
-	if firstQ > 0 { firstNzPct = float64(firstNonZero) / float64(firstQ) * 100 }
+	if firstQ > 0 {
+		firstNzPct = float64(firstNonZero) / float64(firstQ) * 100
+	}
 	msPerPool := firstHotMs / float64(len(pools))
 
 	jsonResult := map[string]interface{}{
@@ -535,9 +556,13 @@ func main() {
 				bms += s.HotMs
 			}
 			bc := 0.0
-			if bm+bmm > 0 { bc = float64(bm) / float64(bm+bmm) * 100 }
+			if bm+bmm > 0 {
+				bc = float64(bm) / float64(bm+bmm) * 100
+			}
 			bnzp := 0.0
-			if bq > 0 { bnzp = float64(bnz) / float64(bq) * 100 }
+			if bq > 0 {
+				bnzp = float64(bnz) / float64(bq) * 100
+			}
 			perBlock = append(perBlock, map[string]interface{}{
 				"block":       res.blockNum,
 				"match":       bm,
@@ -573,7 +598,9 @@ func main() {
 			}
 		}
 		aggPct := 0.0
-		if aggMatch+aggMismatch > 0 { aggPct = float64(aggMatch) / float64(aggMatch+aggMismatch) * 100 }
+		if aggMatch+aggMismatch > 0 {
+			aggPct = float64(aggMatch) / float64(aggMatch+aggMismatch) * 100
+		}
 		jsonResult["aggregateMatch"] = aggMatch
 		jsonResult["aggregateMismatch"] = aggMismatch
 		jsonResult["aggregateCorrectness"] = fmt.Sprintf("%.1f", aggPct)
@@ -583,11 +610,7 @@ func main() {
 	fmt.Println(string(out))
 
 	// Append to benchmark_results/benchmark.log
-	var logResult string
-	for i, arg := range os.Args {
-		if arg == "--log" && i+1 < len(os.Args) { logResult = os.Args[i+1] }
-	}
-	if logResult == "" && !skipFormulas {
+	if logResult == "" && !*skipFormulas {
 		logResult = "benchmark_results/benchmark.log"
 	}
 	if logResult != "" {
@@ -901,4 +924,3 @@ func registerBalancerV2Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 		fmt.Fprintf(os.Stderr, "[benchmark] registered %d Balancer V2 pools\n", count)
 	}
 }
-

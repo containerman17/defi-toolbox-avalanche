@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"math/big"
@@ -16,11 +17,11 @@ import (
 	"sync"
 	"time"
 
+	router "defi-toolbox/contracts"
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
-	poolcollector "defi-toolbox/tools/pool-collector"
-	router "defi-toolbox/contracts"
 	"defi-toolbox/statedb"
+	poolcollector "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
@@ -390,7 +391,7 @@ type hubConfig struct {
 	label      string
 	sizes      []*uint256.Int // starting amounts for formula BFS
 	maxBalance *uint256.Int
-	price      *uint256.Int   // price of 1 AVAX in hub token units (for gas cost conversion)
+	price      *uint256.Int // price of 1 AVAX in hub token units (for gas cost conversion)
 }
 
 // ── BFS data structures ──
@@ -621,6 +622,49 @@ func submitArb(key *ecdsa.PrivateKey, nonce uint64, routerAddr common.Address,
 		return "", fmt.Errorf("rpc: %s", rpcResp.Error.Message)
 	}
 	return rpcResp.Result, nil
+}
+
+// verifyOnNode does an eth_call against the real node and compares with local EVM result.
+// Returns true if amounts match. Exits the process if the node reverts or amounts differ.
+func verifyOnNode(caller, routerAddr common.Address, calldata []byte, localAmountOut *uint256.Int, label string, block uint64) bool {
+	blockHex := fmt.Sprintf("0x%x", block)
+	resp, err := rpcCallJSON(map[string]interface{}{
+		"jsonrpc": "2.0", "id": 1, "method": "eth_call",
+		"params": []interface{}{
+			map[string]string{
+				"from": caller.Hex(),
+				"to":   routerAddr.Hex(),
+				"data": "0x" + hex.EncodeToString(calldata),
+			},
+			blockHex,
+		},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[arb4] ⚠️ %s NODE VERIFY @%s: rpc error: %v\n", label, blockHex, err)
+		return false
+	}
+	var rpcResp struct {
+		Result string
+		Error  *struct{ Message string }
+	}
+	json.Unmarshal(resp, &rpcResp)
+	if rpcResp.Error != nil {
+		fmt.Fprintf(os.Stderr, "[arb4] ⚠️ %s NODE VERIFY @%s: node reverted: %s\n", label, blockHex, rpcResp.Error.Message)
+		return false
+	}
+	b, _ := hex.DecodeString(strings.TrimPrefix(rpcResp.Result, "0x"))
+	if len(b) < 32 {
+		fmt.Fprintf(os.Stderr, "[arb4] ⚠️ %s NODE VERIFY @%s: short return (%d bytes)\n", label, blockHex, len(b))
+		return false
+	}
+	nodeAmountOut := new(uint256.Int).SetBytes(b[:32])
+	if !nodeAmountOut.Eq(localAmountOut) {
+		fmt.Fprintf(os.Stderr, "[arb4] ⚠️ %s NODE VERIFY @%s: mismatch local=%s node=%s\n",
+			label, blockHex, localAmountOut.Dec(), nodeAmountOut.Dec())
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "[arb4] %s NODE VERIFY OK @%s: %s\n", label, blockHex, nodeAmountOut.Dec())
+	return true
 }
 
 // evmVerifyPath runs a full swap() call for a given path.
@@ -855,7 +899,7 @@ func rpcBaseFee() uint64 {
 	return bf.Uint64()
 }
 
-func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubConfig) {
+func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubConfig) uint64 {
 	routerAddr := router.DeployedRouter
 	signer := types.NewLondonSigner(chainID)
 	nonce := rpcNonce(caller)
@@ -907,6 +951,7 @@ func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubCon
 		fmt.Fprintf(os.Stderr, "[arb4] %s approved, nonce=%d\n", hub.label, nonce)
 		nonce++
 	}
+	return nonce
 }
 
 func readBalance(state *statedb.StateDB, evmCtx *statedb.CachedContext, owner, token common.Address) *uint256.Int {
@@ -946,34 +991,34 @@ func loadEnv() {
 // ── Main ──
 
 func main() {
-	stateServerURL := "ws://localhost:7449/live"
-	poolLimit := 4000
-	singleBlock := false
-	var filterPools []common.Address // --pools 0xabc,0xdef to restrict BFS to specific pools
-	debugHops := false               // --debug-hops to print per-hop formula vs EVM comparison
-	exitOnTx := false                // --exit-on-tx to stop after first submitted tx
+	stateServerFlag := flag.String("state-server", "ws://localhost:7449/live", "state server WebSocket URL")
+	poolLimitFlag := flag.Int("pool-limit", 4000, "max pools to load")
+	blockFlag := flag.String("block", "", "run on a specific block number (uses debug endpoint)")
+	poolsFlag := flag.String("pools", "", "comma-separated pool addresses to restrict BFS")
+	debugHopsFlag := flag.Bool("debug-hops", false, "print per-hop formula vs EVM comparison")
+	exitOnTxFlag := flag.Bool("exit-on-tx", false, "exit after first submitted transaction")
+	flag.Parse()
+	if flag.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "unknown argument: %s\n", flag.Arg(0))
+		flag.Usage()
+		os.Exit(1)
+	}
 
-	for i, arg := range os.Args {
-		if arg == "--state-server" && i+1 < len(os.Args) {
-			stateServerURL = os.Args[i+1]
-		}
-		if arg == "--pool-limit" && i+1 < len(os.Args) {
-			fmt.Sscanf(os.Args[i+1], "%d", &poolLimit)
-		}
-		if arg == "--block" && i+1 < len(os.Args) {
-			stateServerURL = fmt.Sprintf("ws://localhost:7449/debug/%s", os.Args[i+1])
-			singleBlock = true
-		}
-		if arg == "--pools" && i+1 < len(os.Args) {
-			for _, s := range strings.Split(os.Args[i+1], ",") {
-				filterPools = append(filterPools, common.HexToAddress(strings.TrimSpace(s)))
-			}
-		}
-		if arg == "--debug-hops" {
-			debugHops = true
-		}
-		if arg == "--exit-on-tx" {
-			exitOnTx = true
+	stateServerURL := *stateServerFlag
+	poolLimit := *poolLimitFlag
+	singleBlock := false
+	debugHops := *debugHopsFlag
+	exitOnTx := *exitOnTxFlag
+
+	if *blockFlag != "" {
+		stateServerURL = fmt.Sprintf("ws://localhost:7449/debug/%s", *blockFlag)
+		singleBlock = true
+	}
+
+	var filterPools []common.Address
+	if *poolsFlag != "" {
+		for _, s := range strings.Split(*poolsFlag, ",") {
+			filterPools = append(filterPools, common.HexToAddress(strings.TrimSpace(s)))
 		}
 	}
 
@@ -1074,11 +1119,11 @@ func main() {
 		sizes []*uint256.Int
 	}{
 		{WAVAX, "WAVAX", []*uint256.Int{
-			uint256.NewInt(1_000_000_000_000_000_000),  // 1 AVAX
-			uint256.NewInt(100_000_000_000_000_000),    // 0.1
-			uint256.NewInt(10_000_000_000_000_000),     // 0.01
-			uint256.NewInt(1_000_000_000_000_000),      // 0.001
-			uint256.NewInt(100_000_000_000_000),        // 0.0001
+			uint256.NewInt(1_000_000_000_000_000_000), // 1 AVAX
+			uint256.NewInt(100_000_000_000_000_000),   // 0.1
+			uint256.NewInt(10_000_000_000_000_000),    // 0.01
+			uint256.NewInt(1_000_000_000_000_000),     // 0.001
+			uint256.NewInt(100_000_000_000_000),       // 0.0001
 		}},
 		{USDC, "USDC", []*uint256.Int{
 			uint256.NewInt(10_000_000), // $10
@@ -1124,8 +1169,9 @@ func main() {
 	ls.RUnlock()
 
 	// Ensure approvals
+	approvalNonce := uint64(0)
 	if privKey != nil {
-		ensureApprovals(privKey, caller, hubs)
+		approvalNonce = ensureApprovals(privKey, caller, hubs)
 	}
 
 	routerAddr := router.DeployedRouter
@@ -1198,6 +1244,7 @@ func main() {
 	}
 
 	dryRun := privKey == nil
+	nextNonce := approvalNonce
 
 	// ── Run one block ──
 	runBlock := func(block, timestamp, baseFee, gasLimit uint64) {
@@ -1217,13 +1264,28 @@ func main() {
 			}
 		}
 
-		// Phase 0+1: Build prescreen data (rate table + rated adjacency) — once per block
+		// Phase 0+1: Build prescreen data (rate table + rated adjacency) — once per block.
+		// Retry until token count stabilizes (early runs have cold cache, quotes fail
+		// but backfill state for the next attempt).
 		psT0 := time.Now()
-		psData := buildPrescreenData(pm, adj, pools)
+		var psData *prescreenData
+		prevTokens := 0
+		for attempt := 0; attempt < 5; attempt++ {
+			psData = buildPrescreenData(pm, adj, pools)
+			if len(psData.tokenPrices) == prevTokens {
+				break // stabilized
+			}
+			prevTokens = len(psData.tokenPrices)
+		}
 		psTime := time.Since(psT0)
+		totalEdges := 0
+		for _, edges := range psData.ratedAdj {
+			totalEdges += len(edges)
+		}
 		fmt.Fprintf(os.Stderr, "[arb4] prescreen: %d tokens priced, %d rated edges, %v\n",
-			len(psData.tokenPrices), len(psData.ratedAdj), psTime.Round(time.Millisecond))
+			len(psData.tokenPrices), totalEdges, psTime.Round(time.Millisecond))
 
+		sentThisBlock := false
 		for _, hub := range hubs {
 			t0 := time.Now()
 
@@ -1299,11 +1361,12 @@ func main() {
 
 			// Pass 2: EVM verify top 30 paths as full swap() calls
 			t1 := time.Now()
+			fetchBefore := statedb.FetchCount.Load()
 			evmCalls := 0
 
 			// Dedup paths (same pool sequence)
 			type pathKey struct {
-				hops int
+				hops           int
 				p0, p1, p2, p3 uint16
 			}
 			seen := make(map[pathKey]bool)
@@ -1315,10 +1378,18 @@ func main() {
 			for i := 0; i < len(allCandidates) && i < 30; i++ {
 				c := &allCandidates[i]
 				key := pathKey{hops: len(c.pools)}
-				if len(c.pools) > 0 { key.p0 = c.pools[0] }
-				if len(c.pools) > 1 { key.p1 = c.pools[1] }
-				if len(c.pools) > 2 { key.p2 = c.pools[2] }
-				if len(c.pools) > 3 { key.p3 = c.pools[3] }
+				if len(c.pools) > 0 {
+					key.p0 = c.pools[0]
+				}
+				if len(c.pools) > 1 {
+					key.p1 = c.pools[1]
+				}
+				if len(c.pools) > 2 {
+					key.p2 = c.pools[2]
+				}
+				if len(c.pools) > 3 {
+					key.p3 = c.pools[3]
+				}
 				if seen[key] {
 					continue
 				}
@@ -1329,7 +1400,9 @@ func main() {
 				if r == nil {
 					if debugHops && evmCalls <= 10 {
 						poolStrs := make([]string, len(c.pools))
-						for j, pidx := range c.pools { poolStrs[j] = pools[pidx].Address.Hex()[:10] }
+						for j, pidx := range c.pools {
+							poolStrs[j] = pools[pidx].Address.Hex()[:10]
+						}
 						fmt.Fprintf(os.Stderr, "[arb4]   evm REVERT: in=%s pools=%v\n", c.amountIn.Dec(), poolStrs)
 					}
 					continue
@@ -1399,19 +1472,26 @@ func main() {
 				sizeTime := time.Since(t2)
 
 				div := 1e18
-				if hub.token == USDC { div = 1e6 }
-				fmt.Fprintf(os.Stderr, "[arb4] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v\n",
+				if hub.token == USDC {
+					div = 1e6
+				}
+				fetchAfter := statedb.FetchCount.Load()
+				fmt.Fprintf(os.Stderr, "[arb4] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v fetches=%d\n",
 					hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
-					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond))
+					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond), fetchAfter-fetchBefore)
 
-				// Submit transaction
-				if !dryRun && best.calldata != nil {
-					n := rpcNonce(caller)
-					txHash, err := submitArb(privKey, n, routerAddr, best.calldata, best.gasUsed, baseFee)
+				// Verify on real node before submitting
+				nodeOK := best.calldata != nil && !sentThisBlock && verifyOnNode(caller, routerAddr, best.calldata, best.amountOut, hub.label, block)
+
+				// Submit transaction (one per block max)
+				if nodeOK && !dryRun {
+					txHash, err := submitArb(privKey, nextNonce, routerAddr, best.calldata, best.gasUsed, baseFee)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "[arb4] %s TX FAILED: %v\n", hub.label, err)
 					} else {
-						fmt.Fprintf(os.Stderr, "[arb4] %s TX SENT: %s nonce=%d\n", hub.label, txHash, n)
+						fmt.Fprintf(os.Stderr, "[arb4] %s TX SENT: %s nonce=%d\n", hub.label, txHash, nextNonce)
+						nextNonce++
+						sentThisBlock = true
 						if exitOnTx {
 							os.Exit(0)
 						}

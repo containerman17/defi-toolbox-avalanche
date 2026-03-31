@@ -515,7 +515,7 @@ func rpcBaseFee() uint64 {
 	return bf.Uint64()
 }
 
-func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubConfig) {
+func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubConfig) uint64 {
 	routerAddr := router.DeployedRouter
 	signer := types.NewLondonSigner(chainID)
 	nonce := rpcNonce(caller)
@@ -567,6 +567,7 @@ func ensureApprovals(key *ecdsa.PrivateKey, caller common.Address, hubs []hubCon
 		fmt.Fprintf(os.Stderr, "[arb3] %s approved, nonce=%d\n", hub.label, nonce)
 		nonce++
 	}
+	return nonce
 }
 
 func readBalance(state *statedb.StateDB, evmCtx *statedb.CachedContext, owner, token common.Address) *uint256.Int {
@@ -784,8 +785,9 @@ func main() {
 	ls.RUnlock()
 
 	// Ensure approvals
+	approvalNonce := uint64(0)
 	if privKey != nil {
-		ensureApprovals(privKey, caller, hubs)
+		approvalNonce = ensureApprovals(privKey, caller, hubs)
 	}
 
 	routerAddr := router.DeployedRouter
@@ -858,6 +860,7 @@ func main() {
 	}
 
 	dryRun := privKey == nil
+	nextNonce := approvalNonce
 
 	// ── Run one block ──
 	runBlock := func(block, timestamp, baseFee, gasLimit uint64) {
@@ -877,6 +880,7 @@ func main() {
 			}
 		}
 
+		sentThisBlock := false
 		for _, hub := range hubs {
 			t0 := time.Now()
 
@@ -1055,14 +1059,15 @@ func main() {
 					hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
 					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond))
 
-				// Submit transaction
-				if !dryRun && best.calldata != nil {
-					n := rpcNonce(caller)
-					txHash, err := submitArb(privKey, n, routerAddr, best.calldata, best.gasUsed, baseFee)
+				// Submit transaction (one per block max)
+				if !dryRun && !sentThisBlock && best.calldata != nil {
+					txHash, err := submitArb(privKey, nextNonce, routerAddr, best.calldata, best.gasUsed, baseFee)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "[arb3] %s TX FAILED: %v\n", hub.label, err)
 					} else {
-						fmt.Fprintf(os.Stderr, "[arb3] %s TX SENT: %s nonce=%d\n", hub.label, txHash, n)
+						fmt.Fprintf(os.Stderr, "[arb3] %s TX SENT: %s nonce=%d\n", hub.label, txHash, nextNonce)
+						nextNonce++
+						sentThisBlock = true
 						if exitOnTx {
 							os.Exit(0)
 						}

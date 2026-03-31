@@ -169,25 +169,26 @@ func (s *ImmutableState) CloneWithDiff(
 		}
 	}
 
-	// Apply diff storage (only slots already in cache — HasStorageSlot guard)
-	for addr, slots := range diff.Storage {
-		if newState.Storage[addr] == nil {
-			continue // don't grow cache from diffs
-		}
-		for slot, val := range slots {
-			if _, exists := newState.Storage[addr][slot]; exists {
-				newState.Storage[addr][slot] = val
-			}
-		}
-	}
-
-	// Merge backfill storage (all slots — these were explicitly fetched)
+	// Merge backfill storage FIRST (may contain stale values from a prior block)
 	for addr, slots := range bfStorage {
 		if newState.Storage[addr] == nil {
 			newState.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
 		}
 		for k, v := range slots {
 			newState.Storage[addr][k] = v
+		}
+	}
+
+	// Apply diff storage SECOND — diff always wins over backfill, because backfill
+	// values may have been fetched from the state-server at a stale block (the
+	// state-server releases blockMu between cache check and node fetch, so the
+	// block can advance mid-flight and the client gets an old value).
+	for addr, slots := range diff.Storage {
+		if newState.Storage[addr] == nil {
+			newState.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
+		}
+		for slot, val := range slots {
+			newState.Storage[addr][slot] = val
 		}
 	}
 
@@ -209,25 +210,25 @@ func (s *ImmutableState) CloneWithDiff(
 		}
 	}
 
-	// Balance: copy existing + apply diff + merge backfill
+	// Balance: copy existing + merge backfill + apply diff (diff wins over stale backfill)
 	for addr, bal := range s.Balance {
-		newState.Balance[addr] = bal
-	}
-	for addr, bal := range diff.Balance {
 		newState.Balance[addr] = bal
 	}
 	for addr, bal := range bfBalance {
 		newState.Balance[addr] = bal
 	}
+	for addr, bal := range diff.Balance {
+		newState.Balance[addr] = bal
+	}
 
-	// Nonce: copy existing + apply diff + merge backfill
+	// Nonce: copy existing + merge backfill + apply diff (diff wins over stale backfill)
 	for addr, nonce := range s.Nonce {
 		newState.Nonce[addr] = nonce
 	}
-	for addr, nonce := range diff.Nonce {
+	for addr, nonce := range bfNonce {
 		newState.Nonce[addr] = nonce
 	}
-	for addr, nonce := range bfNonce {
+	for addr, nonce := range diff.Nonce {
 		newState.Nonce[addr] = nonce
 	}
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-03-31 — State machine fixes, node verification, arb reliability
+
+### Critical bug fixes in statedb
+- **CloneWithDiff ordering**: backfill was merged AFTER diff, so stale backfill values (fetched from state-server at block N) could overwrite correct diff values (from block N+1). Fixed by applying backfill BEFORE diff — diff always wins. Affects storage, balance, and nonce.
+- **CloneWithDiff dropping uncached slots**: diff entries for storage slots not already in the immutable cache were silently discarded. Now all diff slots are applied, growing the cache as needed. This was the root cause of local EVM vs real node divergence.
+
+### State-server WebSocket race fix
+- `broadcast()` and `handleClientRequest()` used different mutexes for the same WebSocket connection, causing `panic: concurrent write to websocket connection`. Fixed by sharing the write mutex via `addWithMu()`.
+
+### arb4 → cmd/arbitrage-example
+- Moved from `experiments/arb4/` to `cmd/arbitrage-example/` as a production entrypoint
+- Proper `flag` library for CLI args (rejects unknown flags)
+- Node verification gate: `eth_call` against real node before submitting, warns and skips on mismatch
+- One transaction per block max (prevents replacement tx errors)
+- Local nonce tracking: `ensureApprovals` returns next nonce, incremented locally after each send
+- Prescreen retry loop: retries `buildPrescreenData` up to 5 times on cold start until token count stabilizes
+- Fixed rated edges log to show total edge count instead of source token count
+
+### arb3 fixes
+- Same nonce/tx fixes: local nonce tracking, one tx per block max
+
 ## 2026-03-31 — Repository restructure
 
 Flattened the repo to separate concerns: Go packages at root, JS tooling isolated, benchmarks unified, dead code removed.

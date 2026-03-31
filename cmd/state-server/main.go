@@ -595,6 +595,12 @@ func (m *clientManager) add(c *websocket.Conn) *sync.Mutex {
 	return wmu
 }
 
+func (m *clientManager) addWithMu(c *websocket.Conn, wmu *sync.Mutex) {
+	m.mu.Lock()
+	m.clients[c] = wmu
+	m.mu.Unlock()
+}
+
 func (m *clientManager) remove(c *websocket.Conn) {
 	m.mu.Lock()
 	delete(m.clients, c)
@@ -849,7 +855,8 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 	json.Unmarshal(firstMsg, &peek)
 
 	if peek.Subscribe {
-		// Subscriber: send initial_dump, add to broadcast list for block_diffs
+		// Subscriber: send initial_dump, register for block_diff broadcasts.
+		// Pass our wmu so broadcast uses the same mutex as wsWrite.
 		s.blockMu.RLock()
 		blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
 		dumpMsg, _ := json.Marshal(map[string]interface{}{
@@ -860,8 +867,8 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 			"gasLimit":    gasLimit,
 			"entries":     entries,
 		})
-		_ = conn.WriteMessage(websocket.TextMessage, dumpMsg)
-		s.clients.add(conn)
+		wsWrite(dumpMsg)
+		s.clients.addWithMu(conn, wmu)
 		s.blockMu.RUnlock()
 		defer s.clients.remove(conn)
 

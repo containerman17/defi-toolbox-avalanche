@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-03-31 — Thread-safe formula cache + benchmark --cache flag
+
+### PoolManager cache thread safety
+- Added `sync.RWMutex` to PoolManager protecting `quoteCaches` and `balanceCache`
+- Read-lock on cache lookup, write-lock on cache store and invalidation
+- Measured overhead: **zero** — uncontended RWMutex read-lock is just an atomic read
+- Benchmark results (2000 pools, 4000 quotes):
+  - Without cache (bypass): 43ms → 44.5ms (unchanged)
+  - With cache (warm hits): 17.1ms → 14.2ms (unchanged, within noise)
+- Enables future parallel BFS where multiple goroutines can read the cache concurrently
+
+### Benchmark --cache flag
+- Added `--cache` flag to benchmark: pass 2 populates cache via `pm.Quote()`, pass 3 reads from cache
+- Measures actual cache hit performance separately from formula computation
+- Key finding: cache hit = 3.75 µs/quote (14ms total), bypass = 10.9 µs/quote (43ms total) — cache is 2.6x faster
+- Previous `--cache` results were misleading (480ms) because pass 2 didn't populate the cache, so pass 3 did cold balance check EVM calls on every quote
+
+## 2026-03-31 — arb4: formula prescreen + exact BFS (prototype)
+
+### Architecture
+- 3-phase pipeline adapted from Rust "hit and run" bot's `algo_prescreen`:
+  - Phase 0+1: build rate table (3 probes per edge) + rated adjacency with f64 interpolation — once per block
+  - Phase 2: f64 path enumeration (pure float math, zero formula calls) to select top 500 pools per hub
+  - Phase 3: arb3's exact formula BFS on filtered pool set (~500 pools instead of 2000)
+- First block: prescreen 453ms (cold caches). Subsequent blocks: **16-18ms** (formula caches warm from previous block)
+- Steady-state total: ~290ms per block (both hubs) vs arb3's ~580ms
+- Finds same profitable opportunities as arb3
+
+### Benchmark findings (formula cache)
+- `pm.QuoteBypassQuoteCache()`: 39.6ms for 4000 quotes (10.9 µs/quote) — raw formula, no cache
+- `pm.Quote()` cache hit: 15ms for 4000 quotes (3.75 µs/quote) — 2.6x faster than recomputing
+- `pm.Quote()` cache miss: 472ms — dominated by balance check EVM calls (`readBalanceOf`), not cache overhead
+- Added `--cache` flag to benchmark to measure cache performance (pass 2 populates, pass 3 reads)
+
+### New quoter (pathfinder/bfs.go)
+- Rewrote `FindBestRoute` with arb3's BFS engine (replaces old 2-hop quoter)
+- 4-layer BFS, top-3 per token, EVM verification via hop-by-hop `executeSwap`
+- Returns `Route` with `amountOut`, `gasUsed`, and `swap()` calldata ready for on-chain
+- WASM `__goFindRoute` simplified to 3 args: tokenIn, tokenOut, amountIn
+- Tested: 1 AVAX→8.85 USDC (27ms), 100 USDC→11.29 AVAX (2-hop), round trips 0.05-0.09% loss
+
 ## 2026-03-31 — arb3: fix USDC gas cost comparison + pharaoh_v3 coverage
 
 ### Critical bug fix

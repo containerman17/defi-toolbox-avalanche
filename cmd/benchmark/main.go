@@ -66,6 +66,7 @@ func runBlockBenchmark(
 	overrides []pathfinder.ParsedOverride,
 	skipFormulas bool,
 	stateServerHost string,
+	useCache bool,
 ) (*blockResult, error) {
 	stateServerURL := fmt.Sprintf("ws://%s/debug/%d", stateServerHost, blockNum)
 
@@ -164,7 +165,11 @@ func runBlockBenchmark(
 			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
 			if !skipFormulas {
-				pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+				if useCache {
+					pm.Quote(pool.Address, amountIn, zeroForOne)
+				} else {
+					pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+				}
 			} else {
 				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 				cs.Reset()
@@ -210,9 +215,12 @@ func runBlockBenchmark(
 				ts.NonZero++
 			}
 
-			// IMPORTANT: always use QuoteBypassQuoteCache in benchmarks.
-			// The quote cache would hide formula speed regressions/improvements.
-			result := pm.QuoteBypassQuoteCache(pool.Address, amountIn, zeroForOne)
+			var result uint256.Int
+			if useCache {
+				result = pm.Quote(pool.Address, amountIn, zeroForOne)
+			} else {
+				result = pm.QuoteBypassQuoteCache(pool.Address, amountIn, zeroForOne)
+			}
 			ts.Formula++
 
 			if result.Eq(&evmResult) {
@@ -323,6 +331,7 @@ func main() {
 	numBlocks := 1
 	var singlePool string
 	stateServerHost := "localhost:7449"
+	useCache := false
 
 	for i, arg := range os.Args {
 		if arg == "--limit" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &poolLimit) }
@@ -330,6 +339,7 @@ func main() {
 		if arg == "--blocks" && i+1 < len(os.Args) { fmt.Sscanf(os.Args[i+1], "%d", &numBlocks) }
 		if arg == "--pool" && i+1 < len(os.Args) { singlePool = os.Args[i+1] }
 		if arg == "--state-server" && i+1 < len(os.Args) { stateServerHost = os.Args[i+1] }
+		if arg == "--cache" { useCache = true }
 	}
 	if numBlocks < 1 { numBlocks = 1 }
 
@@ -395,7 +405,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "\n=== Block %d (%d/%d) ===\n", blockNum, idx+1, numBlocks)
 		}
 
-		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas, stateServerHost)
+		res, err := runBlockBenchmark(blockNum, registry, pools, overrides, skipFormulas, stateServerHost, useCache)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
 			os.Exit(1)

@@ -85,7 +85,36 @@ func formulaBFS(
 	pools []pf.Pool,
 	hub common.Address,
 	startAmount *uint256.Int,
-) []bfsPath {
+) ([]bfsPath, int) {
+	// ── Backward reachability pruning ──
+	// Build reverse adjacency (token-level only): for each edge A→B, record A in revAdj[B].
+	revAdj := make(map[common.Address][]common.Address)
+	for token, edges := range adj {
+		for _, edge := range edges {
+			revAdj[edge.tokenOut] = append(revAdj[edge.tokenOut], token)
+		}
+	}
+
+	// reachable[r] = tokens that can reach hub in at most r+1 hops.
+	// reachable[0] = {hub} ∪ {tokens with a direct edge to hub}
+	reachable := make([]map[common.Address]struct{}, maxLayers-1)
+	reachable[0] = make(map[common.Address]struct{}, 512)
+	reachable[0][hub] = struct{}{}
+	for _, src := range revAdj[hub] {
+		reachable[0][src] = struct{}{}
+	}
+	for r := 1; r < maxLayers-1; r++ {
+		reachable[r] = make(map[common.Address]struct{}, len(reachable[r-1]))
+		for tok := range reachable[r-1] {
+			reachable[r][tok] = struct{}{}
+		}
+		for tok := range reachable[r-1] {
+			for _, src := range revAdj[tok] {
+				reachable[r][src] = struct{}{}
+			}
+		}
+	}
+
 	// Flat array of all entries for backtracking
 	allEntries := []bfsEntry{{token: hub, amount: *startAmount, parentID: -1}}
 
@@ -94,9 +123,11 @@ func formulaBFS(
 
 	current := frontier{hub: {0}} // index 0 = the root entry
 	var candidates []bfsPath
+	quoteCount := 0
 
 	for layer := 1; layer <= maxLayers; layer++ {
 		next := make(frontier)
+		remaining := maxLayers - layer // hops left after this expansion
 
 		for token, entryIDs := range current {
 			edges := adj[token]
@@ -106,6 +137,18 @@ func formulaBFS(
 					continue
 				}
 				for _, edge := range edges {
+					// Backward reachability check
+					if edge.tokenOut == hub {
+						// Always allow edges back to hub (terminal candidates)
+					} else if remaining == 0 {
+						// Last layer: only hub-bound edges allowed
+						continue
+					} else if _, ok := reachable[remaining-1][edge.tokenOut]; !ok {
+						// Token can't reach hub in remaining hops
+						continue
+					}
+
+					quoteCount++
 					out := pm.Quote(pools[edge.poolIdx].Address, &entry.amount, edge.dir)
 					if out.IsZero() {
 						continue
@@ -152,7 +195,7 @@ func formulaBFS(
 		current = next
 	}
 
-	return candidates
+	return candidates, quoteCount
 }
 
 // backtrack reconstructs the path from a terminal entry back to the root.
@@ -270,7 +313,7 @@ func evmVerifyPath(
 		}
 	}
 
-	calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
+	calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(1))
 	cs := statedb.NewCallState(state)
 	ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, caller, routerAddr, calldata)
 
@@ -839,12 +882,14 @@ func main() {
 
 			// Pass 1: Formula BFS at all sizes
 			var allCandidates []bfsPath
+			totalQuotes := 0
 			for _, size := range hub.sizes {
 				if hub.maxBalance != nil && size.Gt(hub.maxBalance) {
 					continue
 				}
-				candidates := formulaBFS(pm, adj, pools, hub.token, size)
+				candidates, quotes := formulaBFS(pm, adj, pools, hub.token, size)
 				allCandidates = append(allCandidates, candidates...)
+				totalQuotes += quotes
 			}
 
 			// Sort by absolute gross profit descending (output - input)
@@ -873,11 +918,11 @@ func main() {
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "[arb3] %s formula: %d candidates (%d profitable), %d pools, baseFee=%d, %v\n",
-				hub.label, len(allCandidates), profitable, len(poolSet), baseFee, formulaTime.Round(time.Microsecond))
+			fmt.Fprintf(os.Stderr, "[arb3] %s formula: %d candidates (%d profitable), %d quotes, %d pools, baseFee=%d, %v\n",
+				hub.label, len(allCandidates), profitable, totalQuotes, len(poolSet), baseFee, formulaTime.Round(time.Microsecond))
 
-			// Log top 10 candidates
-			for i := 0; i < len(allCandidates) && i < 10; i++ {
+			// Log top 3 candidates
+			for i := 0; i < len(allCandidates) && i < 3; i++ {
 				c := &allCandidates[i]
 				var gross uint256.Int
 				if c.formulaOut.Gt(c.amountIn) {

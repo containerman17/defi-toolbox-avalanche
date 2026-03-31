@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/hex"
 	"math/big"
+	"os"
+	"strings"
 	"testing"
 
 	"defi-toolbox/pathfinder"
-	"defi-toolbox/router"
+	router "defi-toolbox/contracts"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
@@ -16,7 +19,9 @@ func setupEVMBench() (*statedb.StateDB, statedb.EVMConfig, []byte) {
 	state := statedb.NewStateDB(nil)
 
 	// Set up router with real bytecode at real deployed address
-	state.SetAccount(router.DeployedRouter, uint256.NewInt(0), 0, router.RouterBytecode())
+	bytecodeHex, _ := os.ReadFile("../../contracts/bytecode.hex")
+	bytecode, _ := hex.DecodeString(strings.TrimSpace(string(bytecodeHex)))
+	state.SetAccount(router.DeployedRouter, uint256.NewInt(0), 0, bytecode)
 
 	// Set up a fake V2 pool with reserves
 	poolAddr := common.HexToAddress("0x0e0100ab771e9288e0aa97e11557e6654c3a9665")

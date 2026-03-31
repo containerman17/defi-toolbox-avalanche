@@ -14,7 +14,7 @@ import (
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
 	poolcollector "defi-toolbox/tools/pool-collector"
-	"defi-toolbox/router"
+	router "defi-toolbox/contracts"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"

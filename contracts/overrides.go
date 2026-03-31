@@ -1,10 +1,8 @@
-package router
+package contracts
 
 import (
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
-	"strings"
 
 	"defi-toolbox/pathfinder"
 
@@ -13,13 +11,10 @@ import (
 	"github.com/holiman/uint256"
 )
 
-//go:embed contracts/bytecode.hex
-var bytecodeHex string
-
-//go:embed contracts/address.json
+//go:embed address.json
 var deployedRouterJSON string
 
-//go:embed data/token_overrides.json
+//go:embed token_overrides.json
 var tokenOverridesJSON string
 
 type tokenOverrideEntry struct {
@@ -68,12 +63,6 @@ func parseConfig() deployConfig {
 		Address: common.HexToAddress(raw.Address),
 		Block:   raw.Block,
 	}
-}
-
-// RouterBytecode returns the decoded router contract bytecode.
-func RouterBytecode() []byte {
-	code, _ := hex.DecodeString(strings.TrimSpace(bytecodeHex))
-	return code
 }
 
 // computeBalanceSlot computes keccak256(abi.encode(holder, slot)) for standard ERC20 mapping.
@@ -145,20 +134,6 @@ func BuildSingleTokenOverride(routerAddr, token common.Address, amount *uint256.
 	}
 
 	return &po
-}
-
-// BuildOverrides creates state overrides for the router bytecode + token balances.
-// Use this when the router code must be injected (e.g., evm-quoter SDK, LFJ backrunning).
-func BuildOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {
-	bytecode := RouterBytecode()
-
-	overrides := []pathfinder.ParsedOverride{{
-		Addr:    routerAddr,
-		Balance: uint256.NewInt(0),
-		Code:    bytecode,
-	}}
-
-	return append(overrides, buildTokenOverrides(routerAddr, pools)...)
 }
 
 func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {

@@ -1,8 +1,16 @@
+import path from "path";
+import fs from "fs";
 import { discover, defaultPoolsPath } from "../index.ts";
 
-import { loadDotEnv } from "../../utils/env.ts";
-
-loadDotEnv();
+// Load .env from current dir and all parent dirs
+let dir = process.cwd();
+while (true) {
+    const envPath = path.join(dir, ".env");
+    if (fs.existsSync(envPath)) process.loadEnvFile(envPath);
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+}
 
 const archivalRpcUrl =
     process.env.ARCHIVAL_RPC_URL || "https://api.avax.network/ext/bc/C/rpc";

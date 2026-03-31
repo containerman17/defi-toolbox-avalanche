@@ -17,3 +17,8 @@ temp-scripts/
 /state-server
 /out/
 discover
+/arb2
+/arb3
+/arb4
+/check_state
+/pool_watcher

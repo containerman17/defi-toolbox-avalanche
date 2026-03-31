@@ -11,9 +11,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createPublicClient, http, decodeAbiParameters, encodeAbiParameters, type Hex, type Log } from "viem";
-import { wsPool } from "../../../rpc/ws-pool.ts";
+import { wsPool } from "./ws-pool.ts";
 import { avalanche } from "viem/chains";
-import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "../../../pool-collector/index.ts";
+import { loadPools, ERC4626_VAULTS, generateBufferedEdges, type StoredPool } from "../../../tools/pool-collector/index.ts";
 
 // --- Constants ---
 

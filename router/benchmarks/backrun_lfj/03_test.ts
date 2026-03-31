@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createPublicClient, type Hex, decodeAbiParameters } from "viem";
-import { wsPool, closePool, getPoolStats } from "../../../rpc/ws-pool.ts";
+import { wsPool, closePool, getPoolStats } from "./ws-pool.ts";
 import { avalanche } from "viem/chains";
 import { quoteRoute, quoteFlat, getBalanceOverride, getAllowanceOverride, getRouterBytecode, type FlatStep } from "../../../router/index.ts";
 

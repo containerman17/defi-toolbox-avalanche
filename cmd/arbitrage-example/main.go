@@ -1248,6 +1248,7 @@ func main() {
 
 	// ── Run one block ──
 	runBlock := func(block, timestamp, baseFee, gasLimit uint64) {
+		blockT0 := time.Now()
 		cfg := statedb.EVMConfig{
 			BlockNumber: block, Timestamp: timestamp,
 			ChainID: 43114, BaseFee: baseFee, GasLimit: gasLimit,
@@ -1285,223 +1286,242 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[arb4] prescreen: %d tokens priced, %d rated edges, %v\n",
 			len(psData.tokenPrices), totalEdges, psTime.Round(time.Millisecond))
 
-		sentThisBlock := false
-		for _, hub := range hubs {
-			t0 := time.Now()
+		// Per-hub result collected from parallel search
+		type hubResult struct {
+			hub      hubConfig
+			best     *evmResult
+			evmCalls int
+		}
 
-			// Phase 2: f64 path enumeration to select relevant pools
-			prescreenSet := prescreenPools(psData, hub.token, maxLayers, 500)
-			filteredAdj := filterAdjacency(adj, prescreenSet)
-			prescreenTime := time.Since(t0)
+		hubResults := make([]hubResult, len(hubs))
+		var hubWg sync.WaitGroup
+		for hi, hub := range hubs {
+			hubWg.Add(1)
+			go func(hi int, hub hubConfig) {
+				defer hubWg.Done()
+				t0 := time.Now()
 
-			// Phase 3: Formula BFS at all sizes on filtered pool set
-			var allCandidates []bfsPath
-			totalQuotes := 0
-			for _, size := range hub.sizes {
-				if hub.maxBalance != nil && size.Gt(hub.maxBalance) {
-					continue
-				}
-				candidates, quotes := formulaBFS(pm, filteredAdj, pools, hub.token, size)
-				allCandidates = append(allCandidates, candidates...)
-				totalQuotes += quotes
-			}
+				// Phase 2: f64 path enumeration to select relevant pools
+				prescreenSet := prescreenPools(psData, hub.token, maxLayers, 500)
+				filteredAdj := filterAdjacency(adj, prescreenSet)
+				prescreenTime := time.Since(t0)
 
-			// Sort by absolute gross profit descending (output - input)
-			sort.Slice(allCandidates, func(i, j int) bool {
-				pi := new(uint256.Int)
-				pj := new(uint256.Int)
-				if allCandidates[i].formulaOut.Gt(allCandidates[i].amountIn) {
-					pi.Sub(&allCandidates[i].formulaOut, allCandidates[i].amountIn)
-				}
-				if allCandidates[j].formulaOut.Gt(allCandidates[j].amountIn) {
-					pj.Sub(&allCandidates[j].formulaOut, allCandidates[j].amountIn)
-				}
-				return pi.Gt(pj)
-			})
-
-			formulaTime := time.Since(t0)
-
-			// Count profitable
-			profitable := 0
-			for _, c := range allCandidates {
-				if c.formulaOut.Gt(c.amountIn) {
-					profitable++
-				}
-			}
-
-			fmt.Fprintf(os.Stderr, "[arb4] %s prescreen=%d pools, formula: %d candidates (%d profitable), %d quotes, %v+%v\n",
-				hub.label, len(prescreenSet), len(allCandidates), profitable, totalQuotes, prescreenTime.Round(time.Microsecond), formulaTime.Round(time.Microsecond))
-
-			// Log top 3 candidates
-			for i := 0; i < len(allCandidates) && i < 3; i++ {
-				c := &allCandidates[i]
-				var gross uint256.Int
-				if c.formulaOut.Gt(c.amountIn) {
-					gross.Sub(&c.formulaOut, c.amountIn)
-				}
-				poolStrs := make([]string, len(c.pools))
-				for j, pidx := range c.pools {
-					poolStrs[j] = pools[pidx].Address.Hex()[:10]
-				}
-				fmt.Fprintf(os.Stderr, "[arb4]   #%d: %d hops, in=%s, gross=%s, pools=%v\n",
-					i+1, len(c.pools), c.amountIn.Dec(), gross.Dec(), poolStrs)
-
-				if debugHops && i < 5 {
-					debugPath(c, pools, c.amountIn, pm, state, evmCtx, routerAddr)
-				}
-			}
-
-			if len(allCandidates) == 0 || allCandidates[0].amountIn.Gt(&allCandidates[0].formulaOut) {
-				// No profitable candidates
-				fmt.Fprintf(os.Stderr, "[arb4] %s: no profitable candidates\n", hub.label)
-			}
-			if len(allCandidates) == 0 {
-				continue
-			}
-
-			// Pass 2: EVM verify top 30 paths as full swap() calls
-			t1 := time.Now()
-			fetchBefore := statedb.FetchCount.Load()
-			evmCalls := 0
-
-			// Dedup paths (same pool sequence)
-			type pathKey struct {
-				hops           int
-				p0, p1, p2, p3 uint16
-			}
-			seen := make(map[pathKey]bool)
-
-			// Collect top 5 profitable candidates for binary search
-			var topCandidates []*evmResult
-			const maxSizingCandidates = 5
-
-			for i := 0; i < len(allCandidates) && i < 30; i++ {
-				c := &allCandidates[i]
-				key := pathKey{hops: len(c.pools)}
-				if len(c.pools) > 0 {
-					key.p0 = c.pools[0]
-				}
-				if len(c.pools) > 1 {
-					key.p1 = c.pools[1]
-				}
-				if len(c.pools) > 2 {
-					key.p2 = c.pools[2]
-				}
-				if len(c.pools) > 3 {
-					key.p3 = c.pools[3]
-				}
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-
-				r := evmVerifyPath(c, pools, c.amountIn, state, evmCtx, caller, routerAddr)
-				evmCalls++
-				if r == nil {
-					if debugHops && evmCalls <= 10 {
-						poolStrs := make([]string, len(c.pools))
-						for j, pidx := range c.pools {
-							poolStrs[j] = pools[pidx].Address.Hex()[:10]
-						}
-						fmt.Fprintf(os.Stderr, "[arb4]   evm REVERT: in=%s pools=%v\n", c.amountIn.Dec(), poolStrs)
+				// Phase 3: Formula BFS at all sizes on filtered pool set
+				var allCandidates []bfsPath
+				totalQuotes := 0
+				for _, size := range hub.sizes {
+					if hub.maxBalance != nil && size.Gt(hub.maxBalance) {
+						continue
 					}
-					continue
+					candidates, quotes := formulaBFS(pm, filteredAdj, pools, hub.token, size)
+					allCandidates = append(allCandidates, candidates...)
+					totalQuotes += quotes
 				}
 
-				// swap() returns the caller's balance delta for cyclic arbs (tokenIn==tokenOut).
-				// amountOut IS the gross profit, not amountIn + profit.
-				gross := r.amountOut
-				// gasCostInToken = gasUsed * baseFee * hubPrice / 1e18
-				gasCostAVAX := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
-				gasCost := new(uint256.Int).Mul(gasCostAVAX, hub.price)
-				gasCost.Div(gasCost, uint256.NewInt(1_000_000_000_000_000_000))
-				if debugHops && evmCalls <= 10 {
-					fmt.Fprintf(os.Stderr, "[arb4]   evm: in=%s gross=%s gasCost=%s gas=%d\n",
-						r.amountIn.Dec(), gross.Dec(), gasCost.Dec(), r.gasUsed)
+				// Sort by absolute gross profit descending (output - input)
+				sort.Slice(allCandidates, func(i, j int) bool {
+					pi := new(uint256.Int)
+					pj := new(uint256.Int)
+					if allCandidates[i].formulaOut.Gt(allCandidates[i].amountIn) {
+						pi.Sub(&allCandidates[i].formulaOut, allCandidates[i].amountIn)
+					}
+					if allCandidates[j].formulaOut.Gt(allCandidates[j].amountIn) {
+						pj.Sub(&allCandidates[j].formulaOut, allCandidates[j].amountIn)
+					}
+					return pi.Gt(pj)
+				})
+
+				formulaTime := time.Since(t0)
+
+				// Count profitable
+				profitable := 0
+				for _, c := range allCandidates {
+					if c.formulaOut.Gt(c.amountIn) {
+						profitable++
+					}
 				}
-				if gross.Gt(gasCost) {
-					r.netProfit = new(uint256.Int).Sub(gross, gasCost).Float64()
-					if len(topCandidates) < maxSizingCandidates {
-						topCandidates = append(topCandidates, r)
-					} else {
-						// Replace the worst if this one is better
-						worstIdx := 0
-						for j := 1; j < len(topCandidates); j++ {
-							if topCandidates[j].netProfit < topCandidates[worstIdx].netProfit {
-								worstIdx = j
+
+				fmt.Fprintf(os.Stderr, "[arb4] %s prescreen=%d pools, formula: %d candidates (%d profitable), %d quotes, %v+%v\n",
+					hub.label, len(prescreenSet), len(allCandidates), profitable, totalQuotes, prescreenTime.Round(time.Microsecond), formulaTime.Round(time.Microsecond))
+
+				// Log top 3 candidates
+				for i := 0; i < len(allCandidates) && i < 3; i++ {
+					c := &allCandidates[i]
+					var gross uint256.Int
+					if c.formulaOut.Gt(c.amountIn) {
+						gross.Sub(&c.formulaOut, c.amountIn)
+					}
+					poolStrs := make([]string, len(c.pools))
+					for j, pidx := range c.pools {
+						poolStrs[j] = pools[pidx].Address.Hex()[:10]
+					}
+					fmt.Fprintf(os.Stderr, "[arb4]   #%d: %d hops, in=%s, gross=%s, pools=%v\n",
+						i+1, len(c.pools), c.amountIn.Dec(), gross.Dec(), poolStrs)
+
+					if debugHops && i < 5 {
+						debugPath(c, pools, c.amountIn, pm, state, evmCtx, routerAddr)
+					}
+				}
+
+				if len(allCandidates) == 0 || allCandidates[0].amountIn.Gt(&allCandidates[0].formulaOut) {
+					fmt.Fprintf(os.Stderr, "[arb4] %s: no profitable candidates\n", hub.label)
+				}
+				if len(allCandidates) == 0 {
+					return
+				}
+
+				// Pass 2: EVM verify top 30 paths as full swap() calls
+				t1 := time.Now()
+				fetchBefore := statedb.FetchCount.Load()
+				evmCalls := 0
+
+				// Dedup paths (same pool sequence)
+				type pathKey struct {
+					hops           int
+					p0, p1, p2, p3 uint16
+				}
+				seen := make(map[pathKey]bool)
+
+				// Collect top 5 profitable candidates for binary search
+				var topCandidates []*evmResult
+				const maxSizingCandidates = 5
+
+				localEvmCtx := statedb.GetCachedContext(cfg)
+				for i := 0; i < len(allCandidates) && i < 30; i++ {
+					c := &allCandidates[i]
+					key := pathKey{hops: len(c.pools)}
+					if len(c.pools) > 0 {
+						key.p0 = c.pools[0]
+					}
+					if len(c.pools) > 1 {
+						key.p1 = c.pools[1]
+					}
+					if len(c.pools) > 2 {
+						key.p2 = c.pools[2]
+					}
+					if len(c.pools) > 3 {
+						key.p3 = c.pools[3]
+					}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+
+					r := evmVerifyPath(c, pools, c.amountIn, state, localEvmCtx, caller, routerAddr)
+					evmCalls++
+					if r == nil {
+						if debugHops && evmCalls <= 10 {
+							poolStrs := make([]string, len(c.pools))
+							for j, pidx := range c.pools {
+								poolStrs[j] = pools[pidx].Address.Hex()[:10]
+							}
+							fmt.Fprintf(os.Stderr, "[arb4]   evm REVERT: in=%s pools=%v\n", c.amountIn.Dec(), poolStrs)
+						}
+						continue
+					}
+
+					// swap() returns the caller's balance delta for cyclic arbs (tokenIn==tokenOut).
+					// amountOut IS the gross profit, not amountIn + profit.
+					gross := r.amountOut
+					// gasCostInToken = gasUsed * baseFee * hubPrice / 1e18
+					gasCostAVAX := new(uint256.Int).Mul(uint256.NewInt(r.gasUsed), uint256.NewInt(baseFee))
+					gasCost := new(uint256.Int).Mul(gasCostAVAX, hub.price)
+					gasCost.Div(gasCost, uint256.NewInt(1_000_000_000_000_000_000))
+					if debugHops && evmCalls <= 10 {
+						fmt.Fprintf(os.Stderr, "[arb4]   evm: in=%s gross=%s gasCost=%s gas=%d\n",
+							r.amountIn.Dec(), gross.Dec(), gasCost.Dec(), r.gasUsed)
+					}
+					if gross.Gt(gasCost) {
+						r.netProfit = new(uint256.Int).Sub(gross, gasCost).Float64()
+						if len(topCandidates) < maxSizingCandidates {
+							topCandidates = append(topCandidates, r)
+						} else {
+							// Replace the worst if this one is better
+							worstIdx := 0
+							for j := 1; j < len(topCandidates); j++ {
+								if topCandidates[j].netProfit < topCandidates[worstIdx].netProfit {
+									worstIdx = j
+								}
+							}
+							if r.netProfit > topCandidates[worstIdx].netProfit {
+								topCandidates[worstIdx] = r
 							}
 						}
-						if r.netProfit > topCandidates[worstIdx].netProfit {
-							topCandidates[worstIdx] = r
-						}
 					}
 				}
+
+				evmTime := time.Since(t1)
+
+				if len(topCandidates) > 0 {
+					// Binary search for optimal size on top 5 candidates (parallel)
+					t2 := time.Now()
+					results := make([]*evmResult, len(topCandidates))
+					var wg sync.WaitGroup
+					for ci, cand := range topCandidates {
+						wg.Add(1)
+						go func(idx int, c *evmResult) {
+							defer wg.Done()
+							sizeCtx := statedb.GetCachedContext(cfg)
+							sized := binarySearchSize(
+								&c.path, pools, c.amountIn,
+								state, sizeCtx, caller, routerAddr, baseFee, hub.price,
+							)
+							if sized != nil && sized.netProfit > c.netProfit {
+								results[idx] = sized
+							} else {
+								results[idx] = c
+							}
+						}(ci, cand)
+					}
+					wg.Wait()
+					var best *evmResult
+					for _, r := range results {
+						if r != nil && (best == nil || r.netProfit > best.netProfit) {
+							best = r
+						}
+					}
+					sizeTime := time.Since(t2)
+
+					div := 1e18
+					if hub.token == USDC {
+						div = 1e6
+					}
+					fetchAfter := statedb.FetchCount.Load()
+					fmt.Fprintf(os.Stderr, "[arb4] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v fetches=%d\n",
+						hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
+						best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond), fetchAfter-fetchBefore)
+
+					hubResults[hi] = hubResult{hub: hub, best: best, evmCalls: evmCalls}
+				} else {
+					fmt.Fprintf(os.Stderr, "[arb4] %s evm: no profit, %d calls, %v\n",
+						hub.label, evmCalls, evmTime.Round(time.Microsecond))
+				}
+			}(hi, hub)
+		}
+		hubWg.Wait()
+
+		// Submit best result across all hubs (one tx per block max)
+		sentThisBlock := false
+		for _, hr := range hubResults {
+			if hr.best == nil {
+				continue
 			}
-
-			evmTime := time.Since(t1)
-
-			if len(topCandidates) > 0 {
-				// Binary search for optimal size on top 5 candidates (parallel)
-				t2 := time.Now()
-				results := make([]*evmResult, len(topCandidates))
-				var wg sync.WaitGroup
-				for ci, cand := range topCandidates {
-					wg.Add(1)
-					go func(idx int, c *evmResult) {
-						defer wg.Done()
-						// Each goroutine gets its own CachedContext
-						localCtx := statedb.GetCachedContext(cfg)
-						sized := binarySearchSize(
-							&c.path, pools, c.amountIn,
-							state, localCtx, caller, routerAddr, baseFee, hub.price,
-						)
-						if sized != nil && sized.netProfit > c.netProfit {
-							results[idx] = sized
-						} else {
-							results[idx] = c
-						}
-					}(ci, cand)
-				}
-				wg.Wait()
-				var best *evmResult
-				for _, r := range results {
-					if r != nil && (best == nil || r.netProfit > best.netProfit) {
-						best = r
+			nodeOK := hr.best.calldata != nil && !sentThisBlock && verifyOnNode(caller, routerAddr, hr.best.calldata, hr.best.amountOut, hr.hub.label, block)
+			if nodeOK && !dryRun {
+				txHash, err := submitArb(privKey, nextNonce, routerAddr, hr.best.calldata, hr.best.gasUsed, baseFee)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "[arb4] %s TX FAILED: %v\n", hr.hub.label, err)
+				} else {
+					fmt.Fprintf(os.Stderr, "[arb4] %s TX SENT: %s nonce=%d\n", hr.hub.label, txHash, nextNonce)
+					nextNonce++
+					sentThisBlock = true
+					if exitOnTx {
+						os.Exit(0)
 					}
 				}
-				sizeTime := time.Since(t2)
-
-				div := 1e18
-				if hub.token == USDC {
-					div = 1e6
-				}
-				fetchAfter := statedb.FetchCount.Load()
-				fmt.Fprintf(os.Stderr, "[arb4] %s PROFIT: in=%.4f gross=%.6f gas=%d net=%.6f evm=%d sizing=%v fetches=%d\n",
-					hub.label, best.amountIn.Float64()/div, best.amountOut.Float64()/div,
-					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond), fetchAfter-fetchBefore)
-
-				// Verify on real node before submitting
-				nodeOK := best.calldata != nil && !sentThisBlock && verifyOnNode(caller, routerAddr, best.calldata, best.amountOut, hub.label, block)
-
-				// Submit transaction (one per block max)
-				if nodeOK && !dryRun {
-					txHash, err := submitArb(privKey, nextNonce, routerAddr, best.calldata, best.gasUsed, baseFee)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[arb4] %s TX FAILED: %v\n", hub.label, err)
-					} else {
-						fmt.Fprintf(os.Stderr, "[arb4] %s TX SENT: %s nonce=%d\n", hub.label, txHash, nextNonce)
-						nextNonce++
-						sentThisBlock = true
-						if exitOnTx {
-							os.Exit(0)
-						}
-					}
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "[arb4] %s evm: no profit, %d calls, %v\n",
-					hub.label, evmCalls, evmTime.Round(time.Microsecond))
 			}
 		}
+		fmt.Fprintf(os.Stderr, "[arb4] block=%d total=%v\n", block, time.Since(blockT0).Round(time.Millisecond))
 	}
 
 	// Initial run

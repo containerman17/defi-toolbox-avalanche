@@ -145,7 +145,13 @@ export async function run(limit?: number) {
   let files = fs.readdirSync(payloadsDir).filter(f => f.endsWith(".json"));
   const effectiveLimit = limit ?? (process.env.LIMIT ? parseInt(process.env.LIMIT) : undefined);
   if (effectiveLimit) files = files.slice(0, effectiveLimit);
-  let pass = 0, fail = 0;
+  let pass = 0, fail = 0, done = 0;
+  const t0 = Date.now();
+  const progressInterval = setInterval(() => {
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(0);
+    const pct = (pass + fail) > 0 ? ((pass / (pass + fail)) * 100).toFixed(1) : "0.0";
+    console.log(`[${elapsed}s] ${done}/${files.length} done — ${pass} pass, ${fail} fail (${pct}%)`);
+  }, 3000);
 
   // Process payloads concurrently with a semaphore
   const CONCURRENCY = 24;
@@ -583,10 +589,11 @@ export async function run(limit?: number) {
       }
     }
 
-    } finally { releaseSem(); }
+    } finally { done++; releaseSem(); }
     })());
   }
   await Promise.all(tasks);
+  clearInterval(progressInterval);
 
   const stats = getPoolStats();
   console.log(`\n--- Results ---`);

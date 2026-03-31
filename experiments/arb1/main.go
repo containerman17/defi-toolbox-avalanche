@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"defi-toolbox/arb"
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
 	poolcollector "defi-toolbox/pool-collector"
@@ -93,14 +92,14 @@ func main() {
 	pm.SetBlockTimestamp(ls.Timestamp())
 
 	// Build pool table and enumerate cycles
-	pt := arb.NewPoolTable(embeddedPools)
+	pt := NewPoolTable(embeddedPools)
 	t0 := time.Now()
-	cycles := arb.EnumerateCycles(graph, embeddedPools, WAVAX, maxHops, registry, pt)
+	cycles := EnumerateCycles(graph, embeddedPools, WAVAX, maxHops, registry, pt)
 	enumTime := time.Since(t0)
 	fmt.Fprintf(os.Stderr, "[arb] enumerated %d cycles in %v\n", len(cycles), enumTime.Round(time.Millisecond))
 
 	// Create scanner
-	scanner := arb.NewScanner(cycles, pm, pt, WAVAX)
+	scanner := NewScanner(cycles, pm, pt, WAVAX)
 
 	// Register pool token0 for direction resolution in rate table
 	for _, p := range embeddedPools {
@@ -110,7 +109,7 @@ func main() {
 	}
 
 	// Set up executor if live mode
-	var executor *arb.Executor
+	var executor *Executor
 	var caller common.Address
 	if !dryRun {
 		privKey := os.Getenv("ARB_PRIVATE_KEY")
@@ -123,7 +122,7 @@ func main() {
 			os.Exit(1)
 		}
 		var err error
-		executor, err = arb.NewExecutor(privKey, rpcURL, router.DeployedRouter, pt, WAVAX)
+		executor, err = NewExecutor(privKey, rpcURL, router.DeployedRouter, pt, WAVAX)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[arb] ERROR: %v\n", err)
 			os.Exit(1)
@@ -192,9 +191,9 @@ func main() {
 	}
 
 	// RPC checker for stage 3b cross-validation (works in dry-run, no private key needed)
-	var rpcChecker *arb.RPCChecker
+	var rpcChecker *RPCChecker
 	if rpcURL != "" {
-		rpcChecker = arb.NewRPCChecker(rpcURL, router.DeployedRouter, caller)
+		rpcChecker = NewRPCChecker(rpcURL, router.DeployedRouter, caller)
 		fmt.Fprintf(os.Stderr, "[arb] RPC cross-checker enabled: %s\n", rpcURL)
 	}
 
@@ -258,12 +257,12 @@ func main() {
 		}
 
 		ls.RLock()
-		verifier := arb.NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX)
+		verifier := NewVerifier(state, cfg, router.DeployedRouter, caller, pt, WAVAX)
 		opp, evmResults := scanner.OnBlock(dp, verifier, bi.baseFee)
 		ls.RUnlock()
 
 		fmt.Fprintf(os.Stderr, "[arb] block=%d dirty=%d | %s\n",
-			bi.block, len(dp), arb.FormatOpportunity(opp, pt))
+			bi.block, len(dp), FormatOpportunity(opp, pt))
 
 		// ── Stage 3b: RPC cross-check ALL local EVM results ──
 		// Runs local EVM result calldata against the real node at the same block.

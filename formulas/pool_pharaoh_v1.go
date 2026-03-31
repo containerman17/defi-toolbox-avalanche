@@ -1,7 +1,6 @@
 package formulas
 
 import (
-	"math/big"
 	"strings"
 
 	"github.com/ava-labs/libevm/common"
@@ -19,20 +18,13 @@ type PharaohV1Pool struct {
 func newPharaohV1Pool(addr common.Address, reader StorageReader) *PharaohV1Pool {
 	poolAddress := strings.ToLower(addr.Hex())
 
-	// Create StateReader adapter for FetchPharaohV1StateStorage
-	stateReader := func(contractAddr string, slot *big.Int) ([32]byte, error) {
-		a := common.HexToAddress(contractAddr)
-		slotHash := common.BigToHash(slot)
-		return reader(a, slotHash), nil
-	}
-
-	state, err := FetchPharaohV1StateStorage(stateReader, poolAddress)
+	state, err := FetchPharaohV1StateStorage(reader, poolAddress)
 	if err != nil || state == nil {
 		return nil
 	}
 
 	if state.Reserve0 == nil || state.Reserve1 == nil ||
-		state.Reserve0.Sign() == 0 || state.Reserve1.Sign() == 0 {
+		state.Reserve0.IsZero() || state.Reserve1.IsZero() {
 		return nil
 	}
 
@@ -47,14 +39,9 @@ func (p *PharaohV1Pool) Address() common.Address {
 }
 
 func (p *PharaohV1Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	amtIn := amountIn.ToBig()
-	out := QuotePharaohV1(p.state, amtIn, zeroForOne)
-	if out == nil || out.Sign() <= 0 {
+	out := QuotePharaohV1(p.state, amountIn, zeroForOne)
+	if out == nil || out.IsZero() {
 		return uint256.Int{}
 	}
-	outU256, overflow := uint256.FromBig(out)
-	if overflow {
-		return uint256.Int{}
-	}
-	return *outU256
+	return *out
 }

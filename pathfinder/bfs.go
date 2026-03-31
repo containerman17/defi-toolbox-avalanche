@@ -2,8 +2,6 @@ package pathfinder
 
 import (
 	"bytes"
-	"sort"
-	"time"
 
 	"defi-toolbox/formulas"
 	"defi-toolbox/statedb"
@@ -22,201 +20,182 @@ type RouteStep struct {
 
 // Route is the result of a pathfinding search.
 type Route struct {
-	Steps     []RouteStep `json:"steps"`
+	Steps     []RouteStep  `json:"steps"`
 	AmountOut *uint256.Int `json:"amountOut"`
-	Stats     RouteStats  `json:"stats"`
+	GasUsed   uint64       `json:"gasUsed"`
+	Calldata  []byte       `json:"-"`
 }
 
-// RouteStats tracks quoting statistics.
-type RouteStats struct {
-	FormulaQuotes int     `json:"formulaQuotes"`
-	EVMQuotes     int     `json:"evmQuotes"`
-	TotalQuotes   int     `json:"totalQuotes"`
-	FormulaMs     float64 `json:"formulaMs"`
-	EVMMs         float64 `json:"evmMs"`
-	OverheadMs    float64 `json:"overheadMs"`
+// PoolEdge is a directed edge in the token adjacency graph.
+type PoolEdge struct {
+	PoolIdx  uint16
+	TokenOut common.Address
+	Dir      bool // zeroForOne
+}
+
+// BuildAdjacency creates a token→[]PoolEdge adjacency map from pools.
+// Only includes pools known to the registry.
+func BuildAdjacency(pools []Pool, registry *formulas.Registry) map[common.Address][]PoolEdge {
+	adj := make(map[common.Address][]PoolEdge)
+	for i := range pools {
+		p := &pools[i]
+		if len(p.Tokens) < 2 {
+			continue
+		}
+		if _, known := registry.GetFormulaID(p.Address); !known {
+			continue
+		}
+		idx := uint16(i)
+		adj[p.Tokens[0]] = append(adj[p.Tokens[0]], PoolEdge{idx, p.Tokens[1], true})
+		adj[p.Tokens[1]] = append(adj[p.Tokens[1]], PoolEdge{idx, p.Tokens[0], false})
+	}
+	return adj
 }
 
 // DUMMY_SENDER is the from address for EVM calls.
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
-// quotePool quotes a single pool swap using the formula.
-// Returns nil if the pool returns zero.
-func quotePool(
-	pool *Pool,
-	tokenIn, tokenOut common.Address,
-	amountIn *uint256.Int,
-	pm *formulas.PoolManager,
-	stats *RouteStats,
-) *uint256.Int {
-	stats.TotalQuotes++
-	ft0 := time.Now()
-	zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
-	out := pm.Quote(pool.Address, amountIn, zeroForOne)
-	stats.FormulaQuotes++
-	stats.FormulaMs += float64(time.Since(ft0).Microseconds()) / 1000.0
-	if !out.IsZero() {
-		return new(uint256.Int).Set(&out)
-	}
-	return nil
+// ── BFS node ─────────────────────────────────────────────────────────
+
+type bfsNode struct {
+	amount   uint256.Int
+	parentID int32  // index into allNodes (-1 for root)
+	poolIdx  uint16 // index into pools slice
+	dir      bool   // zeroForOne
+	token    common.Address
 }
 
-// evmQuotePool quotes a single pool swap using EVM only (no formula).
-func evmQuotePool(
-	pool *Pool,
-	tokenIn, tokenOut common.Address,
-	amountIn *uint256.Int,
-	cs *statedb.CallState,
-	evmCtx *statedb.CachedContext,
-	routerAddr common.Address,
-) *uint256.Int {
-	calldata := EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
-	cs.Reset()
-	ret, _, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, calldata)
-	if err == nil && len(ret) >= 32 {
-		var out uint256.Int
-		out.SetBytes(ret[:32])
-		if !out.IsZero() {
-			return &out
-		}
-	}
-	return nil
-}
+const topK = 3
 
-// FindBestRoute finds the best swap route using a simple two-phase approach:
-//   - Phase 1: quote all direct pools (1 hop)
-//   - Phase 2: find intermediate tokens adjacent to both tokenIn and tokenOut,
-//     quote hop 1 (keep best per intermediate), then quote hop 2
+// ── FindBestRoute ────────────────────────────────────────────────────
+
+// FindBestRoute finds the best swap route from tokenIn to tokenOut using
+// formula BFS (same algorithm as arb3) with EVM verification.
 //
-// Maximum 2 hops, no path splitting.
+// BFS expands layer by layer (up to maxHops), keeping top-3 amounts per
+// token per layer with real cascading amounts. Paths reaching tokenOut are
+// candidates. Top 5 are EVM-verified via full swap(); best is returned.
 func FindBestRoute(
+	pm *formulas.PoolManager,
+	adj map[common.Address][]PoolEdge,
+	pools []Pool,
 	state *statedb.StateDB,
 	cfg statedb.EVMConfig,
-	pm *formulas.PoolManager,
-	overrides []ParsedOverride,
 	routerAddr common.Address,
-	graph *Graph,
+	overrides []ParsedOverride,
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
 	maxHops int,
 ) *Route {
-	if tokenIn == tokenOut {
+	if tokenIn == tokenOut || amountIn.IsZero() {
 		return nil
 	}
-
-	var stats RouteStats
-
-	baseWithOverrides := ApplyOverridesFlat(state, overrides)
-	evmCtx := statedb.GetCachedContext(cfg)
-	cs := statedb.NewCallState(baseWithOverrides)
-
-	type routeCandidate struct {
-		steps     []RouteStep
-		pools     []*Pool
-		amountOut *uint256.Int
-	}
-	var candidates []routeCandidate
-
-	// ── Phase 1: Direct pools (1 hop) ──────────────────────────────────
-	for _, edge := range graph.Edges[tokenIn] {
-		if edge.TokenOut != tokenOut {
-			continue
-		}
-		out := quotePool(edge.Pool, tokenIn, tokenOut, amountIn, pm, &stats)
-		if out != nil {
-			candidates = append(candidates, routeCandidate{
-				steps: []RouteStep{{
-					Pool: edge.Pool.Address, PoolType: edge.Pool.PoolType,
-					TokenIn: tokenIn, TokenOut: tokenOut,
-				}},
-				pools:     []*Pool{edge.Pool},
-				amountOut: new(uint256.Int).Set(out),
-			})
-		}
+	if maxHops <= 0 || maxHops > 4 {
+		maxHops = 4
 	}
 
-	// ── Phase 2: Two-hop via intermediate tokens ───────────────────────
-	type hop1Result struct {
-		step   RouteStep
-		pool   *Pool
-		amount *uint256.Int
+	// ── Formula BFS ──────────────────────────────────────────────────
+
+	// All nodes stored flat for backtracking
+	allNodes := make([]bfsNode, 1, 1024)
+	allNodes[0] = bfsNode{
+		amount:   *amountIn,
+		parentID: -1,
+		token:    tokenIn,
 	}
-	bestPerIntermediate := make(map[common.Address]*hop1Result)
 
-	seen := make(map[[24]byte]bool) // pool:tokenOut dedup
-	for _, edge := range graph.Edges[tokenIn] {
-		mid := edge.TokenOut
-		if mid == tokenIn || mid == tokenOut {
-			continue
+	// Current layer: indices into allNodes
+	currentLayer := []int32{0}
+
+	// Candidates: node indices that reached tokenOut
+	type candidate struct {
+		nodeIdx int32
+	}
+	var candidates []candidate
+
+	for hop := 0; hop < maxHops; hop++ {
+		// Per-token top-K for this layer
+		type topEntry struct {
+			amount  uint256.Int
+			nodeIdx int32
 		}
+		tokenBest := make(map[common.Address][]topEntry)
 
-		// Dedup: same pool + same output token
-		var key [24]byte
-		copy(key[:20], edge.Pool.Address[:])
-		copy(key[20:], mid[:4])
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		for _, parentIdx := range currentLayer {
+			parent := &allNodes[parentIdx]
 
-		// Pre-check: does this intermediate connect to tokenOut?
-		if _, known := bestPerIntermediate[mid]; !known {
-			hasPath := false
-			for _, e2 := range graph.Edges[mid] {
-				if e2.TokenOut == tokenOut {
-					hasPath = true
-					break
+			for _, edge := range adj[parent.token] {
+				// Don't use the same pool we arrived through
+				if parent.parentID >= 0 && edge.PoolIdx == parent.poolIdx {
+					continue
+				}
+				// Don't route back to tokenIn (avoid trivial loops)
+				if edge.TokenOut == tokenIn {
+					continue
+				}
+
+				out := pm.Quote(pools[edge.PoolIdx].Address, &parent.amount, edge.Dir)
+				if out.IsZero() {
+					continue
+				}
+
+				tok := edge.TokenOut
+				entries := tokenBest[tok]
+
+				if len(entries) < topK {
+					nodeIdx := int32(len(allNodes))
+					allNodes = append(allNodes, bfsNode{
+						amount:   out,
+						parentID: parentIdx,
+						poolIdx:  edge.PoolIdx,
+						dir:      edge.Dir,
+						token:    tok,
+					})
+					tokenBest[tok] = append(entries, topEntry{amount: out, nodeIdx: nodeIdx})
+				} else {
+					// Find worst
+					worstIdx := 0
+					for j := 1; j < len(entries); j++ {
+						if entries[j].amount.Lt(&entries[worstIdx].amount) {
+							worstIdx = j
+						}
+					}
+					if out.Gt(&entries[worstIdx].amount) {
+						nodeIdx := int32(len(allNodes))
+						allNodes = append(allNodes, bfsNode{
+							amount:   out,
+							parentID: parentIdx,
+							poolIdx:  edge.PoolIdx,
+							dir:      edge.Dir,
+							token:    tok,
+						})
+						entries[worstIdx] = topEntry{amount: out, nodeIdx: nodeIdx}
+						tokenBest[tok] = entries
+					}
 				}
 			}
-			if !hasPath {
-				continue
+		}
+
+		// Collect candidates reaching tokenOut
+		if entries, ok := tokenBest[tokenOut]; ok {
+			for _, e := range entries {
+				candidates = append(candidates, candidate{nodeIdx: e.nodeIdx})
 			}
 		}
 
-		out := quotePool(edge.Pool, tokenIn, mid, amountIn, pm, &stats)
-		if out == nil {
-			continue
-		}
-
-		existing := bestPerIntermediate[mid]
-		if existing == nil || out.Gt(existing.amount) {
-			bestPerIntermediate[mid] = &hop1Result{
-				step: RouteStep{
-					Pool: edge.Pool.Address, PoolType: edge.Pool.PoolType,
-					TokenIn: tokenIn, TokenOut: mid,
-				},
-				pool:   edge.Pool,
-				amount: new(uint256.Int).Set(out),
-			}
-		}
-	}
-
-	// Hop 2: for each surviving intermediate, quote all pools to tokenOut
-	for mid, hop1 := range bestPerIntermediate {
-		seenPool := make(map[common.Address]bool)
-		for _, edge := range graph.Edges[mid] {
-			if edge.TokenOut != tokenOut {
+		// Build next frontier (exclude tokenOut — no point expanding past destination)
+		currentLayer = currentLayer[:0]
+		for tok, entries := range tokenBest {
+			if tok == tokenOut {
 				continue
 			}
-			if seenPool[edge.Pool.Address] {
-				continue
+			for _, e := range entries {
+				currentLayer = append(currentLayer, e.nodeIdx)
 			}
-			seenPool[edge.Pool.Address] = true
+		}
 
-			out := quotePool(edge.Pool, mid, tokenOut, hop1.amount, pm, &stats)
-			if out != nil {
-				candidates = append(candidates, routeCandidate{
-					steps: []RouteStep{
-						hop1.step,
-						{
-							Pool: edge.Pool.Address, PoolType: edge.Pool.PoolType,
-							TokenIn: mid, TokenOut: tokenOut,
-						},
-					},
-					pools:     []*Pool{hop1.pool, edge.Pool},
-					amountOut: new(uint256.Int).Set(out),
-				})
-			}
+		if len(currentLayer) == 0 {
+			break
 		}
 	}
 
@@ -224,49 +203,129 @@ func FindBestRoute(
 		return nil
 	}
 
-	// ── EVM verification ───────────────────────────────────────────────
-	// Take top 10 by formula amountOut, EVM-verify all, return the best.
-	// Formulas can lie (e.g. wrong storage slots), so EVM is ground truth.
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].amountOut.Gt(candidates[j].amountOut)
-	})
-	top := 10
+	// Sort candidates by output descending (insertion sort, small slice)
+	for i := 1; i < len(candidates); i++ {
+		for j := i; j > 0; j-- {
+			a := &allNodes[candidates[j].nodeIdx].amount
+			b := &allNodes[candidates[j-1].nodeIdx].amount
+			if a.Gt(b) {
+				candidates[j], candidates[j-1] = candidates[j-1], candidates[j]
+			} else {
+				break
+			}
+		}
+	}
+
+	// Backtrack a candidate to build steps
+	backtrack := func(nodeIdx int32) ([]RouteStep, []common.Address, []int, []string) {
+		// Collect hops in reverse
+		var revSteps []RouteStep
+		var poolAddrs []common.Address
+		var poolTypes []int
+		var extraDatas []string
+		var tokenPairs []common.Address
+
+		idx := nodeIdx
+		for idx >= 0 && allNodes[idx].parentID >= 0 {
+			node := &allNodes[idx]
+			parent := &allNodes[node.parentID]
+			p := &pools[node.poolIdx]
+			revSteps = append(revSteps, RouteStep{
+				Pool:     p.Address,
+				PoolType: p.PoolType,
+				TokenIn:  parent.token,
+				TokenOut: node.token,
+			})
+			poolAddrs = append(poolAddrs, p.Address)
+			poolTypes = append(poolTypes, p.PoolType)
+			extraDatas = append(extraDatas, p.ExtraData)
+			if node.dir {
+				tokenPairs = append(tokenPairs, p.Tokens[0], p.Tokens[1])
+			} else {
+				tokenPairs = append(tokenPairs, p.Tokens[1], p.Tokens[0])
+			}
+			idx = node.parentID
+		}
+
+		// Reverse all slices
+		for i, j := 0, len(revSteps)-1; i < j; i, j = i+1, j-1 {
+			revSteps[i], revSteps[j] = revSteps[j], revSteps[i]
+			poolAddrs[i], poolAddrs[j] = poolAddrs[j], poolAddrs[i]
+			poolTypes[i], poolTypes[j] = poolTypes[j], poolTypes[i]
+			extraDatas[i], extraDatas[j] = extraDatas[j], extraDatas[i]
+			tokenPairs[i*2], tokenPairs[j*2] = tokenPairs[j*2], tokenPairs[i*2]
+			tokenPairs[i*2+1], tokenPairs[j*2+1] = tokenPairs[j*2+1], tokenPairs[i*2+1]
+		}
+
+		return revSteps, poolAddrs, poolTypes, extraDatas
+	}
+
+	// ── EVM verification of top 5 ───────────────────────────────────
+
+	baseWithOverrides := ApplyOverridesFlat(state, overrides)
+	evmCtx := statedb.GetCachedContext(cfg)
+
+	top := 5
 	if top > len(candidates) {
 		top = len(candidates)
 	}
 
-	var bestRoute []RouteStep
-	var bestEVMOut *uint256.Int
+	var bestRoute *Route
 	for _, cand := range candidates[:top] {
+		steps, poolAddrs, poolTypes, extraDatas := backtrack(cand.nodeIdx)
+
+		// EVM verify hop-by-hop via executeSwap (no transferFrom needed)
 		evmAmount := new(uint256.Int).Set(amountIn)
+		var totalGas uint64
 		valid := true
-		for i, pool := range cand.pools {
-			step := cand.steps[i]
-			out := evmQuotePool(pool, step.TokenIn, step.TokenOut, evmAmount, cs, evmCtx, routerAddr)
-			if out == nil {
+		for i, step := range steps {
+			cd := EncodeSwapSingleWithExtra(step.Pool, step.PoolType, step.TokenIn, step.TokenOut, evmAmount, extraDatas[i])
+			cs := statedb.NewCallState(baseWithOverrides)
+			ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, cd)
+			if err != nil || len(ret) < 32 {
 				valid = false
 				break
 			}
-			evmAmount = out
+			evmAmount = new(uint256.Int)
+			evmAmount.SetBytes(ret[:32])
+			if evmAmount.IsZero() {
+				valid = false
+				break
+			}
+			totalGas += gasUsed
 		}
 		if !valid {
 			continue
 		}
-		stats.EVMQuotes += len(cand.pools)
-		if bestEVMOut == nil || evmAmount.Gt(bestEVMOut) {
-			bestEVMOut = new(uint256.Int).Set(evmAmount)
-			bestRoute = cand.steps
+
+		// Build swap() calldata for on-chain execution
+		tokenPairs := make([]common.Address, len(steps)*2)
+		for i, s := range steps {
+			tokenPairs[i*2] = s.TokenIn
+			tokenPairs[i*2+1] = s.TokenOut
+		}
+		calldata := EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
+
+		if bestRoute == nil || evmAmount.Gt(bestRoute.AmountOut) {
+			bestRoute = &Route{
+				Steps:     steps,
+				AmountOut: new(uint256.Int).Set(evmAmount),
+				GasUsed:   totalGas,
+				Calldata:  calldata,
+			}
 		}
 	}
 
-	if bestEVMOut == nil {
-		return nil
-	}
-	return &Route{
-		Steps:     bestRoute,
-		AmountOut: bestEVMOut,
-		Stats:     stats,
-	}
+	return bestRoute
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+// EncodeExecuteSwapSingle builds executeSwap calldata for a single pool.
+func EncodeExecuteSwapSingle(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int) []byte {
+	zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
+	_ = zeroForOne
+	return EncodeSwapSingleWithExtra(pool, poolType, tokenIn, tokenOut, amountIn, "")
 }
 
 // ParsedOverride holds pre-parsed override data.
@@ -299,13 +358,11 @@ func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.
 }
 
 // ApplyOverridesFlat creates an overlay of base with overrides baked in.
-// Overrides are isolated from the base state via the overlay pattern.
 func ApplyOverridesFlat(base *statedb.StateDB, overrides []ParsedOverride) *statedb.StateDB {
 	if len(overrides) == 0 {
 		return base
 	}
 	overlay := base.NewOverlay()
-
 	for _, po := range overrides {
 		if po.Code != nil {
 			overlay.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)

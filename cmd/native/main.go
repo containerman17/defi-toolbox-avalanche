@@ -160,7 +160,7 @@ func main() {
 
 	// Pre-compute pools, graph, and overrides for find_route
 	embeddedPools := poolcollector.EmbeddedPools(7500)
-	embeddedGraph := pf.BuildGraph(embeddedPools)
+	embeddedAdj := pf.BuildAdjacency(embeddedPools, registry)
 	embeddedOverrides := router.BuildTokenOverrides(
 		router.DeployedRouter,
 		embeddedPools,
@@ -372,7 +372,7 @@ func main() {
 				maxHops = 4
 			}
 
-			route := pf.FindBestRoute(state, cfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops)
+			route := pf.FindBestRoute(pm, embeddedAdj, embeddedPools, state, cfg, router.DeployedRouter, embeddedOverrides, tokenIn, tokenOut, amountIn, maxHops)
 			if route == nil {
 				resp.Result = map[string]interface{}{"route": nil}
 			} else {

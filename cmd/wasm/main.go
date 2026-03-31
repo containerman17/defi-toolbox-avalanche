@@ -132,7 +132,7 @@ var (
 	pm       *formulas.PoolManager
 
 	embeddedPools     []pf.Pool
-	embeddedGraph     *pf.Graph
+	embeddedAdj       map[common.Address][]pf.PoolEdge
 	embeddedOverrides []pf.ParsedOverride
 )
 
@@ -147,9 +147,9 @@ func main() {
 	// Load formula registry (embedded registry.txt)
 	registry = formulas.LoadEmbeddedRegistry()
 
-	// Pre-compute pools, graph, and overrides for find_route
+	// Pre-compute pools, adjacency, and overrides for find_route
 	embeddedPools = poolcollector.EmbeddedPools(7500)
-	embeddedGraph = pf.BuildGraph(embeddedPools)
+	embeddedAdj = pf.BuildAdjacency(embeddedPools, registry)
 	embeddedOverrides = router.BuildTokenOverrides(router.DeployedRouter, embeddedPools)
 
 	// Create PoolManager backed by state
@@ -392,17 +392,16 @@ func main() {
 		return nil
 	}))
 
-	// find_route — Args: tokenIn, tokenOut, amountIn (hex), maxHops, formulaOnly, callback
+	// find_route — Args: tokenIn, tokenOut, amountIn (hex), callback
+	// Returns: {amountOut, gasUsed, calldata, steps} or {error}
 	js.Global().Set("__goFindRoute", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		if len(args) < 6 {
+		if len(args) < 4 {
 			return js.Null()
 		}
 		tokenInHex := args[0].String()
 		tokenOutHex := args[1].String()
 		amountInHex := args[2].String()
-		maxHops := args[3].Int()
-		formulaOnly := args[4].Bool()
-		callback := args[5]
+		callback := args[3]
 
 		go func() {
 			tokenIn := common.HexToAddress(tokenInHex)
@@ -414,14 +413,10 @@ func main() {
 			}
 			amountIn, _ := uint256.FromBig(amtBig)
 
-			if maxHops <= 0 {
-				maxHops = 4
-			}
-
 			pm.SetBlockTimestamp(evmCfg.Timestamp)
-			route := pf.FindBestRoute(state, evmCfg, pm, embeddedOverrides, router.DeployedRouter, embeddedGraph, tokenIn, tokenOut, amountIn, maxHops, formulaOnly)
+			route := pf.FindBestRoute(pm, embeddedAdj, embeddedPools, state, evmCfg, router.DeployedRouter, embeddedOverrides, tokenIn, tokenOut, amountIn, 4)
 			if route == nil {
-				callback.Invoke(`{"route":null}`)
+				callback.Invoke(`{"error":"no route"}`)
 				return
 			}
 

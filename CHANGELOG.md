@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-03-31 — Repository restructure
+
+Flattened the repo to separate concerns: Go packages at root, JS tooling isolated, benchmarks unified, dead code removed.
+
+### Structure changes
+- `contracts/` — HayabusaRouter.sol, bytecode, address.json, token_overrides.json, overrides.go (was scattered across router/)
+- `benchmarks/formula-accuracy/` — Go formula vs EVM benchmark (was cmd/benchmark)
+- `benchmarks/swap-replay/` — TS aggregator replay benchmark (was router/benchmarks/backrun_lfj), self-contained with its own lib/ and package.json
+- `tools/pool-collector/` — pool discovery (was pool-collector/), runs directly via `node index.ts`
+- `experiments/arb1/` — archived first arb bot (was cmd/arb + arb/)
+
+### Removed
+- `evm-quoter/` — old WASM quoter SDK, superseded by cmd/wasm + cmd/native
+- `packages/hayabusa/` — unused npm package prototype (39k lines including committed dist/ and binaries)
+- `examples/` — outdated JS quoting examples
+- `router/` — TS quoting lib moved into swap-replay/lib, Go overrides moved to contracts/
+- `rpc/ws-pool.ts` — merged into swap-replay
+- `utils/env.ts` — inlined into pool-collector
+- `pathfinder/index.ts`, `pathfinder/benchmarks/` — dead TS code
+- Root `package.json`, `tsconfig.json` — each JS project has its own now
+- Sub-module `go.mod` files — single root go.mod for everything
+
+### Cleanup
+- 12 dead functions removed from arb1 via `deadcode` tool
+- Removed `RouterBytecode()` and `BuildOverrides()` from contracts (dead code)
+- compile.ts and deploy.ts merged into single `contracts/compile.ts --deploy`
+- Added `CLAUDE.md` rule: never use `go build`, only `go vet` or `go run`
+
 ## 2026-03-31 — Thread-safe formula cache + benchmark --cache flag
 
 ### PoolManager cache thread safety

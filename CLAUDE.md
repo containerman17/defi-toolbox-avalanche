@@ -14,3 +14,9 @@ When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), rea
 - Priority fix order
 
 **Agents working on coverage MUST update COVERAGE.md** with any new findings, tools, or techniques they discover.
+
+## Go Build Rules
+
+**Never use `go build`** unless you need a binary for external use (e.g. WASM for JS integration). Only two commands:
+- `go vet ./path/` — check compilation without producing artifacts
+- `go run ./path/` — run (includes building), no leftover binaries

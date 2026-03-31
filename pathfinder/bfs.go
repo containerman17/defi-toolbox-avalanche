@@ -24,6 +24,14 @@ type Route struct {
 	AmountOut *uint256.Int `json:"amountOut"`
 	GasUsed   uint64       `json:"gasUsed"`
 	Calldata  []byte       `json:"-"`
+	Stats     RouteStats   `json:"stats"`
+}
+
+// RouteStats tracks quoting statistics.
+type RouteStats struct {
+	FormulaQuotes int     `json:"formulaQuotes"`
+	EVMQuotes     int     `json:"evmQuotes"`
+	TotalQuotes   int     `json:"totalQuotes"`
 }
 
 // PoolEdge is a directed edge in the token adjacency graph.
@@ -87,9 +95,10 @@ func FindBestRoute(
 	amountIn *uint256.Int,
 	maxHops int,
 ) *Route {
-	if tokenIn == tokenOut || amountIn.IsZero() {
+	if amountIn.IsZero() {
 		return nil
 	}
+	cyclic := tokenIn == tokenOut
 	if maxHops <= 0 || maxHops > 4 {
 		maxHops = 4
 	}
@@ -106,6 +115,7 @@ func FindBestRoute(
 
 	// Current layer: indices into allNodes
 	currentLayer := []int32{0}
+	formulaQuotes := 0
 
 	// Candidates: node indices that reached tokenOut
 	type candidate struct {
@@ -129,17 +139,33 @@ func FindBestRoute(
 				if parent.parentID >= 0 && edge.PoolIdx == parent.poolIdx {
 					continue
 				}
-				// Don't route back to tokenIn (avoid trivial loops)
-				if edge.TokenOut == tokenIn {
+				// Don't route back to tokenIn in A→B mode (avoid trivial loops)
+				if !cyclic && edge.TokenOut == tokenIn {
 					continue
 				}
 
+				formulaQuotes++
 				out := pm.Quote(pools[edge.PoolIdx].Address, &parent.amount, edge.Dir)
 				if out.IsZero() {
 					continue
 				}
 
 				tok := edge.TokenOut
+
+				// Cyclic: edge back to start at hop >= 2 is a candidate, not a frontier entry
+				if cyclic && tok == tokenOut && hop >= 1 {
+					nodeIdx := int32(len(allNodes))
+					allNodes = append(allNodes, bfsNode{
+						amount:   out,
+						parentID: parentIdx,
+						poolIdx:  edge.PoolIdx,
+						dir:      edge.Dir,
+						token:    tok,
+					})
+					candidates = append(candidates, candidate{nodeIdx: nodeIdx})
+					continue
+				}
+
 				entries := tokenBest[tok]
 
 				if len(entries) < topK {
@@ -176,10 +202,12 @@ func FindBestRoute(
 			}
 		}
 
-		// Collect candidates reaching tokenOut
-		if entries, ok := tokenBest[tokenOut]; ok {
-			for _, e := range entries {
-				candidates = append(candidates, candidate{nodeIdx: e.nodeIdx})
+		// A→B mode: collect candidates reaching tokenOut
+		if !cyclic {
+			if entries, ok := tokenBest[tokenOut]; ok {
+				for _, e := range entries {
+					candidates = append(candidates, candidate{nodeIdx: e.nodeIdx})
+				}
 			}
 		}
 
@@ -271,6 +299,7 @@ func FindBestRoute(
 	}
 
 	var bestRoute *Route
+	evmQuotes := 0
 	for _, cand := range candidates[:top] {
 		steps, poolAddrs, poolTypes, extraDatas := backtrack(cand.nodeIdx)
 
@@ -279,6 +308,7 @@ func FindBestRoute(
 		var totalGas uint64
 		valid := true
 		for i, step := range steps {
+			evmQuotes++
 			cd := EncodeSwapSingleWithExtra(step.Pool, step.PoolType, step.TokenIn, step.TokenOut, evmAmount, extraDatas[i])
 			cs := statedb.NewCallState(baseWithOverrides)
 			ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, cd)
@@ -312,10 +342,18 @@ func FindBestRoute(
 				AmountOut: new(uint256.Int).Set(evmAmount),
 				GasUsed:   totalGas,
 				Calldata:  calldata,
+				Stats: RouteStats{
+					FormulaQuotes: formulaQuotes,
+					EVMQuotes:     evmQuotes,
+					TotalQuotes:   formulaQuotes + evmQuotes,
+				},
 			}
 		}
 	}
 
+	if bestRoute == nil {
+		return nil
+	}
 	return bestRoute
 }
 

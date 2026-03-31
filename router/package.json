@@ -1,17 +1,14 @@
 {
-  "name": "defi-toolbox-avalanche",
+  "name": "router",
   "version": "0.1.0",
   "type": "module",
   "private": true,
   "dependencies": {
     "dotenv": "^17.3.1",
-    "p-limit": "^6.0.0",
     "solc": "^0.8.34",
-    "viem": "^2.47.1",
-    "ws": "^8.18.0"
+    "viem": "^2.47.1"
   },
   "devDependencies": {
-    "@types/node": "^25.4.0",
-    "typescript": "^5.9.3"
+    "@types/node": "^25.4.0"
   }
 }

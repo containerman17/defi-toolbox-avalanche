@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"defi-toolbox/formulas"
-	poolcollector "defi-toolbox/pool-collector"
+	poolcollector "defi-toolbox/tools/pool-collector"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"

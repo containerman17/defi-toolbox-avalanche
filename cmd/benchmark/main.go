@@ -14,7 +14,7 @@ import (
 
 	"defi-toolbox/formulas"
 	"defi-toolbox/pathfinder"
-	poolcollector "defi-toolbox/pool-collector"
+	poolcollector "defi-toolbox/tools/pool-collector"
 	"defi-toolbox/router"
 	"defi-toolbox/statedb"
 

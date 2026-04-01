@@ -43,6 +43,29 @@ var poolFeeSelector = crypto.Keccak256([]byte("fee()"))[:4]             // fee s
 // custom slot used by Pharaoh's TransparentUpgradeableProxy.
 const proxyImplSlot = "0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50"
 
+// pharaohV1FactoryAddress is the PairFactory proxy used by all Pharaoh V1 pools.
+const pharaohV1FactoryAddress = "0xAAA16c016BF556fcD620328f0759252E29b1AB57"
+
+// Factory storage layout (PairFactory via Initializable proxy):
+//   Slot 8:  stableFee (uint256)
+//   Slot 9:  volatileFee (uint256)
+//   Slot 15: _pairFee mapping (address => uint256)
+const (
+	pharaohV1FactoryStableFeeSlot   = 8
+	pharaohV1FactoryVolatileFeeSlot = 9
+	pharaohV1FactoryPairFeeBaseSlot = 15
+)
+
+// pharaohV1PairFeeStorageKey computes the storage key for _pairFee[pool] on
+// the Pharaoh V1 factory: keccak256(abi.encode(pool, 15)).
+func pharaohV1PairFeeStorageKey(pool common.Address) common.Hash {
+	// abi.encode(address, uint256) = 32-byte left-padded address + 32-byte slot
+	var data [64]byte
+	copy(data[12:32], pool.Bytes())
+	data[63] = pharaohV1FactoryPairFeeBaseSlot
+	return common.BytesToHash(crypto.Keccak256(data[:]))
+}
+
 // FetchPharaohV1State reads pool state via metadata() and determines the fee
 // by reading it from the factory contract. Falls back to getAmountOut() probing
 // if factory fee lookup fails. 2-4 EVM calls total.
@@ -313,6 +336,38 @@ func FetchPharaohV1StateStorage(reader StorageReader, poolAddress string) (*Phar
 		r1data := reader(addr, r1SlotHash)
 		state.Reserve0 = new(uint256.Int).SetBytes(r0data[:])
 		state.Reserve1 = new(uint256.Int).SetBytes(r1data[:])
+
+		// Beacon-proxy pools store the factory at the proxyImplSlot. Read it
+		// to determine if this pool delegates fee reads to the PairFactory.
+		// Non-beacon pools (older Solidly forks) use internal fee storage and
+		// the registry value is authoritative.
+		proxySlotHash := common.HexToHash(proxyImplSlot)
+		factoryData := reader(addr, proxySlotHash)
+		factoryAddr := common.BytesToAddress(factoryData[:])
+		if factoryAddr == common.HexToAddress(pharaohV1FactoryAddress) {
+			// Fee is mutable on-chain via factory.setPairFee(). Read it from the
+			// factory's _pairFee mapping (base slot 15). If zero, fall back to the
+			// factory's volatileFee (slot 9) or stableFee (slot 8).
+			pairFeeKey := pharaohV1PairFeeStorageKey(addr)
+			pairFeeData := reader(factoryAddr, pairFeeKey)
+			var pairFeeVal uint256.Int
+			pairFeeVal.SetBytes(pairFeeData[:])
+			if !pairFeeVal.IsZero() {
+				state.FeeBps = int(pairFeeVal.Uint64())
+			} else {
+				// No per-pool override; read factory default
+				defaultSlot := pharaohV1FactoryVolatileFeeSlot
+				if cfg.Stable {
+					defaultSlot = pharaohV1FactoryStableFeeSlot
+				}
+				defaultFeeData := reader(factoryAddr, slotHash(int64(defaultSlot)))
+				var defaultFee uint256.Int
+				defaultFee.SetBytes(defaultFeeData[:])
+				if !defaultFee.IsZero() {
+					state.FeeBps = int(defaultFee.Uint64())
+				}
+			}
+		}
 	}
 
 	return state, nil

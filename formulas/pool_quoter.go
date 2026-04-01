@@ -394,6 +394,10 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		if hasTokens {
 			if p := newWombatPool(pool, trackedReader, tokens, pm.evmCaller); p != nil { return wrapAndCache(p) }
 		}
+	case FormulaPlatypus:
+		if hasTokens {
+			if p := newPlatypusPool(pool, trackedReader, tokens, pm.evmCaller); p != nil { return wrapAndCache(p) }
+		}
 	}
 	return nil
 }

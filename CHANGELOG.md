@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-01 — Platypus stableswap formula
+
+- **Platypus stableswap formula** (FormulaPlatypus=11): price slippage curve model
+  with coverage ratios. g(x) = k/x^n for high coverage, c1-x for low coverage.
+  rpow exponentiation in RAY (10^27) precision. 4 pools registered.
+- Main USD pool (5 tokens, 20 directed pairs): **20/20 match**.
+- Block 1: 4098/4142 = **98.9%** (was 98.5%).
+
 ## 2026-04-01 — Wombat formula + Balancer V2 registry
 
 - **Wombat stableswap formula** (FormulaWombat=10): DynamicPoolV2 with amplification factor,

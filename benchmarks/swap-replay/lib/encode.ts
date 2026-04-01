@@ -18,14 +18,16 @@ export interface FlatStep {
 
 const swapAbi = [
   {
-    name: "executeSwap",
+    name: "swap",
     type: "function",
+    stateMutability: "payable",
     inputs: [
       { name: "pools", type: "address[]" },
       { name: "poolTypes", type: "uint8[]" },
       { name: "tokens", type: "address[]" },
       { name: "amountsIn", type: "uint256[]" },
       { name: "extraDatas", type: "bytes[]" },
+      { name: "minOutput", type: "uint256" },
     ],
     outputs: [{ type: "uint256" }],
   },
@@ -124,7 +126,7 @@ function encodeStepPoolAndExtra(step: { pool: StoredPool }): { pool: Hex; extraD
 }
 
 /**
- * Encode a flat list of steps into calldata for the Hayabusa router's executeSwap() function.
+ * Encode a flat list of steps into calldata for the Hayabusa router's swap() function.
  */
 export function encodeSwapFlat(steps: FlatStep[]): Hex {
   const pools: Hex[] = [];
@@ -145,8 +147,8 @@ export function encodeSwapFlat(steps: FlatStep[]): Hex {
 
   return encodeFunctionData({
     abi: swapAbi,
-    functionName: "executeSwap",
-    args: [pools, poolTypes, tokens, amountsIn, extraDatas],
+    functionName: "swap",
+    args: [pools, poolTypes, tokens, amountsIn, extraDatas, 0n],
   });
 }
 
@@ -163,7 +165,7 @@ export function encodeSwap(route: RouteStep[], amountIn: bigint): Hex {
 }
 
 /**
- * Decode a uint256 amountOut from executeSwap return data.
+ * Decode a uint256 amountOut from swap return data.
  */
 export function decodeSwapResult(returnData: Hex): bigint {
   return decodeAbiParameters([{ type: "uint256" }], returnData)[0];

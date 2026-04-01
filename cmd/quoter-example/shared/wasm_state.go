@@ -34,6 +34,9 @@ type BrowserTransport struct {
 	// firstMsg is used to synchronously capture the initial_dump before
 	// the read loop starts routing messages.
 	firstMsg chan []byte
+
+	// Fetch counters for diagnostics.
+	FetchCount int64
 }
 
 // DialBrowser opens a WebSocket to the given URL via the browser API.
@@ -118,7 +121,7 @@ func (bt *BrowserTransport) handleMessage(data []byte) {
 	}
 
 	if bt.onPush != nil {
-		bt.onPush(data)
+		go bt.onPush(data)
 	}
 }
 
@@ -178,6 +181,7 @@ type valueResponse struct {
 }
 
 func (bt *BrowserTransport) FetchStorage(addr common.Address, slot common.Hash) (common.Hash, error) {
+	bt.FetchCount++
 	params := map[string]interface{}{"address": addr.Hex(), "slot": slot.Hex(), "blockNumber": 0}
 	result, err := bt.Call("state_getStorageAt", params)
 	if err != nil {
@@ -189,6 +193,7 @@ func (bt *BrowserTransport) FetchStorage(addr common.Address, slot common.Hash) 
 }
 
 func (bt *BrowserTransport) FetchBalance(addr common.Address) (*uint256.Int, error) {
+	bt.FetchCount++
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": 0}
 	result, err := bt.Call("state_getBalance", params)
 	if err != nil {
@@ -205,6 +210,7 @@ func (bt *BrowserTransport) FetchBalance(addr common.Address) (*uint256.Int, err
 }
 
 func (bt *BrowserTransport) FetchNonce(addr common.Address) (uint64, error) {
+	bt.FetchCount++
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": 0}
 	result, err := bt.Call("state_getNonce", params)
 	if err != nil {
@@ -220,6 +226,7 @@ func (bt *BrowserTransport) FetchNonce(addr common.Address) (uint64, error) {
 }
 
 func (bt *BrowserTransport) FetchCode(addr common.Address) ([]byte, error) {
+	bt.FetchCount++
 	params := map[string]interface{}{"address": addr.Hex(), "blockNumber": 0}
 	result, err := bt.Call("state_getCode", params)
 	if err != nil {
@@ -242,10 +249,10 @@ func (bt *BrowserTransport) FetchBlockHash(num uint64) (common.Hash, error) {
 
 // ConnectBrowser connects to a state server via the browser WebSocket API,
 // reads the initial_dump, and returns a LiveState ready for quoting.
-func ConnectBrowser(url string) (*statedb.LiveState, error) {
+func ConnectBrowser(url string) (*statedb.LiveState, *BrowserTransport, error) {
 	bt, err := DialBrowser(url)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// Subscribe.
@@ -256,15 +263,15 @@ func ConnectBrowser(url string) (*statedb.LiveState, error) {
 	select {
 	case raw = <-bt.firstMsg:
 	case <-time.After(30 * time.Second):
-		return nil, fmt.Errorf("initial_dump timeout")
+		return nil, nil, fmt.Errorf("initial_dump timeout")
 	}
 
 	var dump statedb.ServerMessage
 	if err := json.Unmarshal(raw, &dump); err != nil {
-		return nil, fmt.Errorf("parse initial_dump: %w", err)
+		return nil, nil, fmt.Errorf("parse initial_dump: %w", err)
 	}
 	if dump.Type != "initial_dump" {
-		return nil, fmt.Errorf("expected initial_dump, got %q", dump.Type)
+		return nil, nil, fmt.Errorf("expected initial_dump, got %q", dump.Type)
 	}
 
 	// Build state from dump.
@@ -281,5 +288,5 @@ func ConnectBrowser(url string) (*statedb.LiveState, error) {
 	}
 
 	fmt.Fprintf(os.Stderr, "[wasm] connected, block=%d\n", dump.BlockNumber)
-	return ls, nil
+	return ls, bt, nil
 }

@@ -17,15 +17,23 @@ import (
 
 // Quoter wraps the formula engine + EVM verification behind a simple Quote API.
 type Quoter struct {
-	ls         *statedb.LiveState
-	pm         *formulas.PoolManager
-	adj        map[common.Address][]pf.PoolEdge
-	pools      []pf.Pool
-	registry   *formulas.Registry
-	routerAddr common.Address
-	overrides  []pf.ParsedOverride
-	maxHops    int
-	dexMap     map[common.Address]string
+	ls                 *statedb.LiveState
+	pm                 *formulas.PoolManager
+	adj                map[common.Address][]pf.PoolEdge
+	pools              []pf.Pool
+	registry           *formulas.Registry
+	routerAddr         common.Address
+	sender             common.Address
+	stateWithOverrides *statedb.StateDB // persistent overlay with token overrides
+	maxHops            int
+	dexMap             map[common.Address]string
+	onBlock            func(block, timestamp uint64) // called after each block is processed
+}
+
+// SetOnBlock registers a callback fired after each block_diff is applied
+// and pool invalidation is complete. Safe to call Quote from the callback.
+func (q *Quoter) SetOnBlock(fn func(block, timestamp uint64)) {
+	q.onBlock = fn
 }
 
 // NewQuoter creates a Quoter connected to the given LiveState.
@@ -68,7 +76,14 @@ func NewQuoter(ls *statedb.LiveState, poolLimit, maxHops int) *Quoter {
 
 	adj := pf.BuildAdjacency(pools, registry)
 	routerAddr := router.DeployedRouter
-	overrides := router.BuildTokenOverrides(routerAddr, pools)
+	sender := pf.DUMMY_SENDER
+
+	// Build persistent overlay with sender overrides only.
+	// swap() uses transferFrom (sender→router), so only the sender needs balance + allowance.
+	// Router starts with zero balance — it gets tokens via transferFrom.
+	// Created once, reused across Quote() calls so code hash caches persist.
+	senderOverrides := router.BuildSenderOverrides(sender, routerAddr, pools)
+	stateWithOverrides := pf.ApplyOverridesFlat(state, senderOverrides)
 
 	// Warmup: build all pool quoters
 	ls.RLock()
@@ -78,15 +93,16 @@ func NewQuoter(ls *statedb.LiveState, poolLimit, maxHops int) *Quoter {
 	ls.RUnlock()
 
 	return &Quoter{
-		ls:         ls,
-		pm:         pm,
-		adj:        adj,
-		pools:      pools,
-		registry:   registry,
-		routerAddr: routerAddr,
-		overrides:  overrides,
-		maxHops:    maxHops,
-		dexMap:     dexMap,
+		ls:                 ls,
+		pm:                 pm,
+		adj:                adj,
+		pools:              pools,
+		registry:           registry,
+		routerAddr:         routerAddr,
+		sender:             sender,
+		stateWithOverrides: stateWithOverrides,
+		maxHops:            maxHops,
+		dexMap:             dexMap,
 	}
 }
 
@@ -120,6 +136,9 @@ func (q *Quoter) StartBlockLoop() {
 					}
 				}
 			}
+			if q.onBlock != nil {
+				q.onBlock(q.ls.Block(), bi.timestamp)
+			}
 		}
 	}()
 }
@@ -143,10 +162,9 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 	defer q.ls.RUnlock()
 
 	cfg := q.ls.EVMConfig()
-	state := q.ls.State()
 
 	// Forward: tokenIn → tokenOut
-	fwdRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, state, cfg, q.routerAddr, q.overrides,
+	fwdRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, q.stateWithOverrides, cfg, q.routerAddr, q.sender,
 		tokenIn, tokenOut, amountIn, q.maxHops)
 
 	resp := &QuoteResponse{
@@ -156,7 +174,7 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 	// Reverse: tokenOut → tokenIn (skip for cyclic)
 	cyclic := tokenIn == tokenOut
 	if !cyclic {
-		revRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, state, cfg, q.routerAddr, q.overrides,
+		revRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, q.stateWithOverrides, cfg, q.routerAddr, q.sender,
 			tokenOut, tokenIn, amountIn, q.maxHops)
 		resp.Reverse = q.routeToResult(revRoute, tokenOut, tokenIn, amountIn)
 	}

@@ -1,16 +1,3 @@
-// BROKEN: Go WASM deadlocks when FindBestRoute triggers EVM verification
-// that hits a state cache miss. The Fetcher.FetchStorage() call blocks on a
-// channel waiting for a WebSocket response, but Go WASM's cooperative scheduler
-// doesn't yield to the JS event loop to deliver the onmessage callback.
-//
-// Works with ~10 pools (everything cached from warmup, no fetches during quote).
-// Deadlocks with 50+ pools (EVM verify hits uncached slots).
-//
-// Possible fixes:
-// - Skip EVM verification in WASM mode (formula-only quoting)
-// - Pre-fetch all state during warmup so no cache misses occur during quotes
-// - Rewrite the Fetcher to use JS Promises instead of blocking channels
-
 import { readFile } from "fs/promises";
 import { argv } from "process";
 
@@ -32,7 +19,7 @@ const WAVAX = "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7";
 const USDC = "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E";
 
 const wsUrl = argv[2] || "ws://localhost:7449/live";
-const poolLimit = parseInt(argv[3] || "10"); // >10 deadlocks
+const poolLimit = parseInt(argv[3] || "2000");
 
 console.log(`connecting to ${wsUrl} with poolLimit=${poolLimit}...`);
 const t1 = Date.now();

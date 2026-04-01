@@ -9,25 +9,24 @@ import (
 	"github.com/holiman/uint256"
 )
 
-// executeSwap selector: keccak256("executeSwap(address[],uint8[],address[],uint256[],bytes[])")[:4]
-var executeSwapSelector = [4]byte{0x32, 0x39, 0x33, 0x4d}
+// debugSwapSingleSelector: keccak256("debugSwapSingle(address,uint8,address,address,uint256,bytes)")[:4]
+var debugSwapSingleSelector = [4]byte{0x51, 0xe1, 0x6d, 0x05}
 
 // V4PoolManager is the Uniswap V4 PoolManager singleton on Avalanche C-Chain.
 var V4PoolManager = common.HexToAddress("0x06380C0e0912312B5150364B9DC4542BA0DbBc85")
 
-// EncodeSwapSingle builds executeSwap calldata for a single-pool swap with empty extraData.
+// EncodeSwapSingle builds debugSwapSingle calldata for a single-pool swap with empty extraData.
 // For V4 pools, use EncodeSwapSingleWithExtra to pass fee/tickSpacing/hooks.
 func EncodeSwapSingle(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int) []byte {
 	return encodeSwapSingleInner(pool, poolType, tokenIn, tokenOut, amountIn, nil)
 }
 
-// EncodeSwapSingleWithExtra builds executeSwap calldata with pool-type-specific
+// EncodeSwapSingleWithExtra builds debugSwapSingle calldata with pool-type-specific
 // address and extraData handling. For V4 (poolType 9), it substitutes the
 // PoolManager address and ABI-encodes (fee, tickSpacing, hooks, wrapNative=0)
 // from the pool's ExtraData string.
 func EncodeSwapSingleWithExtra(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int, extraData string) []byte {
 	if poolType == 9 && extraData != "" {
-		// V4: substitute PoolManager address, encode extraData
 		extra := encodeV4ExtraData(extraData)
 		return encodeSwapSingleInner(V4PoolManager, poolType, tokenIn, tokenOut, amountIn, extra)
 	}
@@ -76,65 +75,37 @@ func encodeV4ExtraData(extraData string) []byte {
 }
 
 func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int, extraData []byte) []byte {
-	// extraData length rounded up to 32-byte words
+	// ABI layout for debugSwapSingle(address, uint8, address, address, uint256, bytes):
+	// selector (4 bytes)
+	// pool (address, 32 bytes)
+	// poolType (uint8, 32 bytes)
+	// tokenIn (address, 32 bytes)
+	// tokenOut (address, 32 bytes)
+	// amountIn (uint256, 32 bytes)
+	// extraData offset (32 bytes) → points to extraData length
+	// extraData length (32 bytes)
+	// extraData content (padded to 32 bytes)
 	extraLen := len(extraData)
 	extraPadded := ((extraLen + 31) / 32) * 32
-
-	// ABI layout for executeSwap(address[], uint8[], address[], uint256[], bytes[]):
-	// selector (4 bytes)
-	// 5 offset words (5 * 32 = 160 bytes)
-	// pools array:      length(1) + pool(1)             = 64 bytes
-	// poolTypes array:  length(1) + type(1)             = 64 bytes
-	// tokens array:     length(2) + tokenIn + tokenOut  = 96 bytes
-	// amountsIn array:  length(1) + amount(1)           = 64 bytes
-	// extraDatas array: length(1) + offset(1) + len(1) + extraPadded = 96 + extraPadded bytes
-	totalSize := 4 + 160 + 64 + 64 + 96 + 64 + 96 + extraPadded
+	totalSize := 4 + 6*32 + 32 + extraPadded // selector + 6 params + length word + padded data
 	data := make([]byte, totalSize)
 
-	// Selector
-	copy(data[0:4], executeSwapSelector[:])
+	copy(data[0:4], debugSwapSingleSelector[:])
 
-	// Offsets (each relative to start of params, i.e. after selector)
-	writeWord(data, 4+0*32, big.NewInt(160)) // pools offset
-	writeWord(data, 4+1*32, big.NewInt(224)) // poolTypes offset
-	writeWord(data, 4+2*32, big.NewInt(288)) // tokens offset
-	writeWord(data, 4+3*32, big.NewInt(384)) // amountsIn offset
-	writeWord(data, 4+4*32, big.NewInt(448)) // extraDatas offset
-
-	pos := 4 + 160
-
-	// pools array: [1, pool]
-	writeWord(data, pos, big.NewInt(1))
+	pos := 4
+	writeAddress(data, pos, pool)            // pool
 	pos += 32
-	writeAddress(data, pos, pool)
+	writeWordU64(data, pos, uint64(poolType)) // poolType (uint8)
 	pos += 32
-
-	// poolTypes array: [1, type]
-	writeWord(data, pos, big.NewInt(1))
+	writeAddress(data, pos, tokenIn)          // tokenIn
 	pos += 32
-	writeWord(data, pos, big.NewInt(int64(poolType)))
+	writeAddress(data, pos, tokenOut)         // tokenOut
 	pos += 32
-
-	// tokens array: [2, tokenIn, tokenOut]
-	writeWord(data, pos, big.NewInt(2))
+	writeUint256(data, pos, amountIn)         // amountIn
 	pos += 32
-	writeAddress(data, pos, tokenIn)
+	writeWordU64(data, pos, 192)              // extraData offset (6 * 32 = 192 from start of params)
 	pos += 32
-	writeAddress(data, pos, tokenOut)
-	pos += 32
-
-	// amountsIn array: [1, amount]
-	writeWord(data, pos, big.NewInt(1))
-	pos += 32
-	writeUint256(data, pos, amountIn)
-	pos += 32
-
-	// extraDatas array: [1, offset_to_first_element, length, data...]
-	writeWord(data, pos, big.NewInt(1))
-	pos += 32
-	writeWord(data, pos, big.NewInt(32)) // offset to first bytes element
-	pos += 32
-	writeWord(data, pos, big.NewInt(int64(extraLen)))
+	writeWordU64(data, pos, uint64(extraLen)) // extraData length
 	pos += 32
 	if extraLen > 0 {
 		copy(data[pos:pos+extraLen], extraData)
@@ -146,20 +117,8 @@ func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut 
 // swapSelector: keccak256("swap(address[],uint8[],address[],uint256[],bytes[],uint256)")[:4]
 var swapSelector = [4]byte{0x9c, 0x03, 0x60, 0x14}
 
-// EncodeExecuteSwapMulti builds executeSwap() calldata for EVM simulation.
-// No transferFrom, no minOutput — the router operates on pool state directly.
-func EncodeExecuteSwapMulti(
-	poolAddrs []common.Address,
-	poolTypes []int,
-	tokenPairs []common.Address,
-	amountIn *uint256.Int,
-	extraDatas []string,
-) []byte {
-	return encodeSwapMultiInner(executeSwapSelector, poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, nil)
-}
-
 // EncodeSwapMulti builds swap() calldata for on-chain execution.
-// swap() = executeSwap's 5 array params + uint256 minOutput.
+// swap() takes 5 array params + uint256 minOutput.
 func EncodeSwapMulti(
 	poolAddrs []common.Address,
 	poolTypes []int,

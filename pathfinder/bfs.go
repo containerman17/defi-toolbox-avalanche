@@ -1,8 +1,6 @@
 package pathfinder
 
 import (
-	"bytes"
-
 	"defi-toolbox/formulas"
 	"defi-toolbox/statedb"
 
@@ -83,14 +81,18 @@ const topK = 3
 // BFS expands layer by layer (up to maxHops), keeping top-3 amounts per
 // token per layer with real cascading amounts. Paths reaching tokenOut are
 // candidates. Top 5 are EVM-verified via full swap(); best is returned.
+//
+// stateWithOverrides should be a pre-built overlay with token balance and
+// approval overrides already applied. The caller creates this once and reuses
+// it across calls so that code hash caches persist.
 func FindBestRoute(
 	pm *formulas.PoolManager,
 	adj map[common.Address][]PoolEdge,
 	pools []Pool,
-	state *statedb.StateDB,
+	stateWithOverrides *statedb.StateDB,
 	cfg statedb.EVMConfig,
 	routerAddr common.Address,
-	overrides []ParsedOverride,
+	sender common.Address,
 	tokenIn, tokenOut common.Address,
 	amountIn *uint256.Int,
 	maxHops int,
@@ -290,7 +292,6 @@ func FindBestRoute(
 
 	// ── EVM verification of top 5 ───────────────────────────────────
 
-	baseWithOverrides := ApplyOverridesFlat(state, overrides)
 	evmCtx := statedb.GetCachedContext(cfg)
 
 	top := 5
@@ -303,32 +304,7 @@ func FindBestRoute(
 	for _, cand := range candidates[:top] {
 		steps, poolAddrs, poolTypes, extraDatas := backtrack(cand.nodeIdx)
 
-		// EVM verify hop-by-hop via executeSwap (no transferFrom needed)
-		evmAmount := new(uint256.Int).Set(amountIn)
-		var totalGas uint64
-		valid := true
-		for i, step := range steps {
-			evmQuotes++
-			cd := EncodeSwapSingleWithExtra(step.Pool, step.PoolType, step.TokenIn, step.TokenOut, evmAmount, extraDatas[i])
-			cs := statedb.NewCallState(baseWithOverrides)
-			ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, routerAddr, cd)
-			if err != nil || len(ret) < 32 {
-				valid = false
-				break
-			}
-			evmAmount = new(uint256.Int)
-			evmAmount.SetBytes(ret[:32])
-			if evmAmount.IsZero() {
-				valid = false
-				break
-			}
-			totalGas += gasUsed
-		}
-		if !valid {
-			continue
-		}
-
-		// Build swap() calldata for on-chain execution
+		// Build swap() calldata — full chain, single EVM call
 		tokenPairs := make([]common.Address, len(steps)*2)
 		for i, s := range steps {
 			tokenPairs[i*2] = s.TokenIn
@@ -336,11 +312,23 @@ func FindBestRoute(
 		}
 		calldata := EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
 
+		evmQuotes++
+		cs := statedb.NewCallState(stateWithOverrides)
+		ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, sender, routerAddr, calldata)
+		if err != nil || len(ret) < 32 {
+			continue
+		}
+		evmAmount := new(uint256.Int)
+		evmAmount.SetBytes(ret[:32])
+		if evmAmount.IsZero() {
+			continue
+		}
+
 		if bestRoute == nil || evmAmount.Gt(bestRoute.AmountOut) {
 			bestRoute = &Route{
 				Steps:     steps,
 				AmountOut: new(uint256.Int).Set(evmAmount),
-				GasUsed:   totalGas,
+				GasUsed:   gasUsed,
 				Calldata:  calldata,
 				Stats: RouteStats{
 					FormulaQuotes: formulaQuotes,
@@ -358,13 +346,6 @@ func FindBestRoute(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-// EncodeExecuteSwapSingle builds executeSwap calldata for a single pool.
-func EncodeExecuteSwapSingle(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int) []byte {
-	zeroForOne := bytes.Compare(tokenIn[:], tokenOut[:]) < 0
-	_ = zeroForOne
-	return EncodeSwapSingleWithExtra(pool, poolType, tokenIn, tokenOut, amountIn, "")
-}
 
 // ParsedOverride holds pre-parsed override data.
 type ParsedOverride struct {

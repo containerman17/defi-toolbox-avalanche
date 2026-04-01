@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-04-01 — Router contract redesign: swap() + debugSwapSingle()
+
+### Contract: HayabusaRouter v2
+- **Removed** `executeSwap()` — multi-hop without transfers, design footgun
+- **Removed** `quoteMulti()`, `_executeSingle()`, `_executeSingleRevert()` — unused
+- **Added** `debugSwapSingle(pool, poolType, tokenIn, tokenOut, amountIn, extraData)` — scalar args, single pool only, no transfers. For formula validation and benchmarking.
+- **Kept** `swap()` unchanged — production multi-hop with transferFrom/transfer
+- Deployed at `0x476f5ca70c9bba022cf6417c3ce735e1cabc9b3f` (block 81792403)
+
+### FindBestRoute: swap() with persistent overlay
+- EVM verification switched from hop-by-hop `executeSwap` to single `swap()` per candidate
+- Overlay with token overrides created once in `NewQuoter`, reused across calls
+- Eliminates keccak256 rehashing (was 14.5% of CPU in profiling)
+- `FindBestRoute` signature: `state + overrides` → `stateWithOverrides + sender`
+
+### Sender overrides for swap()
+- `BuildSenderOverrides(sender, router, pools)` — balance + allowance per token
+- Allowance slot computed from `token_overrides.json` (field `allowance_slot`, default `slot+1`)
+- 13 tokens updated with correct `allowance_slot` (AnyswapV4/V5/V6, COMP-style, etc.)
+
+### Go encoder: debugSwapSingle
+- `EncodeSwapSingleWithExtra` now encodes `debugSwapSingle` (scalar ABI, simpler)
+- Removed `EncodeExecuteSwapMulti` (no longer needed)
+- Arb bots updated to use `EncodeSwapSingleWithExtra` for debug comparison
+
+### Swap-replay benchmark: swap() migration
+- `encodeSwapFlat` now encodes `swap()` instead of `executeSwap`
+- `buildStateOverrides` sets sender balance + allowance (was router balance only)
+- Pass rate: 97.8% (was 99.1%) — 1.3% drop from FOT sender↔router transfer fees
+
+### WASM deadlock fix
+- `go bt.onPush(data)` — block_diff handler runs in goroutine, prevents JS event loop deadlock
+- WASM quoter works with 2000 pools (was deadlocking at 50+)
+
+### WASM block subscription
+- `subscribeBlocks(callback)` — JS subscribes to block events from Go
+- `getFetchCount()` / `resetFetchCount()` — diagnostics for WebSocket state fetches
+
+### Benchmark results (formula-accuracy, 3 blocks, 2000 pools)
+- Match rate: 97.0% (unchanged from pre-refactor)
+- Cached formula time: 16.4ms (was 21.9ms, -25%)
+
 ## 2026-03-31 — quoter-example: Multi-frontend quoter
 
 ### New: `cmd/quoter-example/`

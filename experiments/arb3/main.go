@@ -812,7 +812,7 @@ func main() {
 		overrides := router.BuildTokenOverrides(routerAddr, pools)
 		baseWithOverrides := pf.ApplyOverridesFlat(state, overrides)
 		currentEVM := new(uint256.Int).Set(amountIn)
-		fmt.Fprintf(os.Stderr, "        evm hop-by-hop (executeSwap):\n")
+		fmt.Fprintf(os.Stderr, "        evm hop-by-hop (debugSwapSingle):\n")
 		for h := 0; h < len(path.pools); h++ {
 			p := &pools[path.pools[h]]
 			var tokenIn, tokenOut common.Address
@@ -821,13 +821,7 @@ func main() {
 			} else {
 				tokenIn, tokenOut = p.Tokens[1], p.Tokens[0]
 			}
-			calldata := pf.EncodeExecuteSwapMulti(
-				[]common.Address{p.Address},
-				[]int{p.PoolType},
-				[]common.Address{tokenIn, tokenOut},
-				currentEVM,
-				[]string{p.ExtraData},
-			)
+			calldata := pf.EncodeSwapSingleWithExtra(p.Address, p.PoolType, tokenIn, tokenOut, currentEVM, p.ExtraData)
 			cs := statedb.NewCallState(baseWithOverrides)
 			ret, gas, err := evmCtx.ExecuteWithCallState(cs, common.Address{}, routerAddr, calldata)
 			if err != nil || cs.Err() != nil || len(ret) < 32 {

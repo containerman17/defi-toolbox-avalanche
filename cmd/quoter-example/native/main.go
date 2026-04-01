@@ -6,8 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"sync"
-
 	"defi-toolbox/cmd/quoter-example/shared"
 	"defi-toolbox/statedb"
 )
@@ -31,36 +29,24 @@ func main() {
 	fmt.Fprintf(os.Stderr, "connected to %s, block=%d\n", *stateServer, ls.Block())
 
 	q := shared.NewQuoter(ls, *poolLimit, *maxHops)
-	q.StartBlockLoop()
+	// q.StartBlockLoop() // disabled for sequential benchmark
 	fmt.Fprintf(os.Stderr, "ready, reading from stdin\n")
 
-	var outMu sync.Mutex
 	enc := json.NewEncoder(os.Stdout)
-
-	writeResp := func(resp *shared.QuoteResponse) {
-		outMu.Lock()
-		enc.Encode(resp)
-		outMu.Unlock()
-	}
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		line := make([]byte, len(scanner.Bytes()))
-		copy(line, scanner.Bytes())
-
-		go func() {
-			var req shared.QuoteRequest
-			if err := json.Unmarshal(line, &req); err != nil {
-				writeResp(&shared.QuoteResponse{Error: err.Error()})
-				return
-			}
-			resp, err := q.Quote(req)
-			if err != nil {
-				writeResp(&shared.QuoteResponse{ID: req.ID, Error: err.Error()})
-				return
-			}
-			resp.ID = req.ID
-			writeResp(resp)
-		}()
+		var req shared.QuoteRequest
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			enc.Encode(&shared.QuoteResponse{Error: err.Error()})
+			continue
+		}
+		resp, err := q.Quote(req)
+		if err != nil {
+			enc.Encode(&shared.QuoteResponse{ID: req.ID, Error: err.Error()})
+			continue
+		}
+		resp.ID = req.ID
+		enc.Encode(resp)
 	}
 }

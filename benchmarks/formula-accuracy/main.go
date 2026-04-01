@@ -389,6 +389,8 @@ func main() {
 	registerV4Pools(pools)
 
 	// Build token overrides (block-independent)
+	// Benchmark uses executeSwap (pool-level, no sender boundary fee) to validate formulas.
+	// Router balance overrides only — no sender overrides needed.
 	overrides := router.BuildTokenOverrides(ROUTER, pools)
 
 	if cpuProfile != "" {

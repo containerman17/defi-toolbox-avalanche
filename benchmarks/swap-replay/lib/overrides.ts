@@ -218,17 +218,28 @@ export function getHookOverrides(token: string): Record<string, { code: Hex }> {
  */
 export function buildStateOverrides(opts: {
   routerAddress: string;
+  senderAddress?: string;
   tokenAmounts: Map<string, bigint>;
   extraStateOverrides?: Record<string, any>;
 }): Record<string, any> {
   const { routerAddress, tokenAmounts, extraStateOverrides } = opts;
+  const senderAddress = opts.senderAddress || "0x000000000000000000000000000000000000dEaD";
 
-  // Merge balance overrides across all tokens
+  // Merge balance + allowance overrides across all tokens
+  // Balance goes on sender (swap() does transferFrom(sender, router, amount))
+  // Allowance goes on sender→router
   const merged: Record<string, Record<string, Hex>> = {};
   for (const [token, amount] of tokenAmounts) {
     if (token === "0x0000000000000000000000000000000000000000") continue;
-    const balOvr = getBalanceOverride(token, amount, routerAddress);
+    // Sender balance
+    const balOvr = getBalanceOverride(token, amount, senderAddress);
     for (const [addr, val] of Object.entries(balOvr)) {
+      if (!merged[addr]) merged[addr] = {};
+      Object.assign(merged[addr], val.stateDiff);
+    }
+    // Sender→router allowance
+    const allowOvr = getAllowanceOverride(token, senderAddress, routerAddress);
+    for (const [addr, val] of Object.entries(allowOvr)) {
       if (!merged[addr]) merged[addr] = {};
       Object.assign(merged[addr], val.stateDiff);
     }
@@ -239,11 +250,11 @@ export function buildStateOverrides(opts: {
     stateOverride[address] = { stateDiff: slots };
   }
 
-  // Native AVAX balance
+  // Native AVAX balance on sender
   const nativeAmount = tokenAmounts.get("0x0000000000000000000000000000000000000000");
   if (nativeAmount) {
-    stateOverride[routerAddress] = {
-      ...(stateOverride[routerAddress] ?? {}),
+    stateOverride[senderAddress] = {
+      ...(stateOverride[senderAddress] ?? {}),
       balance: `0x${nativeAmount.toString(16)}`,
     };
   }

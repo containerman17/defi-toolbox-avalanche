@@ -365,16 +365,19 @@ contract HayabusaRouter {
         return amountOut;
     }
 
-    function executeSwap(
-        address[] calldata pools,
-        uint8[] calldata poolTypes,
-        address[] calldata tokens,
-        uint256[] calldata amountsIn,
-        bytes[] calldata extraDatas
+    /// @notice Single-pool swap for formula validation and benchmarking.
+    /// No transferFrom — router must hold tokens via state overrides.
+    /// Scalar args (not arrays) so multi-hop without transfers is impossible by design.
+    function debugSwapSingle(
+        address pool,
+        uint8 poolType,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        bytes calldata extraData
     ) public returns (uint256) {
-        address tokenOut = tokens[pools.length * 2 - 1];
         uint256 balBefore = IERC20(tokenOut).balanceOf(address(this));
-        _executeSwapInner(pools, poolTypes, tokens, amountsIn, extraDatas);
+        _swapLeg(pool, poolType, tokenIn, tokenOut, amountIn, extraData);
         uint256 balAfter = IERC20(tokenOut).balanceOf(address(this));
         return balAfter > balBefore ? balAfter - balBefore : 0;
     }
@@ -393,84 +396,6 @@ contract HayabusaRouter {
             _swapLeg(pools[i], poolTypes[i], tokens[j], tokens[j + 1], amt, extraDatas[i]);
             unchecked { ++i; }
         }
-    }
-
-    /// @notice Quote a single pool+direction at multiple amounts.
-    ///         Uses revert trick — each amount sees pristine reserves.
-    function quoteMulti(
-        address pool,
-        uint8 poolType,
-        address tokenIn,
-        address tokenOut,
-        uint256[] calldata amounts,
-        bytes calldata extraData
-    ) external returns (uint256[] memory amountsOut) {
-        amountsOut = new uint256[](amounts.length);
-
-        for (uint256 i = 0; i < amounts.length; i++) {
-            try this._executeSingleRevert(pool, poolType, tokenIn, tokenOut, amounts[i], extraData) {
-                amountsOut[i] = 0;
-            } catch (bytes memory returnData) {
-                if (returnData.length == 32) {
-                    amountsOut[i] = abi.decode(returnData, (uint256));
-                } else {
-                    amountsOut[i] = 0;
-                }
-            }
-        }
-    }
-
-    /// @dev External wrapper for try/catch — executes a single-hop swap
-    function _executeSingle(
-        address pool,
-        uint8 poolType,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        bytes calldata extraData
-    ) external returns (uint256) {
-        if (poolType == WOOPP_V2) {
-            _balTokenOut = tokenOut;
-            return _swapWooPPV2(tokenIn, amountIn);
-        }
-        if (poolType == BALANCER_V2) {
-            _balTokenOut = tokenOut;
-            return _swapBalancerV2(tokenIn, amountIn, extraData);
-        }
-        if (poolType == CAVALRE) {
-            _balTokenOut = tokenOut;
-            return _swapCavalre(tokenIn, amountIn, extraData);
-        }
-        if (poolType == SYNAPSE) {
-            return _swapSynapse(pool, tokenIn, tokenOut, amountIn, extraData);
-        }
-        if (poolType == TRIDENT) {
-            return _swapTrident(pool, tokenIn, tokenOut, amountIn, extraData);
-        }
-        bool zeroForOne = _getDirection(pool, poolType, tokenIn);
-        if (poolType == BALANCER_V3 || poolType == WOOFI || poolType == WOMBAT || poolType == PLATYPUS) {
-            _balTokenOut = tokenOut;
-        }
-        if (poolType == UNIV4) {
-            return _swapUniV4(tokenIn, tokenOut, amountIn, extraData);
-        }
-        if (poolType == BALANCER_V3_BUFFERED) {
-            return _swapBalancerV3Buffered(tokenIn, tokenOut, amountIn, extraData);
-        }
-        return _swap(pool, poolType, tokenIn, zeroForOne, amountIn);
-    }
-
-    /// @dev Revert trick wrapper: calls _executeSingle, then reverts with the result.
-    function _executeSingleRevert(
-        address pool,
-        uint8 poolType,
-        address tokenIn,
-        address tokenOut,
-        uint256 amountIn,
-        bytes calldata extraData
-    ) external {
-        uint256 out = this._executeSingle(pool, poolType, tokenIn, tokenOut, amountIn, extraData);
-        assembly { mstore(0x00, out) revert(0x00, 32) }
     }
 
     // === OWNER RECOVERY ===

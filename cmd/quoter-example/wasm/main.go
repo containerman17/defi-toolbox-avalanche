@@ -12,10 +12,24 @@ import (
 )
 
 var quoter *shared.Quoter
+var transport *shared.BrowserTransport
 
 func main() {
 	js.Global().Set("connect", js.FuncOf(connectFn))
 	js.Global().Set("quote", js.FuncOf(quoteFn))
+	js.Global().Set("subscribeBlocks", js.FuncOf(subscribeBlocksFn))
+	js.Global().Set("getFetchCount", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if transport == nil {
+			return 0
+		}
+		return transport.FetchCount
+	}))
+	js.Global().Set("resetFetchCount", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		if transport != nil {
+			transport.FetchCount = 0
+		}
+		return js.Null()
+	}))
 
 	fmt.Fprintf(os.Stderr, "[wasm] quoter ready, call connect(url) then quote(tokenIn, tokenOut, amountIn)\n")
 	select {} // block forever
@@ -41,11 +55,12 @@ func connectFn(this js.Value, args []js.Value) interface{} {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
-			ls, err := shared.ConnectBrowser(url)
+			ls, bt, err := shared.ConnectBrowser(url)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
 			}
+			transport = bt
 			quoter = shared.NewQuoter(ls, poolLimit, maxHops)
 			quoter.StartBlockLoop()
 			resolve.Invoke(js.Null())
@@ -86,6 +101,21 @@ func quoteFn(this js.Value, args []js.Value) interface{} {
 		return nil
 	})
 	return js.Global().Get("Promise").New(handler)
+}
+
+// subscribeBlocks(callback) — calls callback(block, timestamp) on each new block.
+func subscribeBlocksFn(this js.Value, args []js.Value) interface{} {
+	if quoter == nil {
+		return jsError("not connected, call connect() first")
+	}
+	if len(args) < 1 {
+		return jsError("subscribeBlocks requires a callback argument")
+	}
+	cb := args[0]
+	quoter.SetOnBlock(func(block, timestamp uint64) {
+		cb.Invoke(block, timestamp)
+	})
+	return js.Null()
 }
 
 func jsError(msg string) interface{} {

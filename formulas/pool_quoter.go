@@ -444,10 +444,8 @@ var deadPoolDirs = map[common.Address]int{
 	common.HexToAddress("0x41100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
 	common.HexToAddress("0x668aa7aefa8512416fc6244afbe5129200277a69"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
 	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): 1, // BIFI/waAvaWAVAX BalancerV3: dir=1 extreme imbalance causes EVM revert
-	common.HexToAddress("0x4c79e30bc8eb6d83620b6166e49a27615eeed221"): 1, // ARENA_BURNER/USDC LFJ V1: dir=1 (USDC→ARENA) exceeds token max_wallet
 	common.HexToAddress("0xa02ec3ba8d17887567672b2cdcaf525534636ea0"): 1, // WAVAX/USDC Algebra: dir=1 (1e18 USDC = 1T) exceeds EVM gas limit at 175 steps
 	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): 0, // NYA/WAVAX UniV3: dir=0 reverts, NYA token is paused
-	common.HexToAddress("0x4a5c0e100f830a1f6b76a42e6bb4be2a7fe0d61b"): 1, // WAVAX/USDC UniV3: dir=1 (1e18 USDC=1T) exceeds bitmap range
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

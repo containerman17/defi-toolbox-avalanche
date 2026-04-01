@@ -464,6 +464,8 @@ var FotExemptPools = map[string]bool{
 	// Only pool 0xc7087eb4 triggers _trade; other pools are exempt.
 	"0xdf9db5a5f3a00e0e27def12af95b4528ec23cf86": true, // Gladiator/ArenaToken lfj_v1
 	"0x592ac0969b67457842af49555633b1f5ff730cb5": true, // Gladiator/WAVAX lfj_v1
+	"0x4c79e30bc8eb6d83620b6166e49a27615eeed221": true, // Gladiator/USDC lfj_v1
+	"0x11af559cacbcec2b0941257da071a53363ee984b": true, // 0x147929/Gladiator lfj_v1
 
 	// HEFE (0x18e3...): pharaoh pools are not registered LPs — no fee applied.
 	"0xc4fa66b4839af7379a4fcbe5dd048b18fe99a2ac": true, // HEFE/USDC pharaoh_v1

@@ -399,6 +399,9 @@ var fotCalculators = map[string]fotCalc{
 	// Pool: 0x87305ece9f6dbf58522a5507afe09a4f8a9e7cb0 (radioshack, BUILD/RADIO)
 	"0x5f018e73c185ab23647c82bd039e762813877f0e": fotBps(100),
 
+	// Majinoors: reflectionFee=500 + tradingRoyalty=50 = 5.5% nominal, 3.5% effective
+	"0xb528f3171bcdd1f5ee578fa7a2aaea75ce945094": fotBps(350),
+
 	// NOTE: 0xe668f8030bf17f3931a3069f31f4fa56efe9dd54 (WSPP) — confirmed NOT FoT, removed.
 }
 

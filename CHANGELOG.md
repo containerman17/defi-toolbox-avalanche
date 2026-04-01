@@ -1,15 +1,14 @@
 # Changelog
 
-## 2026-04-02 — Selective un-blacklist + broken token registry → 99.7%
+## 2026-04-02 — Selective un-blacklist + broken token registry → 99.8%
 
 - Un-blacklisted all 31 pools that showed as mismatches (formula=0, evm=nonzero).
-  Each gets its correct formula ID so the formula computes outputs.
-- Added 18 tokens to `brokenTokens` — transfer reverts in EVM simulation, formula
-  correctly returns 0 for directions involving these tokens as input.
-- Added pool-specific `deadPoolDirs` for major tokens (USDt, WETH.e) where the
-  issue is pool-specific (one-sided liquidity, ArenaHook revert), not token-wide.
-- Block 1: 4131/4142 = **99.7%** (was 99.1%). Only 11 mismatches remain:
-  4 WooFi (no formula), 2 LFJ V2 edge cases, 3 slight value diffs, 2 Pharaoh V1 fee.
+- Added 18 broken tokens to `brokenTokens` — transfer reverts in simulation.
+- Pool-specific `deadPoolDirs` for USDt/WETH.e/ArenaHook/Gladiator max_wallet.
+- Removed stale BTC.b/SolvBTC dead dir (swap works now).
+- Added Majinoors (0xb528) as FoT — 3.5% effective fee from reflection+royalty.
+- Block 1: 4134/4142 = **99.8%**. Only 8 mismatches remain:
+  4 WooFi (no formula), 1 LFJ V2 state edge case, 3 reflection rounding (~0.002%).
 
 ## 2026-04-01 — Platypus stableswap formula
 

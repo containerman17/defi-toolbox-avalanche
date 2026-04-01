@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-04-01 — LFJ V2.0 (old Liquidity Book) formula support
+
+### Coverage: LFJ V2.0 pools (6 pools, 12 quotes)
+Added formula support for 6 LFJ V2.0 pools that were returning 0 via nullLFJV2Pool.
+V2.0 uses a completely different storage layout from V2.1/V2.2:
+- PairInformation at slot 6 (activeId + global reserves) instead of packed _parameters
+- feeParameters at slot 10 with wider uint16 fields
+- bins mapping at slot 11 with uint112|uint112 packing (vs uint128|uint128)
+- tree[3] at slots 12-14, all mapping-based (V2.1 level0 is a direct slot)
+- Separate fee tracking requiring surplus skip (V2.0 `received()` subtracts fees)
+
+Un-blacklisted USDC/DAI.e pool (0x855ee4) — previously had evm=0, now works.
+LFJ V2 mismatches: 6 → 4. All 6 V2.0 pools produce correct output (100% match).
+
+### Files
+- `formulas/lfj_v2_v20.go` — new: V2.0 registry, state fetch, bin reader, tree level0
+- `formulas/lfj_v2_fast.go` — V2.0 dispatch in FetchLFJV2StateFast, QuoteLFJV2Fast, tree traversal
+- `formulas/pool_lfj_v2.go` — check both registries, skip surplus for V2.0
+- `formulas/registry.txt` — un-blacklist 0x855ee4 (formula=-1 → 3)
+
 ## 2026-04-01 — Full session: performance + coverage + benchmark overhaul
 
 ### Final results: 97.0% correct (3856/3975 tested, 119 mismatches)

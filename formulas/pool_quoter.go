@@ -468,6 +468,9 @@ var deadPoolDirs = map[common.Address]common.Address{
 	common.HexToAddress("0x4c79e30bc8eb6d83620b6166e49a27615eeed221"): common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"), // Gladiator/USDC: USDC→Gladiator hits max_wallet
 	common.HexToAddress("0xdf9db5a5f3a00e0e27def12af95b4528ec23cf86"): common.HexToAddress("0xc139aa91399600f6b72975ac3317b6d49cb30a69"), // Gladiator/Arena: Arena→Gladiator hits max_wallet
 	common.HexToAddress("0x66a5de11d1e1f20da825d974453f099c4bb13647"): common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"), // WETH.e/WAVAX PharaohV3: WAVAX→WETH.e one-sided liquidity
+	common.HexToAddress("0x54ba397425a60361c684aeae22f2c7c78b24cf90"): common.HexToAddress("0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"), // V4: USDt as input reverts in this pool
+	common.HexToAddress("0x5c2e48c07f27f6250e7a1709d12d01b6b92205ba"): common.HexToAddress("0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"), // PharaohV1: WETH.e as input reverts (one-sided)
+	common.HexToAddress("0x04d479a32d5941f2329c307ee906e36753f0e9f0"): common.HexToAddress("0xd698aeab9286a38d14894b6ccf5129660fffc6f3"), // V4 ArenaHook: hook reverts for this token
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

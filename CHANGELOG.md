@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-01 — Gob-encoded initial dump (27s → 2s connection)
+- Replaced JSON hex wire format with gob encoding for initial_dump
+- New `statedb/wire` package: shared struct with zero libevm deps (server + client both import)
+- State server sends gob as binary WebSocket frame; block_diffs stay JSON text
+- WASM: `binaryType=arraybuffer`, routes binary→gob decode, text→JSON handler
+- WASM connection: 27s → 2s (13.7x faster)
+- Native connection: near-instant (was already fast but now skips all hex parsing)
+
 ## 2026-04-01 — Quote cache: ring buffer → map (100% hit rate)
 - Replaced 16-slot ring buffer with map-based cache per pool
 - Ring buffer evicted entries constantly: 78.5% hit rate with BFS generating dozens of unique amounts per pool

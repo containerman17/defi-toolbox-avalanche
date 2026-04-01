@@ -27,6 +27,7 @@ package statedb
 // simply never send block_diff messages — the same code path handles both.
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"defi-toolbox/statedb/wire"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -101,21 +104,17 @@ func Connect(url string) (*LiveState, error) {
 		return nil, fmt.Errorf("write subscribe: %w", err)
 	}
 
-	// Read initial_dump from the server.
+	// Read gob-encoded initial_dump (binary WebSocket frame).
 	raw, err := transport.ReadRawMessage()
 	if err != nil {
 		transport.Close()
 		return nil, fmt.Errorf("read initial_dump: %w", err)
 	}
 
-	var dump serverMessage
-	if err := json.Unmarshal(raw, &dump); err != nil {
+	dump, err := wire.Decode(bytes.NewReader(raw))
+	if err != nil {
 		transport.Close()
-		return nil, fmt.Errorf("parse initial_dump: %w", err)
-	}
-	if dump.Type != "initial_dump" {
-		transport.Close()
-		return nil, fmt.Errorf("expected initial_dump, got %q", dump.Type)
+		return nil, fmt.Errorf("decode initial_dump: %w", err)
 	}
 
 	ls := &LiveState{
@@ -124,9 +123,9 @@ func Connect(url string) (*LiveState, error) {
 
 	ls.state = NewStateDB(ls)
 
-	// Build initial ImmutableState from the dump — goes directly into the fast layer.
+	// Build initial ImmutableState from the gob dump — goes directly into the fast layer.
 	im := NewImmutableState(dump.BlockNumber, dump.Timestamp)
-	storageCount, accountCount := loadDumpEntries(im, dump.Entries)
+	storageCount, accountCount := loadGobDump(im, dump)
 	ls.state.SetImmutable(im)
 
 	ls.block.Store(dump.BlockNumber)
@@ -496,6 +495,25 @@ func (ls *LiveState) HandleBlockDiff(msg []byte) {
 // loadDumpEntries, for use by WASM and other external constructors.
 func LoadDumpEntries(state *ImmutableState, entries [][2]string) (int, int) {
 	return loadDumpEntries(state, entries)
+}
+
+// loadGobDump populates an ImmutableState from a gob-decoded GobDump.
+// Type-casts [20]byte → common.Address and [32]byte → common.Hash (zero-cost).
+func loadGobDump(state *ImmutableState, dump *wire.GobDump) (int, int) {
+	for _, e := range dump.Storage {
+		state.SetStorage(common.Address(e.Addr), common.Hash(e.Slot), common.Hash(e.Value))
+	}
+	for _, a := range dump.Accounts {
+		balance := new(uint256.Int)
+		balance.SetBytes32(a.Balance[:])
+		state.SetAccount(common.Address(a.Addr), balance, a.Nonce, a.Code)
+	}
+	return len(dump.Storage), len(dump.Accounts)
+}
+
+// LoadGobDump is the exported wrapper of loadGobDump, for use by WASM.
+func LoadGobDump(state *ImmutableState, dump *wire.GobDump) (int, int) {
+	return loadGobDump(state, dump)
 }
 
 // ServerMessage is the exported alias of the wire format for state server messages.

@@ -3,6 +3,7 @@
 package shared
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"defi-toolbox/statedb"
+	"defi-toolbox/statedb/wire"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -48,16 +50,32 @@ func DialBrowser(url string) (*BrowserTransport, error) {
 	}
 
 	bt.ws = js.Global().Get("WebSocket").New(url)
-	bt.ws.Set("binaryType", "blob")
+	bt.ws.Set("binaryType", "arraybuffer")
 
 	bt.ws.Set("onopen", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		close(bt.ready)
 		return nil
 	}))
 
+	// Route messages by WebSocket frame type:
+	//   Binary (ArrayBuffer) = gob-encoded initial_dump → firstMsg channel
+	//   Text (string) = JSON block_diff or RPC response → handleMessage
 	bt.ws.Set("onmessage", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
-		data := args[0].Get("data").String()
-		bt.handleMessage([]byte(data))
+		data := args[0].Get("data")
+		if data.InstanceOf(js.Global().Get("ArrayBuffer")) {
+			// Binary frame: copy ArrayBuffer → Go []byte via Uint8Array
+			uint8Array := js.Global().Get("Uint8Array").New(data)
+			buf := make([]byte, uint8Array.Get("length").Int())
+			js.CopyBytesToGo(buf, uint8Array)
+			// Route to firstMsg (initial_dump) — non-blocking, drops if already received
+			select {
+			case bt.firstMsg <- buf:
+			default:
+			}
+		} else {
+			// Text frame: JSON (block_diff or RPC response)
+			bt.handleMessage([]byte(data.String()))
+		}
 		return nil
 	}))
 
@@ -258,7 +276,7 @@ func ConnectBrowser(url string) (*statedb.LiveState, *BrowserTransport, error) {
 	// Subscribe.
 	bt.sendJSON(map[string]interface{}{"subscribe": true})
 
-	// Read initial_dump (first push message).
+	// Read gob-encoded initial_dump (binary WebSocket frame → firstMsg channel).
 	var raw []byte
 	select {
 	case raw = <-bt.firstMsg:
@@ -266,18 +284,15 @@ func ConnectBrowser(url string) (*statedb.LiveState, *BrowserTransport, error) {
 		return nil, nil, fmt.Errorf("initial_dump timeout")
 	}
 
-	var dump statedb.ServerMessage
-	if err := json.Unmarshal(raw, &dump); err != nil {
-		return nil, nil, fmt.Errorf("parse initial_dump: %w", err)
-	}
-	if dump.Type != "initial_dump" {
-		return nil, nil, fmt.Errorf("expected initial_dump, got %q", dump.Type)
+	dump, err := wire.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode initial_dump: %w", err)
 	}
 
-	// Build state from dump.
+	// Build state from gob dump.
 	state := statedb.NewStateDB(bt)
 	im := statedb.NewImmutableState(dump.BlockNumber, dump.Timestamp)
-	statedb.LoadDumpEntries(im, dump.Entries)
+	statedb.LoadGobDump(im, dump)
 	state.SetImmutable(im)
 
 	ls := statedb.NewLiveStateFromState(state, dump.BlockNumber, dump.Timestamp, dump.BaseFee, dump.GasLimit)

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"runtime"
@@ -14,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"defi-toolbox/statedb/wire"
 
 	"github.com/gorilla/websocket"
 )
@@ -411,6 +415,113 @@ func (c *stateCache) dump() (int, uint64, uint64, uint64, [][2]string) {
 		entries = append(entries, [2]string{k, v})
 	}
 	return c.blockNumber, c.timestamp, c.baseFee, c.gasLimit, entries
+}
+
+// dumpGob converts the flat string cache into a gob-encoded GobDump.
+// Called under blockMu.RLock() to ensure a consistent snapshot.
+func (c *stateCache) dumpGob() []byte {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	d := &wire.GobDump{
+		BlockNumber: uint64(c.blockNumber),
+		Timestamp:   c.timestamp,
+		BaseFee:     c.baseFee,
+		GasLimit:    c.gasLimit,
+		Storage:     make([]wire.StorageEntry, 0, len(c.values)),
+	}
+
+	// Temporary map to group account fields (balance, nonce, code) by address.
+	type acctData struct {
+		balance string
+		nonce   string
+		code    string
+	}
+	accounts := make(map[string]*acctData)
+
+	for k, v := range c.values {
+		if strings.HasPrefix(k, "s:") {
+			// Storage: "s:<addr>:<slot>" -> hex value
+			parts := strings.SplitN(k, ":", 3)
+			if len(parts) != 3 {
+				continue
+			}
+			var e wire.StorageEntry
+			decodeHexTo(e.Addr[:], parts[1])
+			decodeHexTo(e.Slot[:], parts[2])
+			decodeHexTo(e.Value[:], v)
+			d.Storage = append(d.Storage, e)
+		} else if strings.HasPrefix(k, "b:") {
+			addr := k[2:]
+			if accounts[addr] == nil {
+				accounts[addr] = &acctData{}
+			}
+			accounts[addr].balance = v
+		} else if strings.HasPrefix(k, "n:") {
+			addr := k[2:]
+			if accounts[addr] == nil {
+				accounts[addr] = &acctData{}
+			}
+			accounts[addr].nonce = v
+		} else if strings.HasPrefix(k, "c:") {
+			addr := k[2:]
+			if accounts[addr] == nil {
+				accounts[addr] = &acctData{}
+			}
+			accounts[addr].code = v
+		}
+	}
+
+	d.Accounts = make([]wire.AccountEntry, 0, len(accounts))
+	for addrHex, a := range accounts {
+		var e wire.AccountEntry
+		decodeHexTo(e.Addr[:], addrHex)
+
+		// Balance: hex string → big.Int → 32-byte big-endian
+		if a.balance != "" {
+			bi, ok := new(big.Int).SetString(strings.TrimPrefix(a.balance, "0x"), 16)
+			if ok {
+				b := bi.Bytes()
+				// Right-align into 32 bytes (big-endian)
+				copy(e.Balance[32-len(b):], b)
+			}
+		}
+
+		// Nonce: hex string → uint64
+		if a.nonce != "" {
+			ni, ok := new(big.Int).SetString(strings.TrimPrefix(a.nonce, "0x"), 16)
+			if ok {
+				e.Nonce = ni.Uint64()
+			}
+		}
+
+		// Code: hex string → raw bytes
+		if a.code != "" && a.code != "0x" {
+			e.Code, _ = hex.DecodeString(strings.TrimPrefix(a.code, "0x"))
+		}
+
+		d.Accounts = append(d.Accounts, e)
+	}
+
+	var buf bytes.Buffer
+	if err := wire.Encode(&buf, d); err != nil {
+		log.Printf("[error] gob encode: %v", err)
+		return nil
+	}
+	return buf.Bytes()
+}
+
+// decodeHexTo decodes a hex string (with optional 0x prefix) into a fixed-size byte slice.
+// Left-pads with zeros if the hex value is shorter than dst.
+func decodeHexTo(dst []byte, hexStr string) {
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+	b, _ := hex.DecodeString(hexStr)
+	// Right-align: copy to end of dst (big-endian padding)
+	if len(b) <= len(dst) {
+		copy(dst[len(dst)-len(b):], b)
+	} else {
+		copy(dst, b[len(b)-len(dst):])
+	}
 }
 
 func (c *stateCache) getBlockNumber() int {
@@ -855,26 +966,20 @@ func handleStateWS(pool *rpcPool, s *stateServer, w http.ResponseWriter, r *http
 	json.Unmarshal(firstMsg, &peek)
 
 	if peek.Subscribe {
-		// Subscriber: send initial_dump, register for block_diff broadcasts.
-		// Pass our wmu so broadcast uses the same mutex as wsWrite.
+		// Subscriber: send gob-encoded initial_dump as binary WebSocket frame,
+		// then register for JSON block_diff broadcasts (text frames).
 		s.blockMu.RLock()
-		blockNum, ts, baseFee, gasLimit, entries := s.cache.dump()
-		dumpMsg, _ := json.Marshal(map[string]interface{}{
-			"type":        "initial_dump",
-			"blockNumber": blockNum,
-			"timestamp":   ts,
-			"baseFee":     baseFee,
-			"gasLimit":    gasLimit,
-			"entries":     entries,
-		})
-		wsWrite(dumpMsg)
+		gobBytes := s.cache.dumpGob()
+		wmu.Lock()
+		_ = conn.WriteMessage(websocket.BinaryMessage, gobBytes)
+		wmu.Unlock()
 		s.clients.addWithMu(conn, wmu)
 		s.blockMu.RUnlock()
 		defer s.clients.remove(conn)
 
 		logJSON(map[string]interface{}{
 			"event": "subscriber_connected", "path": r.URL.Path,
-			"dumpSize": len(entries), "block": blockNum,
+			"dumpSize": len(gobBytes), "block": s.cache.getBlockNumber(),
 		})
 	} else if peek.Method != "" {
 		// Worker: first message is already a JSON-RPC request — handle it

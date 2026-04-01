@@ -440,10 +440,7 @@ func poolHex(addr common.Address) string {
 // a value. Key = pool address, value = direction to block (0 = block zeroForOne, 1 = block !zeroForOne).
 var deadPoolDirs = map[common.Address]int{
 	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): 0, // BTC.b/SolvBTC LFJ V2: dir=0 (BTC.b→SolvBTC) reverts on-chain
-	common.HexToAddress("0x41100c6d2c6920b10d12cd8d59c8a9aa2ef56fc7"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
-	common.HexToAddress("0x668aa7aefa8512416fc6244afbe5129200277a69"): 1, // WAVAX/USDC Algebra: dir=1 exceeds gas limit on-chain
 	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): 1, // BIFI/waAvaWAVAX BalancerV3: dir=1 extreme imbalance causes EVM revert
-	common.HexToAddress("0xa02ec3ba8d17887567672b2cdcaf525534636ea0"): 1, // WAVAX/USDC Algebra: dir=1 (1e18 USDC = 1T) exceeds EVM gas limit at 175 steps
 	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): 0, // NYA/WAVAX UniV3: dir=0 reverts, NYA token is paused
 }
 

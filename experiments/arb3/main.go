@@ -284,13 +284,14 @@ func submitArb(key *ecdsa.PrivateKey, nonce uint64, routerAddr common.Address,
 }
 
 // evmVerifyPath runs a full swap() call for a given path.
+// stateWithOverrides should have sender balance + allowance overrides applied.
 func evmVerifyPath(
 	path *bfsPath,
 	pools []pf.Pool,
 	amountIn *uint256.Int,
-	state *statedb.StateDB,
+	stateWithOverrides *statedb.StateDB,
 	evmCtx *statedb.CachedContext,
-	caller common.Address,
+	sender common.Address,
 	routerAddr common.Address,
 ) *evmResult {
 	n := len(path.pools)
@@ -314,8 +315,8 @@ func evmVerifyPath(
 	}
 
 	calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(1))
-	cs := statedb.NewCallState(state)
-	ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, caller, routerAddr, calldata)
+	cs := statedb.NewCallState(stateWithOverrides)
+	ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, sender, routerAddr, calldata)
 
 	if err != nil || cs.Err() != nil || len(ret) < 32 {
 		return nil
@@ -365,7 +366,7 @@ func binarySearchSize(
 	path *bfsPath,
 	pools []pf.Pool,
 	baseAmount *uint256.Int,
-	state *statedb.StateDB,
+	stateWithOverrides *statedb.StateDB,
 	evmCtx *statedb.CachedContext,
 	caller common.Address,
 	routerAddr common.Address,
@@ -377,7 +378,7 @@ func binarySearchSize(
 
 	// Evaluate at lo, mid, hi
 	evalAt := func(amt *uint256.Int) (netProfit float64, result *evmResult) {
-		r := evmVerifyPath(path, pools, amt, state, evmCtx, caller, routerAddr)
+		r := evmVerifyPath(path, pools, amt, stateWithOverrides, evmCtx, caller, routerAddr)
 		if r == nil {
 			return -1e18, nil
 		}
@@ -638,21 +639,20 @@ func main() {
 		}
 	}
 
-	// Load private key
+	// Load private key (required)
 	loadEnv()
 	privKeyHex := strings.TrimPrefix(os.Getenv("ARB_PRIVATE_KEY"), "0x")
-	var caller common.Address
-	var privKey *ecdsa.PrivateKey
-	if privKeyHex != "" {
-		key, err := crypto.HexToECDSA(privKeyHex)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[arb3] bad private key: %v\n", err)
-			os.Exit(1)
-		}
-		privKey = key
-		caller = crypto.PubkeyToAddress(key.PublicKey)
-		fmt.Fprintf(os.Stderr, "[arb3] caller: %s\n", caller.Hex())
+	if privKeyHex == "" {
+		fmt.Fprintf(os.Stderr, "[arb3] ARB_PRIVATE_KEY not set\n")
+		os.Exit(1)
 	}
+	privKey, err := crypto.HexToECDSA(privKeyHex)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[arb3] bad private key: %v\n", err)
+		os.Exit(1)
+	}
+	caller := crypto.PubkeyToAddress(privKey.PublicKey)
+	fmt.Fprintf(os.Stderr, "[arb3] caller: %s\n", caller.Hex())
 
 	// Load registry + pools
 	registry := formulas.LoadEmbeddedRegistry()
@@ -785,12 +785,14 @@ func main() {
 	ls.RUnlock()
 
 	// Ensure approvals
-	approvalNonce := uint64(0)
-	if privKey != nil {
-		approvalNonce = ensureApprovals(privKey, caller, hubs)
-	}
+	approvalNonce := ensureApprovals(privKey, caller, hubs)
 
 	routerAddr := router.DeployedRouter
+
+	// Build persistent overlay with sender overrides for EVM verification.
+	// swap() uses transferFrom(sender→router), so the sender needs balance + allowance.
+	senderOverrides := router.BuildSenderOverrides(caller, routerAddr, pools)
+	stateWithOverrides := pf.ApplyOverridesFlat(state, senderOverrides)
 
 	// debugHopByHop prints per-hop formula vs EVM comparison for a path.
 	debugPath := func(path *bfsPath, pools []pf.Pool, amountIn *uint256.Int,
@@ -853,7 +855,6 @@ func main() {
 			amountIn.Dec(), currentFormula.Dec(), amountIn.Dec(), currentEVM.Dec())
 	}
 
-	dryRun := privKey == nil
 	nextNonce := approvalNonce
 
 	// ── Run one block ──
@@ -973,7 +974,7 @@ func main() {
 				}
 				seen[key] = true
 
-				r := evmVerifyPath(c, pools, c.amountIn, state, evmCtx, caller, routerAddr)
+				r := evmVerifyPath(c, pools, c.amountIn, stateWithOverrides, evmCtx, caller, routerAddr)
 				evmCalls++
 				if r == nil {
 					if debugHops && evmCalls <= 10 {
@@ -1029,7 +1030,7 @@ func main() {
 						localCtx := statedb.GetCachedContext(cfg)
 						sized := binarySearchSize(
 							&c.path, pools, c.amountIn,
-							state, localCtx, caller, routerAddr, baseFee, hub.price,
+							stateWithOverrides, localCtx, caller, routerAddr, baseFee, hub.price,
 						)
 						if sized != nil && sized.netProfit > c.netProfit {
 							results[idx] = sized
@@ -1054,7 +1055,7 @@ func main() {
 					best.gasUsed, best.netProfit/div, evmCalls, sizeTime.Round(time.Microsecond))
 
 				// Submit transaction (one per block max)
-				if !dryRun && !sentThisBlock && best.calldata != nil {
+				if !sentThisBlock && best.calldata != nil {
 					txHash, err := submitArb(privKey, nextNonce, routerAddr, best.calldata, best.gasUsed, baseFee)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "[arb3] %s TX FAILED: %v\n", hub.label, err)

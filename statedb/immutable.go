@@ -1,11 +1,10 @@
 package statedb
 
-// ImmutableState — read-only snapshot of blockchain state at a specific block.
+// ImmutableState — blockchain state at a specific block.
 //
-// Once created, it is NEVER modified. Safe for concurrent reads without locks.
-// Plain Go maps are safe for concurrent reads as long as no goroutine writes.
-// Block updates create a NEW ImmutableState via CloneWithDiff, then swap
-// an atomic.Pointer. Old state stays valid for in-flight readers until GC.
+// Mutated in place under LiveState.blockMu write lock via ApplyDiffInPlace.
+// Concurrent reads are safe under RLock — plain Go maps allow concurrent reads
+// as long as no goroutine writes, and the RWMutex guarantees this.
 //
 // This is the "fast layer" — 99.9% of reads hit this. The remaining 0.1%
 // (cache misses) fall through to the backfill layer in StateDB.
@@ -123,59 +122,29 @@ type BlockDiff struct {
 	Nonce     map[common.Address]uint64                      // changed nonces
 }
 
-// CloneWithDiff creates a new ImmutableState by applying a block diff and merging
-// in backfill data (slots fetched on demand since the last block).
+// ApplyDiffInPlace mutates this ImmutableState by applying a block diff and
+// merging in backfill data. The caller MUST hold an exclusive lock so no
+// readers are accessing this state concurrently.
 //
-// Only deep-copies accounts that have changes in the diff. Unchanged accounts
-// share map pointers with the old state (safe because both are read-only).
-func (s *ImmutableState) CloneWithDiff(
+// This is O(diff + backfill) instead of O(total state) — only touches entries
+// that actually changed, instead of copying all ~870K entries per block.
+func (s *ImmutableState) ApplyDiffInPlace(
 	diff *BlockDiff,
 	bfStorage map[common.Address]map[common.Hash]common.Hash,
 	bfCode map[common.Address][]byte,
 	bfBalance map[common.Address]*uint256.Int,
 	bfNonce map[common.Address]uint64,
-) *ImmutableState {
-	newState := &ImmutableState{
-		BlockNum:  diff.BlockNum,
-		BlockTime: diff.BlockTime,
-		Storage:   make(map[common.Address]map[common.Hash]common.Hash, len(s.Storage)),
-		Code:      make(map[common.Address][]byte, len(s.Code)+len(bfCode)),
-		CodeHash:  make(map[common.Address]common.Hash, len(s.CodeHash)+len(bfCode)),
-		Balance:   make(map[common.Address]*uint256.Int, len(s.Balance)+len(bfBalance)),
-		Nonce:     make(map[common.Address]uint64, len(s.Nonce)+len(bfNonce)),
-	}
-
-	// Build set of addresses that need deep copy (changed in diff or backfill)
-	dirty := make(map[common.Address]bool)
-	for addr := range diff.Storage {
-		dirty[addr] = true
-	}
-	for addr := range bfStorage {
-		dirty[addr] = true
-	}
-
-	// Copy storage: share unchanged, deep-copy changed
-	for addr, slots := range s.Storage {
-		if dirty[addr] {
-			// Deep copy — this account has changes
-			newSlots := make(map[common.Hash]common.Hash, len(slots))
-			for k, v := range slots {
-				newSlots[k] = v
-			}
-			newState.Storage[addr] = newSlots
-		} else {
-			// Share pointer — this account is unchanged
-			newState.Storage[addr] = slots
-		}
-	}
+) {
+	s.BlockNum = diff.BlockNum
+	s.BlockTime = diff.BlockTime
 
 	// Merge backfill storage FIRST (may contain stale values from a prior block)
 	for addr, slots := range bfStorage {
-		if newState.Storage[addr] == nil {
-			newState.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
+		if s.Storage[addr] == nil {
+			s.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
 		}
 		for k, v := range slots {
-			newState.Storage[addr][k] = v
+			s.Storage[addr][k] = v
 		}
 	}
 
@@ -184,53 +153,35 @@ func (s *ImmutableState) CloneWithDiff(
 	// state-server releases blockMu between cache check and node fetch, so the
 	// block can advance mid-flight and the client gets an old value).
 	for addr, slots := range diff.Storage {
-		if newState.Storage[addr] == nil {
-			newState.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
+		if s.Storage[addr] == nil {
+			s.Storage[addr] = make(map[common.Hash]common.Hash, len(slots))
 		}
 		for slot, val := range slots {
-			newState.Storage[addr][slot] = val
+			s.Storage[addr][slot] = val
 		}
 	}
 
-	// Code: copy existing + merge backfill
-	for addr, code := range s.Code {
-		newState.Code[addr] = code
-	}
+	// Code + CodeHash: merge backfill only (diffs don't include code changes)
 	for addr, code := range bfCode {
-		newState.Code[addr] = code
-	}
-
-	// CodeHash: copy existing + compute for backfill
-	for addr, hash := range s.CodeHash {
-		newState.CodeHash[addr] = hash
-	}
-	for addr, code := range bfCode {
+		s.Code[addr] = code
 		if len(code) > 0 {
-			newState.CodeHash[addr] = crypto.Keccak256Hash(code)
+			s.CodeHash[addr] = crypto.Keccak256Hash(code)
 		}
 	}
 
-	// Balance: copy existing + merge backfill + apply diff (diff wins over stale backfill)
-	for addr, bal := range s.Balance {
-		newState.Balance[addr] = bal
-	}
+	// Balance: merge backfill first, then diff (diff wins over stale backfill)
 	for addr, bal := range bfBalance {
-		newState.Balance[addr] = bal
+		s.Balance[addr] = bal
 	}
 	for addr, bal := range diff.Balance {
-		newState.Balance[addr] = bal
+		s.Balance[addr] = bal
 	}
 
-	// Nonce: copy existing + merge backfill + apply diff (diff wins over stale backfill)
-	for addr, nonce := range s.Nonce {
-		newState.Nonce[addr] = nonce
-	}
+	// Nonce: merge backfill first, then diff (diff wins over stale backfill)
 	for addr, nonce := range bfNonce {
-		newState.Nonce[addr] = nonce
+		s.Nonce[addr] = nonce
 	}
 	for addr, nonce := range diff.Nonce {
-		newState.Nonce[addr] = nonce
+		s.Nonce[addr] = nonce
 	}
-
-	return newState
 }

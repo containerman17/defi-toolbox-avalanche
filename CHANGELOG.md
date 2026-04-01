@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-04-01 — Block diff O(n) → O(diff), CodeHash cache, arb bot cleanup
+
+### Performance: in-place block diff (3.1x faster quotes)
+- **`CloneWithDiff` → `ApplyDiffInPlace`**: block updates now mutate state in place under write lock instead of cloning all ~870K map entries per block
+- O(diff + backfill) instead of O(total state) — typically ~50-200 storage changes vs 870K copies
+- Eliminated 55% CPU overhead from map copying (`matchH2`), quote latency 195ms → 77ms
+
+### Performance: CallState.GetCodeHash cache delegation
+- `CallState.GetCodeHash` now delegates to `StateDB.GetCodeHash` which has pre-computed hashes
+- Was re-hashing full contract bytecode on every EVM `EXTCODEHASH` — 14% CPU
+- keccak256 CPU dropped from 14% → 1.6% (remaining is real work: Algebra tick slots + EVM opcodes)
+- Quote latency 77ms → 62ms
+
+### Arb bots: sender overrides + private key required
+- `evmVerifyPath` and `binarySearchSize` now use `stateWithOverrides` with sender balance + allowance
+- `swap()` simulation works correctly regardless of on-chain caller balance
+- Private key is now required at startup (exit if `ARB_PRIVATE_KEY` not set)
+- Removed dead `dryRun` code paths
+
+### Profile results (2000 pools, maxHops=3, 40 rounds)
+- 62ms/quote two-way (was 195ms) — **3.1x faster**
+- 66% formulas, 27% EVM, 1.6% keccak, 12% state lookups
+- Zero CPU in block diff handling
+
 ## 2026-04-01 — Router contract redesign: swap() + debugSwapSingle()
 
 ### Contract: HayabusaRouter v2

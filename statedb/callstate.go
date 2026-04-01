@@ -4,7 +4,6 @@ import (
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/core/vm"
-	"github.com/ava-labs/libevm/crypto"
 	"github.com/ava-labs/libevm/libevm/stateconf"
 	"github.com/ava-labs/libevm/params"
 	"github.com/holiman/uint256"
@@ -245,11 +244,9 @@ func (s *CallState) CreateAccount(addr common.Address) {}
 // ─── Code — delegate to base with error propagation ─────────────────
 
 func (s *CallState) GetCodeHash(addr common.Address) common.Hash {
-	code := s.GetCode(addr)
-	if len(code) == 0 {
-		return common.Hash{}
-	}
-	return crypto.Keccak256Hash(code)
+	// Delegate to base StateDB which has pre-computed hashes in the immutable
+	// layer and backfill cache. Avoids re-hashing full bytecode on every call.
+	return s.base.GetCodeHash(addr)
 }
 
 func (s *CallState) GetCode(addr common.Address) []byte {

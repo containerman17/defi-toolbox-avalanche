@@ -1,20 +1,21 @@
 package statedb
 
-// StateDB — EVM state with lock-free reads via immutable snapshots.
+// StateDB — EVM state with RWMutex-protected reads and in-place block updates.
 //
 // Two-layer architecture:
 //
-//  1. Immutable layer (fast): plain Go maps, swapped atomically on block updates.
-//     100% lock-free reads. This is where 99.9% of accesses go after warm-up.
+//  1. Primary layer (fast): plain Go maps, mutated in place under write lock.
+//     Readers hold RLock — concurrent reads are safe. This is where 99.9% of
+//     accesses go after warm-up.
 //
 //  2. Backfill layer (slow): RWMutex-protected maps for on-demand cache misses.
-//     When a read misses the immutable layer, it fetches from the network and
-//     stores here. On the next block update, backfill is merged into the new
-//     immutable state and cleared. After warm-up, this layer is empty.
+//     When a read misses the primary layer, it fetches from the network and
+//     stores here. On the next block update, backfill is merged into the primary
+//     layer and cleared. After warm-up, this layer is empty.
 //
-// Block updates: CloneWithDiff creates a new ImmutableState (COW per changed
-// account), merges the backfill, swaps the atomic pointer. Old state stays
-// valid for in-flight readers until GC.
+// Block updates: ApplyDiffInPlace mutates the state in O(diff + backfill) time,
+// then clears the backfill. The write lock (LiveState.blockMu) ensures no
+// readers are active during mutation.
 //
 // The EVM's vm.StateDB interface requires mutable operations (SetState, SetCode,
 // SubBalance, etc.). These go through the backfill layer or are handled by
@@ -106,18 +107,31 @@ func (s *StateDB) SetImmutable(im *ImmutableState) {
 	s.immutable.Store(im)
 }
 
-// ApplyBlockDiff creates a new immutable state from the current one + diff + backfill,
-// then atomically swaps it in and clears the backfill.
+// ApplyBlockDiff mutates the state in place by applying the diff and merging
+// backfill data, then clears the backfill maps for the next block.
+//
+// Safety: the caller MUST hold LiveState.blockMu.Lock(). The RWMutex guarantees
+// all readers (holding RLock) have finished before Lock() proceeds, so no
+// goroutine is reading the maps while we mutate them.
+//
+// This is O(diff + backfill) — typically ~50-200 storage changes per block,
+// vs the old CloneWithDiff which was O(total state) copying ~870K entries.
 func (s *StateDB) ApplyBlockDiff(diff *BlockDiff) {
-	old := s.immutable.Load()
+	im := s.immutable.Load()
+
+	// Lock backfill so no concurrent cache-miss writes happen during merge.
 	s.backfillMu.Lock()
-	newState := old.CloneWithDiff(diff, s.bfStorage, s.bfCode, s.bfBalance, s.bfNonce)
-	s.immutable.Store(newState)
+
+	// Mutate state: merge backfill first (may be stale), then diff (authoritative).
+	im.ApplyDiffInPlace(diff, s.bfStorage, s.bfCode, s.bfBalance, s.bfNonce)
+
+	// Clear backfill — all data has been merged into the primary layer.
 	s.bfStorage = make(map[common.Address]map[common.Hash]common.Hash)
 	s.bfCode = make(map[common.Address][]byte)
 	s.bfCodeHash = make(map[common.Address]common.Hash)
 	s.bfBalance = make(map[common.Address]*uint256.Int)
 	s.bfNonce = make(map[common.Address]uint64)
+
 	s.backfillMu.Unlock()
 }
 

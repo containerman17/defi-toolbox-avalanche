@@ -671,7 +671,10 @@
   },
   {
     "address": "0x223a368ad0e7396165fc629976d77596a51f155c",
-    "slot": 2
+    "slot": 2,
+    "disableSlots": [
+      20
+    ]
   },
   {
     "address": "0xc654721fbf1f374fd9ffa3385bba2f4932a6af55",
@@ -1033,7 +1036,9 @@
   {
     "address": "0xc06e17bdc3f008f4ce08d27d364416079289e729",
     "slot": 0,
-    "disableSlots": [5]
+    "disableSlots": [
+      5
+    ]
   },
   {
     "address": "0xb0cf73accd48febea2bb543a91cfb0d16e7f96a2",

@@ -337,13 +337,17 @@ func (p *V3Pool) precomputeSteps() {
 // partial output (EVM completes) or zero (EVM reverts).
 func (p *V3Pool) evmWouldComplete(zeroForOne bool) bool {
 	// Estimate EVM gas for a directional swap through bitmap words.
-	// Each swap loop iteration costs ~7000 gas (empirically calibrated):
-	//   SLOAD + getSqrtRatio + computeSwapStep + state management overhead.
-	// Each initialized tick crossing adds ~15K gas (SLOAD tick info + liquidity update).
-	const gasPerTick = 15000
-	const gasPerWord = 7000
+	// Standard UniswapV3: ~15K/tick, ~7K/word, 200K overhead
+	// PangolinV3/PharaohV3 (heavyGas): ~55K/tick (reward tracking, oracle writes,
+	//   advancePeriod modifier), ~7K/word, 400K overhead
+	var gasPerTick int64 = 15_000
+	var overheadGas int64 = 200_000
+	if p.heavyGas {
+		gasPerTick = 55_000
+		overheadGas = 400_000 // advancePeriod + extra reward tracking
+	}
+	const gasPerWord = 7_000
 	const gasLimit = 5_000_000
-	const overheadGas = 200_000 // base cost + quoter overhead
 
 	// Direction-specific word count: from current tick to the range boundary.
 	var rangeWords int64

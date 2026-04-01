@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-01 — Wombat formula + Balancer V2 registry
+
+- **Wombat stableswap formula** (FormulaWombat=10): DynamicPoolV2 with amplification factor,
+  flat haircut, high coverage ratio quadratic penalty, and yield-bearing token price scaling.
+  sAVAX rate from storage (slots 201/202), ggAVAX rate via ERC-4626 convertToAssets.
+  3 pools registered, 2 match (pool 3 only has 2 of 3 tokens in pools.txt).
+- **31 Balancer V2 pools added to registry.txt** (formula ID 8). Previously only registered
+  dynamically by the benchmark — now available to arb bot and pathfinder.
+- Block 1: 4078/4142 = 98.5% (was 98.4%).
+
 ## 2026-04-01 — Multi-token PoolQuoter interface
 
 ### Interface change: `Quote(amountIn, zeroForOne bool)` → `Quote(amountIn, tokenIn, tokenOut)`

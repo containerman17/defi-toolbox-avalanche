@@ -390,6 +390,10 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		if p := newBalancerV2Pool(pool, trackedReader); p != nil { return wrapAndCache(p) }
 	case FormulaAlgebra:
 		if p := newAlgebraPool(pool, trackedReader); p != nil { return wrapAndCache(p) }
+	case FormulaWombat:
+		if hasTokens {
+			if p := newWombatPool(pool, trackedReader, tokens, pm.evmCaller); p != nil { return wrapAndCache(p) }
+		}
 	}
 	return nil
 }

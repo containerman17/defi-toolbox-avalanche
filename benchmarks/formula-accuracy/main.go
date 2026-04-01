@@ -179,13 +179,14 @@ func runBlockBenchmark(
 
 	var wg sync.WaitGroup
 	for _, job := range fwdJobs {
+		// Read amount before goroutine to avoid data race with poolAmounts map
+		fwdAmt := poolAmounts[poolAmountKey{pools[job.poolIdx].Address, job.fwdDir}]
 		wg.Add(1)
-		go func(j fwdWork) {
+		go func(j fwdWork, amountIn *uint256.Int) {
 			defer wg.Done()
 			pool := &pools[j.poolIdx]
 			tokenIn := pool.Tokens[j.fwdDir]
 			tokenOut := pool.Tokens[1-j.fwdDir]
-			amountIn := poolAmounts[poolAmountKey{pool.Address, j.fwdDir}]
 			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 
 			ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
@@ -201,7 +202,7 @@ func runBlockBenchmark(
 				}
 				groundMu.Unlock()
 			}
-		}(job)
+		}(job, fwdAmt)
 	}
 	wg.Wait()
 

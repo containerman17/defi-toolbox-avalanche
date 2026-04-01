@@ -465,6 +465,8 @@ var deadPoolDirs = map[common.Address]common.Address{
 	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): common.HexToAddress("0x152b9d0fdc40c096757f570a51e494bd4b943e50"), // BTC.b/SolvBTC LFJ V2: BTC.b as input reverts
 	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): common.HexToAddress("0xd7da0de6ef4f51d6206bf2a35fcd2030f54c3f7b"), // BIFI/waAvaWAVAX BalancerV3: waAvaWAVAX as input, extreme imbalance
 	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): common.HexToAddress("0x38f9bf9dce51833ec7f03c9dc218197999999999"), // NYA/WAVAX UniV3: NYA as input reverts (paused)
+	common.HexToAddress("0x4c79e30bc8eb6d83620b6166e49a27615eeed221"): common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"), // Gladiator/USDC: USDC→Gladiator hits max_wallet
+	common.HexToAddress("0xdf9db5a5f3a00e0e27def12af95b4528ec23cf86"): common.HexToAddress("0xc139aa91399600f6b72975ac3317b6d49cb30a69"), // Gladiator/Arena: Arena→Gladiator hits max_wallet
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

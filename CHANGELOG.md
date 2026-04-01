@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-02 — Coverage fixes: un-blacklist Gladiator pools
+
+- Un-blacklisted 2 Gladiator (ARENA_BURN) pools — `max_wallet` only affects receiving
+  direction, not formula math. Added dead direction for USDC/Arena→Gladiator (max_wallet revert).
+- Block 1: 4100/4142 = **99.0%** (was 98.9%).
+
 ## 2026-04-01 — Platypus stableswap formula
 
 - **Platypus stableswap formula** (FormulaPlatypus=11): price slippage curve model

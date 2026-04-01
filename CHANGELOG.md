@@ -2,6 +2,11 @@
 
 ## 2026-04-01 — Full session: performance + coverage + benchmark overhaul
 
+### Router override balance fix: 71.1% → 95.4% (+985 matches)
+The router's token balance override was `1000 * 1e18` — enough for major tokens but
+329 out of 601 tokens needed more (meme tokens: 9.3M COQINU, 41.6B UNIQOC for $1).
+Changed to `1e30`. Single-line fix, biggest improvement of the session.
+
 ### Benchmark overhaul: realistic amounts reveal true coverage
 
 The benchmark previously used a flat `1e18` input for all pools. This created

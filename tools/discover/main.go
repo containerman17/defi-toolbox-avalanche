@@ -150,7 +150,7 @@ func main() {
 	// Register pool tokens and types in PoolManager
 	for _, p := range pools {
 		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolTokens(p.Address, p.Tokens...)
 			pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 		}
 	}
@@ -208,7 +208,6 @@ func main() {
 		for _, dir := range [][2]int{{0, 1}, {1, 0}} {
 			tokenIn := p.Tokens[dir[0]]
 			tokenOut := p.Tokens[dir[1]]
-			zeroForOne := dir[0] == 0
 
 			baseAmount, hasAmount := tokenAmounts[tokenIn]
 			if !hasAmount {
@@ -220,7 +219,7 @@ func main() {
 
 			// Step 2: Formula probe with base amount
 			pq := pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
-			formulaOut := formulaQuote(pq, baseAmount, zeroForOne)
+			formulaOut := formulaQuote(pq, baseAmount, tokenIn, tokenOut)
 
 			// Step 3: Check if they match (including both being zero)
 			if !amountsEqual(evmOut, formulaOut) {
@@ -236,7 +235,7 @@ func main() {
 
 				// Rebuild formula quoter for each test (clean state)
 				pq = pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
-				fResult := formulaQuote(pq, testAmount, zeroForOne)
+				fResult := formulaQuote(pq, testAmount, tokenIn, tokenOut)
 
 				if !amountsEqual(evmResult, fResult) {
 					allMatch = false
@@ -345,11 +344,11 @@ func evmQuote(evmCtx *statedb.CachedContext, cs *statedb.CallState, pool common.
 }
 
 // formulaQuote runs a quote via PoolManager. Returns nil on failure (treated as zero).
-func formulaQuote(pq formulas.PoolQuoter, amount *uint256.Int, zeroForOne bool) *uint256.Int {
+func formulaQuote(pq formulas.PoolQuoter, amount *uint256.Int, tokenIn, tokenOut common.Address) *uint256.Int {
 	if pq == nil {
 		return uint256.NewInt(0)
 	}
-	out := pq.Quote(amount, zeroForOne)
+	out := pq.Quote(amount, tokenIn, tokenOut)
 	if out.IsZero() {
 		return uint256.NewInt(0)
 	}

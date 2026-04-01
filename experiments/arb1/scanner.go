@@ -328,7 +328,16 @@ func (s *Scanner) OnBlock(
 func (s *Scanner) sequentialQuote(c *Cycle, amountIn *uint256.Int) *uint256.Int {
 	current := new(uint256.Int).Set(amountIn)
 	for i := 0; i < int(c.Hops); i++ {
-		out := s.pm.Quote(s.pt.Addr(c.Pools[i]), current, c.Dirs[i])
+		poolAddr := s.pt.Addr(c.Pools[i])
+		tokenIn := c.TokenIns[i]
+		// Determine tokenOut: it's the next hop's tokenIn, or hub for the last hop
+		var tokenOut common.Address
+		if i+1 < int(c.Hops) {
+			tokenOut = c.TokenIns[i+1]
+		} else {
+			tokenOut = s.hub
+		}
+		out := s.pm.Quote(poolAddr, current, tokenIn, tokenOut)
 		if out.IsZero() {
 			return nil
 		}

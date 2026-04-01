@@ -214,42 +214,26 @@ func (p *BalancerV3Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *BalancerV3Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
 	if amountIn.IsZero() {
 		return uint256.Int{}
 	}
-
-	// Determine token indices from zeroForOne.
-	// zeroForOne means tokenIn < tokenOut (by address ordering).
-	// But Balancer V3 uses registration order, not address order.
-	// We need to find which registered token is tokenIn and which is tokenOut.
-	// Convention: for a 2-token pool, we store tokens sorted by address in pools.txt,
-	// so token[0] < token[1] in address order.
-	// If tokens are in the SAME order as registration, zeroForOne maps directly.
-	// We handle this by using the tokens from info.Tokens (registration order)
-	// and the fact that pools.txt stores them in address-sorted order.
 
 	if len(p.info.Tokens) < 2 {
 		return uint256.Int{}
 	}
 
-	// For 2-token pools: token0 < token1 in address ordering = registration order for Balancer
-	// The pool collector stores tokens sorted, and registration order should match.
-	var indexIn, indexOut int
-	if zeroForOne {
-		indexIn = 0
-		indexOut = 1
-	} else {
-		indexIn = 1
-		indexOut = 0
+	// Find token indices in registration order.
+	indexIn, indexOut := -1, -1
+	for i, tok := range p.info.Tokens {
+		if tok == tokenIn {
+			indexIn = i
+		}
+		if tok == tokenOut {
+			indexOut = i
+		}
 	}
-
-	// For multi-token pools (>2 tokens), we only handle the 2-token swap case
-	// where we know the direction. We'd need actual token addresses for >2 tokens.
-	if len(p.info.Tokens) > 2 {
-		// Multi-token pools: need to know actual tokenIn/Out addresses.
-		// The PoolQuoter interface only gives us zeroForOne, which is insufficient
-		// for >2 tokens. Skip these for now.
+	if indexIn < 0 || indexOut < 0 || indexIn == indexOut {
 		return uint256.Int{}
 	}
 

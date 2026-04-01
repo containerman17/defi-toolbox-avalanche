@@ -382,7 +382,8 @@ func (p *V3Pool) TickCount() int {
 	return len(p.tickLiquidityNet)
 }
 
-func (p *V3Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *V3Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
 		return uint256.Int{}
 	}

@@ -36,11 +36,11 @@ type RouteStats struct {
 type PoolEdge struct {
 	PoolIdx  uint16
 	TokenOut common.Address
-	Dir      bool // zeroForOne
+	TokenIn  common.Address
 }
 
 // BuildAdjacency creates a token→[]PoolEdge adjacency map from pools.
-// Only includes pools known to the registry.
+// Only includes pools known to the registry. Supports N-token pools (N*(N-1) edges).
 func BuildAdjacency(pools []Pool, registry *formulas.Registry) map[common.Address][]PoolEdge {
 	adj := make(map[common.Address][]PoolEdge)
 	for i := range pools {
@@ -52,8 +52,13 @@ func BuildAdjacency(pools []Pool, registry *formulas.Registry) map[common.Addres
 			continue
 		}
 		idx := uint16(i)
-		adj[p.Tokens[0]] = append(adj[p.Tokens[0]], PoolEdge{idx, p.Tokens[1], true})
-		adj[p.Tokens[1]] = append(adj[p.Tokens[1]], PoolEdge{idx, p.Tokens[0], false})
+		for ti := range p.Tokens {
+			for tj := range p.Tokens {
+				if ti != tj {
+					adj[p.Tokens[ti]] = append(adj[p.Tokens[ti]], PoolEdge{idx, p.Tokens[tj], p.Tokens[ti]})
+				}
+			}
+		}
 	}
 	return adj
 }
@@ -67,8 +72,8 @@ type bfsNode struct {
 	amount   uint256.Int
 	parentID int32  // index into allNodes (-1 for root)
 	poolIdx  uint16 // index into pools slice
-	dir      bool   // zeroForOne
-	token    common.Address
+	tokenIn  common.Address
+	token    common.Address // tokenOut / current token
 }
 
 const topK = 3
@@ -147,7 +152,7 @@ func FindBestRoute(
 				}
 
 				formulaQuotes++
-				out := pm.Quote(pools[edge.PoolIdx].Address, &parent.amount, edge.Dir)
+				out := pm.Quote(pools[edge.PoolIdx].Address, &parent.amount, edge.TokenIn, edge.TokenOut)
 				if out.IsZero() {
 					continue
 				}
@@ -161,7 +166,7 @@ func FindBestRoute(
 						amount:   out,
 						parentID: parentIdx,
 						poolIdx:  edge.PoolIdx,
-						dir:      edge.Dir,
+						tokenIn:  edge.TokenIn,
 						token:    tok,
 					})
 					candidates = append(candidates, candidate{nodeIdx: nodeIdx})
@@ -176,7 +181,7 @@ func FindBestRoute(
 						amount:   out,
 						parentID: parentIdx,
 						poolIdx:  edge.PoolIdx,
-						dir:      edge.Dir,
+						tokenIn:  edge.TokenIn,
 						token:    tok,
 					})
 					tokenBest[tok] = append(entries, topEntry{amount: out, nodeIdx: nodeIdx})
@@ -194,7 +199,7 @@ func FindBestRoute(
 							amount:   out,
 							parentID: parentIdx,
 							poolIdx:  edge.PoolIdx,
-							dir:      edge.Dir,
+							tokenIn:  edge.TokenIn,
 							token:    tok,
 						})
 						entries[worstIdx] = topEntry{amount: out, nodeIdx: nodeIdx}
@@ -269,11 +274,7 @@ func FindBestRoute(
 			poolAddrs = append(poolAddrs, p.Address)
 			poolTypes = append(poolTypes, p.PoolType)
 			extraDatas = append(extraDatas, p.ExtraData)
-			if node.dir {
-				tokenPairs = append(tokenPairs, p.Tokens[0], p.Tokens[1])
-			} else {
-				tokenPairs = append(tokenPairs, p.Tokens[1], p.Tokens[0])
-			}
+			tokenPairs = append(tokenPairs, node.tokenIn, node.token)
 			idx = node.parentID
 		}
 

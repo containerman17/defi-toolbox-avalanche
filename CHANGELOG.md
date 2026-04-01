@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-04-01 — Multi-token PoolQuoter interface
+
+### Interface change: `Quote(amountIn, zeroForOne bool)` → `Quote(amountIn, tokenIn, tokenOut)`
+Replaced the boolean direction with explicit token addresses throughout the entire stack.
+This enables N-token pools (Balancer V2/V3 with 3-7 tokens) that were previously impossible
+to quote — the boolean could only express 2 directions.
+
+- **PoolQuoter interface**: all 10 pool type implementations updated
+- **PoolManager**: `poolTokens []common.Address`, `balanceCache []uint256.Int`, variadic `SetPoolTokens`
+- **Quote cache key**: struct `{amountIn, tokenIn, tokenOut}` (was bit-packed uint256)
+- **FoT wrapper**: `models map[common.Address]TokenModel` (was `model0, model1`)
+- **deadDirQuoter**: `deadTokens map[common.Address]bool` (was `deadDir0, deadDir1 bool`)
+- **deadPoolDirs**: `map[pool]deadInputToken` (was `map[pool]directionInt`)
+- **Pathfinder BFS**: `PoolEdge.TokenIn` replaces `Dir bool`, N*(N-1) edges for multi-token pools
+- **Balancer V2**: removed >2 token filter, added GENERAL specialization (0) support
+- **Balancer V3**: removed >2 token filter, token→index lookup via address
+- **Benchmark**: iterates all N*(N-1) token pairs, multi-token EVM ground truth
+- **All callers updated**: arb bot, arb3, arb1, arb2, quoter examples, discover tool
+
+Results: 4076 match / 4142 tested = 98.4% (was 3929/3975 = 98.8%).
+The slight percentage drop is from newly-tested multi-token pools without formulas (WooFi 10-token, Platypus 5-token). Absolute matches increased by 147. Speed: 9.0ms (was 8.4ms) for 4.2% more quotes.
+
 ## 2026-04-01 — Full session: performance + coverage + benchmark overhaul
 
 ### Final results: 98.8% correct (3929/3975 tested, 46 mismatches)

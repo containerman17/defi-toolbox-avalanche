@@ -49,11 +49,10 @@ func (pt *PoolTable) Lookup(addr common.Address) (uint16, bool) {
 	return i, ok
 }
 // Cycle is a compact representation: fixed-size arrays, pool indices instead of addresses.
-// 18 bytes per cycle (vs ~300+ with slices).
 type Cycle struct {
-	Hops  uint8       // number of hops (2–4)
-	Pools [4]uint16   // pool indices (only [0..Hops-1] valid)
-	Dirs  [4]bool     // zeroForOne per hop
+	Hops     uint8              // number of hops (2–4)
+	Pools    [4]uint16          // pool indices (only [0..Hops-1] valid)
+	TokenIns [4]common.Address  // tokenIn per hop
 }
 
 // TokenAt returns the token at position i in the path (0 = hub, Hops = hub).
@@ -61,12 +60,8 @@ func (c *Cycle) TokenAt(pt *PoolTable, hub common.Address, i int) common.Address
 	if i == 0 || i == int(c.Hops) {
 		return hub
 	}
-	// Token at position i = output of hop i-1
-	p := c.Pools[i-1]
-	if c.Dirs[i-1] {
-		return pt.Token1(p) // zeroForOne: output is token1
-	}
-	return pt.Token0(p) // oneForZero: output is token0
+	// Token at position i = tokenIn of hop i
+	return c.TokenIns[i]
 }
 
 // ExpandTokens returns the full token path [hub, ..., hub] for EVM encoding.
@@ -110,14 +105,18 @@ func (c *Cycle) ExpandExtraDatas(pt *PoolTable) []string {
 // compactEdge is a formula-only edge in the token graph.
 type compactEdge struct {
 	poolIdx  uint16
+	tokenIn  common.Address
 	tokenOut common.Address
-	dir      bool // zeroForOne
 }
 
 // buildFormulaGraph builds an adjacency list using only formula-supported pools.
 func buildFormulaGraph(graph *pf.Graph, pt *PoolTable, registry *formulas.Registry) map[common.Address][]compactEdge {
 	edges := make(map[common.Address][]compactEdge)
-	seen := make(map[uint32]bool) // (poolIdx<<1 | dirBit) dedup
+	type edgeKey struct {
+		poolIdx  uint16
+		tokenIn  common.Address
+	}
+	seen := make(map[edgeKey]bool)
 
 	for tokenIn, graphEdges := range graph.Edges {
 		for _, e := range graphEdges {
@@ -129,19 +128,15 @@ func buildFormulaGraph(graph *pf.Graph, pt *PoolTable, registry *formulas.Regist
 			if !known {
 				continue
 			}
-			dir := e.Pool.Tokens[0] == tokenIn
-			key := uint32(idx)<<1
-			if dir {
-				key |= 1
-			}
+			key := edgeKey{idx, tokenIn}
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
 			edges[tokenIn] = append(edges[tokenIn], compactEdge{
 				poolIdx:  idx,
+				tokenIn:  tokenIn,
 				tokenOut: e.TokenOut,
-				dir:      dir,
 			})
 		}
 	}
@@ -229,10 +224,10 @@ func EnumerateCycles(graph *pf.Graph, pools []pf.Pool, hub common.Address, maxHo
 
 // dfsFrame is a zero-allocation stack frame for the DFS.
 type dfsFrame struct {
-	token common.Address
-	depth uint8
-	pools [4]uint16
-	dirs  [4]bool
+	token    common.Address
+	depth    uint8
+	pools    [4]uint16
+	tokenIns [4]common.Address
 }
 
 // enumerateFromEdge runs DFS from a single first edge off hub.
@@ -247,10 +242,10 @@ func enumerateFromEdge(
 	// Pre-allocate stack (max branching is bounded by maxHops)
 	stack := make([]dfsFrame, 0, 256)
 	stack = append(stack, dfsFrame{
-		token: firstEdge.tokenOut,
-		depth: 1,
-		pools: [4]uint16{firstEdge.poolIdx},
-		dirs:  [4]bool{firstEdge.dir},
+		token:    firstEdge.tokenOut,
+		depth:    1,
+		pools:    [4]uint16{firstEdge.poolIdx},
+		tokenIns: [4]common.Address{firstEdge.tokenIn},
 	})
 
 	for len(stack) > 0 {
@@ -276,8 +271,8 @@ func enumerateFromEdge(
 					c := Cycle{Hops: f.depth + 1}
 					copy(c.Pools[:], f.pools[:])
 					c.Pools[f.depth] = e.poolIdx
-					copy(c.Dirs[:], f.dirs[:])
-					c.Dirs[f.depth] = e.dir
+					copy(c.TokenIns[:], f.tokenIns[:])
+					c.TokenIns[f.depth] = e.tokenIn
 					*out = append(*out, c)
 				}
 			} else if f.depth+1 < uint8(maxHops) {
@@ -289,8 +284,8 @@ func enumerateFromEdge(
 					}
 					copy(nf.pools[:], f.pools[:])
 					nf.pools[f.depth] = e.poolIdx
-					copy(nf.dirs[:], f.dirs[:])
-					nf.dirs[f.depth] = e.dir
+					copy(nf.tokenIns[:], f.tokenIns[:])
+					nf.tokenIns[f.depth] = e.tokenIn
 					stack = append(stack, nf)
 				}
 			}

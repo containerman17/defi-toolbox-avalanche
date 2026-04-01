@@ -41,7 +41,7 @@ var chainID = big.NewInt(43114)
 type poolEdge struct {
 	poolIdx  uint16
 	tokenOut common.Address
-	dir      bool // zeroForOne
+	tokenIn  common.Address
 }
 
 // ── Prescreen: rated edges for f64 path enumeration ──
@@ -54,7 +54,7 @@ type rateProbe struct {
 type ratedEdge struct {
 	poolIdx  uint16
 	tokenOut common.Address
-	dir      bool
+	tokenIn  common.Address
 	probes   [3]rateProbe
 	probeLen int
 }
@@ -101,7 +101,7 @@ func buildTokenPrices(pm *formulas.PoolManager, adj map[common.Address][]poolEdg
 		if _, priced := prices[edge.tokenOut]; priced {
 			continue
 		}
-		out := pm.Quote(pools[edge.poolIdx].Address, oneAVAX, edge.dir)
+		out := pm.Quote(pools[edge.poolIdx].Address, oneAVAX, edge.tokenIn, edge.tokenOut)
 		if !out.IsZero() {
 			f := out.Float64()
 			if existing, ok := prices[edge.tokenOut]; !ok || f > existing {
@@ -132,7 +132,7 @@ func buildTokenPrices(pm *formulas.PoolManager, adj map[common.Address][]poolEdg
 			if _, priced := prices[edge.tokenOut]; priced {
 				continue
 			}
-			out := pm.Quote(pools[edge.poolIdx].Address, amt, edge.dir)
+			out := pm.Quote(pools[edge.poolIdx].Address, amt, edge.tokenIn, edge.tokenOut)
 			if !out.IsZero() {
 				// out = how many tokens of edge.tokenOut you get for tokPrice units of tok
 				// tokPrice units of tok ≈ 1 AVAX, so out ≈ price of edge.tokenOut per AVAX
@@ -168,7 +168,7 @@ func buildPrescreenData(pm *formulas.PoolManager, adj map[common.Address][]poolE
 			re := ratedEdge{
 				poolIdx:  edge.poolIdx,
 				tokenOut: edge.tokenOut,
-				dir:      edge.dir,
+				tokenIn:  edge.tokenIn,
 			}
 
 			for pi, scale := range probeScales {
@@ -182,7 +182,7 @@ func buildPrescreenData(pm *formulas.PoolManager, adj map[common.Address][]poolE
 					continue
 				}
 
-				out := pm.Quote(pools[edge.poolIdx].Address, amt, edge.dir)
+				out := pm.Quote(pools[edge.poolIdx].Address, amt, edge.tokenIn, edge.tokenOut)
 				if out.IsZero() {
 					continue
 				}
@@ -402,14 +402,15 @@ type bfsEntry struct {
 	amount   uint256.Int
 	parentID int32  // index into flat entries array (-1 for root)
 	pool     uint16 // pool index that produced this
-	dir      bool
+	tokenIn  common.Address
 }
 
 // bfsPath is a reconstructed path from backtracking.
 type bfsPath struct {
-	pools      []uint16
-	dirs       []bool
-	amountIn   *uint256.Int
+	pools     []uint16
+	tokenIns  []common.Address
+	tokenOuts []common.Address
+	amountIn  *uint256.Int
 	formulaOut uint256.Int
 }
 
@@ -490,7 +491,7 @@ func formulaBFS(
 					}
 
 					quoteCount++
-					out := pm.Quote(pools[edge.poolIdx].Address, &entry.amount, edge.dir)
+					out := pm.Quote(pools[edge.poolIdx].Address, &entry.amount, edge.tokenIn, edge.tokenOut)
 					if out.IsZero() {
 						continue
 					}
@@ -510,7 +511,7 @@ func formulaBFS(
 						amount:   out,
 						parentID: eid,
 						pool:     edge.poolIdx,
-						dir:      edge.dir,
+						tokenIn:  edge.tokenIn,
 					})
 
 					// Top-3 per token
@@ -543,11 +544,13 @@ func formulaBFS(
 func backtrack(allEntries []bfsEntry, lastEntryID int32, finalEdge poolEdge, startAmount *uint256.Int) bfsPath {
 	// Collect hops in reverse: final edge first, then walk parent chain
 	var poolsList []uint16
-	var dirsList []bool
+	var tokenInsList []common.Address
+	var tokenOutsList []common.Address
 
 	// The final hop (into hub)
 	poolsList = append(poolsList, finalEdge.poolIdx)
-	dirsList = append(dirsList, finalEdge.dir)
+	tokenInsList = append(tokenInsList, finalEdge.tokenIn)
+	tokenOutsList = append(tokenOutsList, finalEdge.tokenOut)
 
 	// Walk backwards
 	eid := lastEntryID
@@ -557,20 +560,23 @@ func backtrack(allEntries []bfsEntry, lastEntryID int32, finalEdge poolEdge, sta
 			break // root — don't add, it's the starting point
 		}
 		poolsList = append(poolsList, e.pool)
-		dirsList = append(dirsList, e.dir)
+		tokenInsList = append(tokenInsList, e.tokenIn)
+		tokenOutsList = append(tokenOutsList, e.token)
 		eid = e.parentID
 	}
 
 	// Reverse to get forward order
 	for i, j := 0, len(poolsList)-1; i < j; i, j = i+1, j-1 {
 		poolsList[i], poolsList[j] = poolsList[j], poolsList[i]
-		dirsList[i], dirsList[j] = dirsList[j], dirsList[i]
+		tokenInsList[i], tokenInsList[j] = tokenInsList[j], tokenInsList[i]
+		tokenOutsList[i], tokenOutsList[j] = tokenOutsList[j], tokenOutsList[i]
 	}
 
 	return bfsPath{
-		pools:    poolsList,
-		dirs:     dirsList,
-		amountIn: new(uint256.Int).Set(startAmount),
+		pools:     poolsList,
+		tokenIns:  tokenInsList,
+		tokenOuts: tokenOutsList,
+		amountIn:  new(uint256.Int).Set(startAmount),
 	}
 }
 
@@ -689,13 +695,8 @@ func evmVerifyPath(
 		poolAddrs[h] = p.Address
 		poolTypes[h] = p.PoolType
 		extraDatas[h] = p.ExtraData
-		if path.dirs[h] {
-			tokenPairs[h*2] = p.Tokens[0]
-			tokenPairs[h*2+1] = p.Tokens[1]
-		} else {
-			tokenPairs[h*2] = p.Tokens[1]
-			tokenPairs[h*2+1] = p.Tokens[0]
-		}
+		tokenPairs[h*2] = path.tokenIns[h]
+		tokenPairs[h*2+1] = path.tokenOuts[h]
 	}
 
 	calldata := pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(1))
@@ -725,15 +726,20 @@ func quoteAVAXPrice(pools []pf.Pool, pm *formulas.PoolManager, wavax, hubToken c
 		if len(p.Tokens) < 2 {
 			continue
 		}
-		var zeroForOne bool
-		if p.Tokens[0] == wavax && p.Tokens[1] == hubToken {
-			zeroForOne = true
-		} else if p.Tokens[1] == wavax && p.Tokens[0] == hubToken {
-			zeroForOne = false
-		} else {
+		hasWavax := false
+		hasHub := false
+		for _, t := range p.Tokens {
+			if t == wavax {
+				hasWavax = true
+			}
+			if t == hubToken {
+				hasHub = true
+			}
+		}
+		if !hasWavax || !hasHub {
 			continue
 		}
-		out := pm.Quote(p.Address, oneAVAX, zeroForOne)
+		out := pm.Quote(p.Address, oneAVAX, wavax, hubToken)
 		if out.Gt(&bestPrice) {
 			bestPrice = out
 		}
@@ -1058,7 +1064,7 @@ func main() {
 	pm := formulas.NewPoolManager(registry, stateReader)
 	for _, p := range pools {
 		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolTokens(p.Address, p.Tokens...)
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
@@ -1097,8 +1103,13 @@ func main() {
 			continue
 		}
 		idx := uint16(i)
-		adj[p.Tokens[0]] = append(adj[p.Tokens[0]], poolEdge{idx, p.Tokens[1], true})
-		adj[p.Tokens[1]] = append(adj[p.Tokens[1]], poolEdge{idx, p.Tokens[0], false})
+		for ti := range p.Tokens {
+			for tj := range p.Tokens {
+				if ti != tj {
+					adj[p.Tokens[ti]] = append(adj[p.Tokens[ti]], poolEdge{idx, p.Tokens[tj], p.Tokens[ti]})
+				}
+			}
+		}
 		poolCount++
 	}
 	fmt.Fprintf(os.Stderr, "[arb4] adjacency: %d tokens, %d pools\n", len(adj), poolCount)
@@ -1188,9 +1199,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "        formula hop-by-hop:\n")
 		for h := 0; h < len(path.pools); h++ {
 			p := &pools[path.pools[h]]
-			out := pm.Quote(p.Address, currentFormula, path.dirs[h])
-			fmt.Fprintf(os.Stderr, "          hop%d: %s (%s) dir=%v in=%s out=%s\n",
-				h+1, p.Address.Hex()[:12], p.Dex, path.dirs[h], currentFormula.Dec(), out.Dec())
+			out := pm.Quote(p.Address, currentFormula, path.tokenIns[h], path.tokenOuts[h])
+			fmt.Fprintf(os.Stderr, "          hop%d: %s (%s) %s→%s in=%s out=%s\n",
+				h+1, p.Address.Hex()[:12], p.Dex, path.tokenIns[h].Hex()[:8], path.tokenOuts[h].Hex()[:8], currentFormula.Dec(), out.Dec())
 			currentFormula.Set(&out)
 		}
 
@@ -1201,12 +1212,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "        evm hop-by-hop (debugSwapSingle):\n")
 		for h := 0; h < len(path.pools); h++ {
 			p := &pools[path.pools[h]]
-			var tokenIn, tokenOut common.Address
-			if path.dirs[h] {
-				tokenIn, tokenOut = p.Tokens[0], p.Tokens[1]
-			} else {
-				tokenIn, tokenOut = p.Tokens[1], p.Tokens[0]
-			}
+			tokenIn, tokenOut := path.tokenIns[h], path.tokenOuts[h]
 			calldata := pf.EncodeSwapSingleWithExtra(p.Address, p.PoolType, tokenIn, tokenOut, currentEVM, p.ExtraData)
 			cs := statedb.NewCallState(baseWithOverrides)
 			ret, gas, err := evmCtx.ExecuteWithCallState(cs, common.Address{}, routerAddr, calldata)
@@ -1216,7 +1222,7 @@ func main() {
 			}
 			evmOut := new(uint256.Int).SetBytes(ret[:32])
 			match := "MATCH"
-			fOut := pm.Quote(p.Address, currentEVM, path.dirs[h])
+			fOut := pm.Quote(p.Address, currentEVM, tokenIn, tokenOut)
 			if !evmOut.Eq(&fOut) {
 				if evmOut.IsZero() {
 					match = "MISMATCH formula=" + fOut.Dec() + " evm=0"

@@ -39,8 +39,9 @@ type poolAmountKey struct {
 }
 
 type quoteKey struct {
-	pool common.Address
-	dir  int
+	pool    common.Address
+	dirIn   int // input token index
+	dirOut  int // output token index
 }
 
 type typeStats struct {
@@ -107,7 +108,7 @@ func runBlockBenchmark(
 	})
 	for i := range pools {
 		if len(pools[i].Tokens) >= 2 {
-			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens[0], pools[i].Tokens[1])
+			pm.SetPoolTokens(pools[i].Address, pools[i].Tokens...)
 		}
 		pm.SetPoolType(pools[i].Address, pools[i].PoolType, pools[i].Dex)
 	}
@@ -135,14 +136,14 @@ func runBlockBenchmark(
 		if len(pool.Tokens) < 2 {
 			continue
 		}
-		for _, ti := range [][2]int{{0, 1}, {1, 0}} {
-			if amt, ok := tokenAmounts[pool.Tokens[ti[0]]]; ok {
-				poolAmounts[poolAmountKey{pool.Address, ti[0]}] = amt
+		hasAny := false
+		for ti, tok := range pool.Tokens {
+			if amt, ok := tokenAmounts[tok]; ok {
+				poolAmounts[poolAmountKey{pool.Address, ti}] = amt
+				hasAny = true
 			}
 		}
-		_, has0 := poolAmounts[poolAmountKey{pool.Address, 0}]
-		_, has1 := poolAmounts[poolAmountKey{pool.Address, 1}]
-		if !has0 && !has1 {
+		if !hasAny {
 			skipped++
 		}
 	}
@@ -159,8 +160,9 @@ func runBlockBenchmark(
 
 	// Phase 1a: forward direction (known amount → pool) in parallel
 	type fwdWork struct {
-		poolIdx int
-		fwdDir  int // which token index has the known amount
+		poolIdx  int
+		fwdDir   int // input token index
+		revDir   int // output token index
 	}
 	var fwdJobs []fwdWork
 	for i := range pools {
@@ -168,12 +170,25 @@ func runBlockBenchmark(
 		if len(pool.Tokens) < 2 {
 			continue
 		}
-		// Pick the direction where we have a token amount.
-		// Prefer token0 as input (dir=0) if available, else token1 (dir=1).
-		if poolAmounts[poolAmountKey{pool.Address, 0}] != nil {
-			fwdJobs = append(fwdJobs, fwdWork{i, 0})
-		} else if poolAmounts[poolAmountKey{pool.Address, 1}] != nil {
-			fwdJobs = append(fwdJobs, fwdWork{i, 1})
+		if len(pool.Tokens) == 2 {
+			// 2-token pool: pick the direction where we have a token amount
+			if poolAmounts[poolAmountKey{pool.Address, 0}] != nil {
+				fwdJobs = append(fwdJobs, fwdWork{i, 0, 1})
+			} else if poolAmounts[poolAmountKey{pool.Address, 1}] != nil {
+				fwdJobs = append(fwdJobs, fwdWork{i, 1, 0})
+			}
+		} else {
+			// N-token pool: create a job for each pair with a known input amount
+			for ti := range pool.Tokens {
+				if poolAmounts[poolAmountKey{pool.Address, ti}] == nil {
+					continue
+				}
+				for tj := range pool.Tokens {
+					if ti != tj {
+						fwdJobs = append(fwdJobs, fwdWork{i, ti, tj})
+					}
+				}
+			}
 		}
 	}
 
@@ -186,7 +201,7 @@ func runBlockBenchmark(
 			defer wg.Done()
 			pool := &pools[j.poolIdx]
 			tokenIn := pool.Tokens[j.fwdDir]
-			tokenOut := pool.Tokens[1-j.fwdDir]
+			tokenOut := pool.Tokens[j.revDir]
 			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 
 			ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
@@ -194,11 +209,11 @@ func runBlockBenchmark(
 				var out uint256.Int
 				out.SetBytes(ret[:32])
 				groundMu.Lock()
-				evmGround[quoteKey{pool.Address, j.fwdDir}] = out
-				// Set the reverse direction's amount to this EVM output
-				if !out.IsZero() {
+				evmGround[quoteKey{pool.Address, j.fwdDir, j.revDir}] = out
+				// For 2-token pools: set the reverse direction's amount to this EVM output
+				if !out.IsZero() && len(pool.Tokens) == 2 {
 					revAmt := new(uint256.Int).Set(&out)
-					poolAmounts[poolAmountKey{pool.Address, 1 - j.fwdDir}] = revAmt
+					poolAmounts[poolAmountKey{pool.Address, j.revDir}] = revAmt
 				}
 				groundMu.Unlock()
 			}
@@ -206,12 +221,16 @@ func runBlockBenchmark(
 	}
 	wg.Wait()
 
-	// Phase 1b: reverse direction (EVM forward output → pool) in parallel
+	// Phase 1b: reverse direction (EVM forward output → pool) — only for 2-token pools
 	var revJobs []fwdWork
 	for _, job := range fwdJobs {
-		revDir := 1 - job.fwdDir
-		if poolAmounts[poolAmountKey{pools[job.poolIdx].Address, revDir}] != nil {
-			revJobs = append(revJobs, fwdWork{job.poolIdx, revDir})
+		pool := &pools[job.poolIdx]
+		if len(pool.Tokens) != 2 {
+			continue // multi-token pools already have all pairs from phase 1a
+		}
+		revDir := job.revDir
+		if poolAmounts[poolAmountKey{pool.Address, revDir}] != nil {
+			revJobs = append(revJobs, fwdWork{job.poolIdx, revDir, job.fwdDir})
 		}
 	}
 	for _, job := range revJobs {
@@ -220,7 +239,7 @@ func runBlockBenchmark(
 			defer wg.Done()
 			pool := &pools[j.poolIdx]
 			tokenIn := pool.Tokens[j.fwdDir]
-			tokenOut := pool.Tokens[1-j.fwdDir]
+			tokenOut := pool.Tokens[j.revDir]
 			amountIn := poolAmounts[poolAmountKey{pool.Address, j.fwdDir}]
 			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
 
@@ -229,7 +248,7 @@ func runBlockBenchmark(
 				var out uint256.Int
 				out.SetBytes(ret[:32])
 				groundMu.Lock()
-				evmGround[quoteKey{pool.Address, j.fwdDir}] = out
+				evmGround[quoteKey{pool.Address, j.fwdDir, j.revDir}] = out
 				groundMu.Unlock()
 			}
 		}(job)
@@ -243,28 +262,29 @@ func runBlockBenchmark(
 	p2t0 := time.Now()
 	for i := range pools {
 		pool := &pools[i]
-		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-				continue
-			}
-			amountIn := poolAmounts[poolAmountKey{pool.Address, tokenIdx[0]}]
-			if amountIn == nil {
-				continue // skipped pool (no hub token)
-			}
-			tokenIn := pool.Tokens[tokenIdx[0]]
-			tokenOut := pool.Tokens[tokenIdx[1]]
-			zeroForOne := tokenIn.Cmp(tokenOut) < 0
-
-			if !skipFormulas {
-				if useCache {
-					pm.Quote(pool.Address, amountIn, zeroForOne)
-				} else {
-					pm.Get(pool.Address).Quote(amountIn, zeroForOne)
+		for ti := range pool.Tokens {
+			for tj := range pool.Tokens {
+				if ti == tj {
+					continue
 				}
-			} else {
-				calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
-				cs.Reset()
-				evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+				amountIn := poolAmounts[poolAmountKey{pool.Address, ti}]
+				if amountIn == nil {
+					continue
+				}
+				tokenIn := pool.Tokens[ti]
+				tokenOut := pool.Tokens[tj]
+
+				if !skipFormulas {
+					if useCache {
+						pm.Quote(pool.Address, amountIn, tokenIn, tokenOut)
+					} else {
+						pm.Get(pool.Address).Quote(amountIn, tokenIn, tokenOut)
+					}
+				} else {
+					calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
+					cs.Reset()
+					evmCtx.ExecuteWithCallState(cs, DUMMY_SENDER, ROUTER, calldata)
+				}
 			}
 		}
 	}
@@ -289,21 +309,21 @@ func runBlockBenchmark(
 
 	for i := range pools {
 		pool := &pools[i]
-		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-				continue
-			}
-			amountIn := poolAmounts[poolAmountKey{pool.Address, tokenIdx[0]}]
+		for ti := range pool.Tokens {
+			for tj := range pool.Tokens {
+				if ti == tj {
+					continue
+				}
+			amountIn := poolAmounts[poolAmountKey{pool.Address, ti}]
 			if amountIn == nil {
 				continue // skipped pool (no hub token)
 			}
 			ts := getStats(pool.PoolType)
 			ts.Quotes++
-			tokenIn := pool.Tokens[tokenIdx[0]]
-			tokenOut := pool.Tokens[tokenIdx[1]]
-			zeroForOne := tokenIn.Cmp(tokenOut) < 0
+			tokenIn := pool.Tokens[ti]
+			tokenOut := pool.Tokens[tj]
 
-			key := quoteKey{pool.Address, tokenIdx[0]}
+			key := quoteKey{pool.Address, ti, tj}
 			evmResult := evmGround[key]
 			if !evmResult.IsZero() {
 				ts.NonZero++
@@ -311,9 +331,9 @@ func runBlockBenchmark(
 
 			var result uint256.Int
 			if useCache {
-				result = pm.Quote(pool.Address, amountIn, zeroForOne)
+				result = pm.Quote(pool.Address, amountIn, tokenIn, tokenOut)
 			} else {
-				result = pm.QuoteBypassQuoteCache(pool.Address, amountIn, zeroForOne)
+				result = pm.QuoteBypassQuoteCache(pool.Address, amountIn, tokenIn, tokenOut)
 			}
 			ts.Formula++
 
@@ -343,9 +363,10 @@ func runBlockBenchmark(
 					mismatchSet[key] = true
 					if len(mismatchLog) < 200 {
 						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s (pool#%d)",
-							pool.Address.Hex(), tokenIdx[0], result.Dec(), evmResult.Dec(), i+2))
+							pool.Address.Hex(), ti, result.Dec(), evmResult.Dec(), i+2))
 					}
 				}
+			}
 			}
 		}
 	}
@@ -552,31 +573,28 @@ func main() {
 		first := results[0]
 		for i := range pools {
 			pool := &pools[i]
-			for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-				if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-					continue
-				}
-				key := quoteKey{pool.Address, tokenIdx[0]}
-				ts := aggGetStats(pool.PoolType)
-				ts.Quotes++
-
-				// Check if mismatched on any block
-				anyMismatch := false
-				for _, res := range results {
-					if res.mismatchSet[key] {
-						anyMismatch = true
-						break
+			for ti := range pool.Tokens {
+				for tj := range pool.Tokens {
+					if ti == tj {
+						continue
 					}
-				}
-				if anyMismatch {
-					ts.Mismatch++
-				} else {
-					ts.Match++
-				}
+					key := quoteKey{pool.Address, ti, tj}
+					ts := aggGetStats(pool.PoolType)
+					ts.Quotes++
 
-				// Aggregate non-zero and formula/EVM from first block
-				if firstStats, ok := first.byType[pool.PoolType]; ok {
-					_ = firstStats // NonZero counted per-key below
+					// Check if mismatched on any block
+					anyMismatch := false
+					for _, res := range results {
+						if res.mismatchSet[key] {
+							anyMismatch = true
+							break
+						}
+					}
+					if anyMismatch {
+						ts.Mismatch++
+					} else {
+						ts.Match++
+					}
 				}
 			}
 		}
@@ -736,11 +754,6 @@ func registerBalancerV3Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 		if p.PoolType != 6 || len(p.Tokens) < 2 {
 			continue
 		}
-		// Only handle 2-token pools for now
-		if len(p.Tokens) != 2 {
-			continue
-		}
-
 		poolAddr := strings.ToLower(p.Address.Hex())
 
 		// Read per-token types and rate providers from vault storage.
@@ -849,16 +862,10 @@ func registerBalancerV2Pools(pools []pathfinder.Pool, state *statedb.StateDB, cf
 		poolAddr := strings.ToLower(p.Address.Hex())
 		numTokens := len(p.Tokens)
 
-		// Only handle 2-token pools: >2 tokens requires knowing which token pair
-		// is being swapped, which the PoolQuoter interface doesn't expose.
-		if numTokens != 2 {
-			continue
-		}
-
 		// Determine specialization from poolId bytes 20-21 (big-endian).
 		spec := (int(poolId[20]) << 8) | int(poolId[21])
-		if spec != 1 && spec != 2 {
-			// Only MinimalSwapInfo (1) and TwoToken (2) supported.
+		if spec != 0 && spec != 1 && spec != 2 {
+			// General (0), MinimalSwapInfo (1), and TwoToken (2) supported.
 			continue
 		}
 

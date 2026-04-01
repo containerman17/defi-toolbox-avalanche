@@ -25,8 +25,9 @@ type poolRate [2][NumSizeBuckets]float64
 
 // RateTable holds float64 rate ratios (out/in) per pool per direction per size bucket.
 type RateTable struct {
-	rates     map[common.Address]*poolRate
+	rates      map[common.Address]*poolRate
 	poolToken0 map[common.Address]common.Address // pool → token0
+	poolToken1 map[common.Address]common.Address // pool → token1
 	deadPools  map[common.Address]bool            // pools that failed to build (skip until invalidated)
 }
 
@@ -34,6 +35,7 @@ func NewRateTable() *RateTable {
 	return &RateTable{
 		rates:      make(map[common.Address]*poolRate),
 		poolToken0: make(map[common.Address]common.Address),
+		poolToken1: make(map[common.Address]common.Address),
 		deadPools:  make(map[common.Address]bool),
 	}
 }
@@ -43,9 +45,10 @@ func (rt *RateTable) ClearDead(pool common.Address) {
 	delete(rt.deadPools, pool)
 }
 
-// SetPoolToken0 registers a pool's token0 for direction resolution.
-func (rt *RateTable) SetPoolToken0(pool, token0 common.Address) {
+// SetPoolTokens registers a pool's tokens for direction resolution.
+func (rt *RateTable) SetPoolTokens(pool, token0, token1 common.Address) {
 	rt.poolToken0[pool] = token0
+	rt.poolToken1[pool] = token1
 }
 
 // Update re-quotes a pool at all 5 size buckets × 2 directions using the PoolManager.
@@ -55,13 +58,21 @@ func (rt *RateTable) Update(pool common.Address, pm *formulas.PoolManager) bool 
 		return false
 	}
 
+	token0, ok := rt.poolToken0[pool]
+	if !ok {
+		return false
+	}
+	token1 := rt.poolToken1[pool]
+
 	r := &poolRate{}
 	anyOk := false
 
+	// dir 0 = token0→token1, dir 1 = token1→token0
+	tokenIns := [2]common.Address{token0, token1}
+	tokenOuts := [2]common.Address{token1, token0}
 	for dir := 0; dir < 2; dir++ {
-		zeroForOne := dir == 0
 		for s := 0; s < NumSizeBuckets; s++ {
-			out := pm.Quote(pool, SizeBuckets[s], zeroForOne)
+			out := pm.Quote(pool, SizeBuckets[s], tokenIns[dir], tokenOuts[dir])
 			if !out.IsZero() {
 				// Rate = out / in as float64
 				inF := float64FromU256(SizeBuckets[s])
@@ -97,11 +108,12 @@ func (rt *RateTable) Get(pool common.Address, direction int, size int) float64 {
 func (rt *RateTable) ScreenCycle(c *Cycle, pt *PoolTable, size int) float64 {
 	product := 1.0
 	for i := 0; i < int(c.Hops); i++ {
-		dir := 0
-		if !c.Dirs[i] {
-			dir = 1
+		poolAddr := pt.Addr(c.Pools[i])
+		dir := 0 // token0→token1
+		if c.TokenIns[i] != rt.poolToken0[poolAddr] {
+			dir = 1 // token1→token0
 		}
-		r := rt.Get(pt.Addr(c.Pools[i]), dir, size)
+		r := rt.Get(poolAddr, dir, size)
 		if r <= 0 {
 			return 0 // missing rate, can't screen
 		}

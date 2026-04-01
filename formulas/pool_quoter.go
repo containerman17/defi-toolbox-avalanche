@@ -14,7 +14,8 @@ import (
 // Quote() is pure math — no state access, no keccak, no map lookups.
 type PoolQuoter interface {
 	// Quote returns the output amount for a given input. Zero = no output.
-	Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int
+	// tokenIn/tokenOut identify the swap direction (supports N-token pools).
+	Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int
 
 	// Address returns the pool's contract address.
 	Address() common.Address
@@ -24,25 +25,20 @@ type PoolQuoter interface {
 // Used for blacklisted/unknown pools so Get() never returns nil.
 type zeroQuoter struct{ addr common.Address }
 
-func (z *zeroQuoter) Address() common.Address                          { return z.addr }
-func (z *zeroQuoter) Quote(_ *uint256.Int, _ bool) uint256.Int { return uint256.Int{} }
+func (z *zeroQuoter) Address() common.Address { return z.addr }
+func (z *zeroQuoter) Quote(_ *uint256.Int, _, _ common.Address) uint256.Int {
+	return uint256.Int{}
+}
 
 // EVMCaller executes a view call against the current EVM state.
 // Returns (result, true) on success, (nil, false) on revert or error.
 type EVMCaller func(to common.Address, data []byte) ([]byte, bool)
 
-// quoteCacheKey packs (amountIn, direction) into a single lookup key.
-// The last bit of the lowest word encodes direction (safe because real
-// ERC20 amounts never use the full 256-bit range with the low bit mattering).
-type quoteCacheKey = uint256.Int
-
-func makeQuoteCacheKey(amountIn *uint256.Int, zeroForOne bool) quoteCacheKey {
-	var k quoteCacheKey
-	k.Lsh(amountIn, 1)
-	if zeroForOne {
-		k.Or(&k, uint256.NewInt(1))
-	}
-	return k
+// quoteCacheKey identifies a unique (amountIn, tokenIn, tokenOut) triple.
+type quoteCacheKey struct {
+	amountIn uint256.Int
+	tokenIn  common.Address
+	tokenOut common.Address
 }
 
 // QuoteCache is a map-based cache for quote results per pool.
@@ -51,14 +47,14 @@ type QuoteCache struct {
 	entries map[quoteCacheKey]uint256.Int
 }
 
-func (c *QuoteCache) Lookup(amountIn *uint256.Int, zeroForOne bool) (out uint256.Int, hit bool) {
-	key := makeQuoteCacheKey(amountIn, zeroForOne)
+func (c *QuoteCache) Lookup(amountIn *uint256.Int, tokenIn, tokenOut common.Address) (out uint256.Int, hit bool) {
+	key := quoteCacheKey{amountIn: *amountIn, tokenIn: tokenIn, tokenOut: tokenOut}
 	out, hit = c.entries[key]
 	return
 }
 
-func (c *QuoteCache) Store(amountIn *uint256.Int, zeroForOne bool, out uint256.Int) {
-	key := makeQuoteCacheKey(amountIn, zeroForOne)
+func (c *QuoteCache) Store(amountIn *uint256.Int, tokenIn, tokenOut common.Address, out uint256.Int) {
+	key := quoteCacheKey{amountIn: *amountIn, tokenIn: tokenIn, tokenOut: tokenOut}
 	if c.entries == nil {
 		c.entries = make(map[quoteCacheKey]uint256.Int)
 	}
@@ -71,7 +67,7 @@ type PoolManager struct {
 	registry       *Registry
 	reader         StorageReader
 	evmCaller      EVMCaller // optional; used for rate provider calls (Balancer V3 WITH_RATE tokens)
-	poolTokens     map[common.Address][2]common.Address // pool → [token0, token1]
+	poolTokens     map[common.Address][]common.Address // pool → tokens (sorted by address)
 	poolTypes      map[common.Address]int               // pool → poolType from pools.txt
 	poolDex        map[common.Address]string            // pool → DEX provider name (e.g. "pangolin_v2")
 	tokenModels    *TokenModelRegistry
@@ -84,9 +80,9 @@ type PoolManager struct {
 	quoteCaches  map[common.Address]*QuoteCache
 	noQuoteCache map[common.Address]bool // true for LFJ V2 pools
 
-	// Balance cache: pool output token balances for the reserve cap check.
-	// Key: pool address, value: [balance0, balance1]. Invalidated with pool.
-	balanceCache map[common.Address][2]uint256.Int
+	// Balance cache: pool token balances for the reserve cap check.
+	// Key: pool address, value: balances (one per token). Invalidated with pool.
+	balanceCache map[common.Address][]uint256.Int
 
 	// Mutex for thread-safe cache access (quoteCaches + balanceCache).
 	cacheMu sync.RWMutex
@@ -98,14 +94,14 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		pools:        make(map[common.Address]PoolQuoter),
 		registry:     registry,
 		reader:       reader,
-		poolTokens:   make(map[common.Address][2]common.Address),
+		poolTokens:   make(map[common.Address][]common.Address),
 		poolTypes:    make(map[common.Address]int),
 		poolDex:      make(map[common.Address]string),
 		tokenModels:  NewTokenModelRegistry(reader),
 		depSlots:     make(map[common.Address]map[common.Hash]common.Address),
 		quoteCaches:  make(map[common.Address]*QuoteCache),
 		noQuoteCache: make(map[common.Address]bool),
-		balanceCache: make(map[common.Address][2]uint256.Int),
+		balanceCache: make(map[common.Address][]uint256.Int),
 	}
 }
 
@@ -139,9 +135,9 @@ func (pm *PoolManager) SetPoolType(pool common.Address, poolType int, dex string
 	pm.poolDex[pool] = dex
 }
 
-// SetPoolTokens registers the token pair for a pool, enabling FoT adjustment.
-func (pm *PoolManager) SetPoolTokens(pool common.Address, token0, token1 common.Address) {
-	pm.poolTokens[pool] = [2]common.Address{token0, token1}
+// SetPoolTokens registers the tokens for a pool, enabling FoT adjustment and balance cap.
+func (pm *PoolManager) SetPoolTokens(pool common.Address, tokens ...common.Address) {
+	pm.poolTokens[pool] = tokens
 }
 
 // Get returns a PoolQuoter for the given pool, building it if needed.
@@ -170,12 +166,12 @@ func (pm *PoolManager) Get(pool common.Address) PoolQuoter {
 // Quote returns the output for a pool swap, using both pool cache and quote cache.
 // The pool struct is lazily built and cached. Quote results are cached in a map
 // per pool (skipped for LFJ V2 which is time-dependent).
-func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
 	// Check quote cache (read lock)
 	if !pm.noQuoteCache[pool] {
 		pm.cacheMu.RLock()
 		if cache, ok := pm.quoteCaches[pool]; ok {
-			if out, hit := cache.Lookup(amountIn, zeroForOne); hit {
+			if out, hit := cache.Lookup(amountIn, tokenIn, tokenOut); hit {
 				pm.cacheMu.RUnlock()
 				return out
 			}
@@ -185,7 +181,7 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 
 	// Get/build pool struct (pool cache)
 	quoter := pm.Get(pool)
-	out := quoter.Quote(amountIn, zeroForOne)
+	out := quoter.Quote(amountIn, tokenIn, tokenOut)
 
 	// Balance cap: if output exceeds the pool's actual balance of the output token,
 	// the on-chain transfer would revert. Return zero.
@@ -195,18 +191,21 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 			balances, cached := pm.balanceCache[pool]
 			pm.cacheMu.RUnlock()
 			if !cached {
-				balances[0] = pm.readBalanceOf(tokens[0], pool)
-				balances[1] = pm.readBalanceOf(tokens[1], pool)
+				balances = make([]uint256.Int, len(tokens))
+				for i, tok := range tokens {
+					balances[i] = pm.readBalanceOf(tok, pool)
+				}
 				pm.cacheMu.Lock()
 				pm.balanceCache[pool] = balances
 				pm.cacheMu.Unlock()
 			}
-			balIdx := 1
-			if !zeroForOne {
-				balIdx = 0
-			}
-			if !balances[balIdx].IsZero() && out.Gt(&balances[balIdx]) {
-				out = uint256.Int{}
+			for i, tok := range tokens {
+				if tok == tokenOut {
+					if !balances[i].IsZero() && out.Gt(&balances[i]) {
+						out = uint256.Int{}
+					}
+					break
+				}
 			}
 		}
 	}
@@ -219,7 +218,7 @@ func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroFor
 			cache = &QuoteCache{}
 			pm.quoteCaches[pool] = cache
 		}
-		cache.Store(amountIn, zeroForOne, out)
+		cache.Store(amountIn, tokenIn, tokenOut, out)
 		pm.cacheMu.Unlock()
 	}
 
@@ -243,8 +242,8 @@ func (pm *PoolManager) readBalanceOf(token, holder common.Address) uint256.Int {
 
 // QuoteBypassQuoteCache uses the pool cache but skips the quote cache.
 // Use in benchmarks to measure actual formula speed.
-func (pm *PoolManager) QuoteBypassQuoteCache(pool common.Address, amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	return pm.Get(pool).Quote(amountIn, zeroForOne)
+func (pm *PoolManager) QuoteBypassQuoteCache(pool common.Address, amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	return pm.Get(pool).Quote(amountIn, tokenIn, tokenOut)
 }
 
 // BuildQuoterForFormulaID builds a PoolQuoter for a pool using the given formula ID,
@@ -256,7 +255,8 @@ func (pm *PoolManager) BuildQuoterForFormulaID(pool common.Address, formulaID in
 }
 
 func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQuoter) {
-	tokens, hasTokens := pm.poolTokens[pool]
+	tokens := pm.poolTokens[pool]
+	hasTokens := len(tokens) >= 2
 
 	// Recover from panics during construction
 	defer func() {
@@ -279,14 +279,25 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 
 	// Build inner pool struct (concrete type checks to avoid nil-interface issue)
 	poolExempt := hasTokens && IsFotExemptPool(strings.ToLower(pool.Hex()))
-	var model0, model1 TokenModel
+	var fotModels map[common.Address]TokenModel
+	wantFot := false
 	if hasTokens && !poolExempt {
-		t0Hex := strings.ToLower(tokens[0].Hex())
-		t1Hex := strings.ToLower(tokens[1].Hex())
-		model0 = pm.tokenModels.GetModel(t0Hex)
-		model1 = pm.tokenModels.GetModel(t1Hex)
+		fotModels = make(map[common.Address]TokenModel, len(tokens))
+		anyFoT := false
+		allHaveModel := true
+		for _, tok := range tokens {
+			m := pm.tokenModels.GetModel(strings.ToLower(tok.Hex()))
+			if m == nil {
+				allHaveModel = false
+				break
+			}
+			fotModels[tok] = m
+			if m.IsFoT() {
+				anyFoT = true
+			}
+		}
+		wantFot = allHaveModel && anyFoT
 	}
-	wantFot := model0 != nil && model1 != nil && (model0.IsFoT() || model1.IsFoT())
 
 	registerSlots := func() {
 		for _, a := range accessed {
@@ -302,30 +313,34 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		registerSlots()
 		// Wrap with dead direction check for broken tokens (generic, all pool types)
-		dead0, dead1 := false, false
+		var deadTokens map[common.Address]bool
 		if hasTokens {
-			dead0 = brokenTokens[tokens[0]]
-			dead1 = brokenTokens[tokens[1]]
-		}
-		// Pool-specific dead directions override token-level checks
-		if dir, ok := deadPoolDirs[pool]; ok {
-			if dir == 0 {
-				dead0 = true
-			} else {
-				dead1 = true
+			for _, tok := range tokens {
+				if brokenTokens[tok] {
+					if deadTokens == nil {
+						deadTokens = make(map[common.Address]bool)
+					}
+					deadTokens[tok] = true
+				}
 			}
 		}
-		if dead0 || dead1 {
-			inner = &deadDirQuoter{inner: inner, deadDir0: dead0, deadDir1: dead1}
+		// Pool-specific dead directions override token-level checks
+		if deadTok, ok := deadPoolDirs[pool]; ok {
+			if deadTokens == nil {
+				deadTokens = make(map[common.Address]bool)
+			}
+			deadTokens[deadTok] = true
+		}
+		if len(deadTokens) > 0 {
+			inner = &deadDirQuoter{inner: inner, deadTokens: deadTokens}
 		}
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
 			wrapped := &fotPoolQuoter{
-				inner:         inner,
-				model0:        model0,
-				model1:        model1,
-				inputExempt:   IsFotExemptInputPool(poolHex),
-				outputExempt:  IsFotExemptOutputPool(poolHex),
+				inner:        inner,
+				models:       fotModels,
+				inputExempt:  IsFotExemptInputPool(poolHex),
+				outputExempt: IsFotExemptOutputPool(poolHex),
 			}
 			pm.pools[pool] = wrapped
 			return wrapped
@@ -436,54 +451,46 @@ func poolHex(addr common.Address) string {
 	return strings.ToLower(addr.Hex())
 }
 
-// deadPoolDirs lists pools where one direction reverts on-chain but the formula computes
-// a value. Key = pool address, value = direction to block (0 = block zeroForOne, 1 = block !zeroForOne).
-var deadPoolDirs = map[common.Address]int{
-	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): 0, // BTC.b/SolvBTC LFJ V2: dir=0 (BTC.b→SolvBTC) reverts on-chain
-	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): 1, // BIFI/waAvaWAVAX BalancerV3: dir=1 extreme imbalance causes EVM revert
-	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): 0, // NYA/WAVAX UniV3: dir=0 reverts, NYA token is paused
+// deadPoolDirs lists pools where swapping with a specific input token reverts on-chain
+// but the formula computes a value. Key = pool address, value = dead input token address.
+var deadPoolDirs = map[common.Address]common.Address{
+	common.HexToAddress("0x55c211bbe9f63059a4a5a5e0c558c7e410412d98"): common.HexToAddress("0x152b9d0fdc40c096757f570a51e494bd4b943e50"), // BTC.b/SolvBTC LFJ V2: BTC.b as input reverts
+	common.HexToAddress("0x4e0364a85f084b65a61a0e7d2d217fcbe958f9a1"): common.HexToAddress("0xd7da0de6ef4f51d6206bf2a35fcd2030f54c3f7b"), // BIFI/waAvaWAVAX BalancerV3: waAvaWAVAX as input, extreme imbalance
+	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): common.HexToAddress("0x38f9bf9dce51833ec7f03c9dc218197999999999"), // NYA/WAVAX UniV3: NYA as input reverts (paused)
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token
 // causes on-chain reverts. Generic version of V2Pool's deadDir flags — works for all pool types.
 type deadDirQuoter struct {
-	inner    PoolQuoter
-	deadDir0 bool // true = zeroForOne always returns 0 (token0 as input reverts)
-	deadDir1 bool // true = !zeroForOne always returns 0 (token1 as input reverts)
+	inner      PoolQuoter
+	deadTokens map[common.Address]bool // tokens that revert when used as input
 }
 
 func (d *deadDirQuoter) Address() common.Address { return d.inner.Address() }
-func (d *deadDirQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	if zeroForOne && d.deadDir0 {
+func (d *deadDirQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	if d.deadTokens[tokenIn] {
 		return uint256.Int{}
 	}
-	if !zeroForOne && d.deadDir1 {
-		return uint256.Int{}
-	}
-	return d.inner.Quote(amountIn, zeroForOne)
+	return d.inner.Quote(amountIn, tokenIn, tokenOut)
 }
 
 // fotPoolQuoter wraps a PoolQuoter to apply FoT tax adjustments on input/output.
 type fotPoolQuoter struct {
-	inner          PoolQuoter
-	model0         TokenModel // token0's model
-	model1         TokenModel // token1's model
-	inputExempt    bool       // true if pool is in FotExemptInputPools (fee skipped when pool is recipient)
-	outputExempt   bool       // true if pool is in FotExemptOutputPools (fee skipped when pool is sender)
+	inner        PoolQuoter
+	models       map[common.Address]TokenModel // token address → model
+	inputExempt  bool                          // true if pool is in FotExemptInputPools
+	outputExempt bool                          // true if pool is in FotExemptOutputPools
 }
 
 func (f *fotPoolQuoter) Address() common.Address {
 	return f.inner.Address()
 }
 
-func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
-	var modelIn, modelOut TokenModel
-	if zeroForOne {
-		modelIn = f.model0
-		modelOut = f.model1
-	} else {
-		modelIn = f.model1
-		modelOut = f.model0
+func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	modelIn := f.models[tokenIn]
+	modelOut := f.models[tokenOut]
+	if modelIn == nil || modelOut == nil {
+		return f.inner.Quote(amountIn, tokenIn, tokenOut)
 	}
 
 	// Adjust input: if tokenIn is FoT, pool receives less.
@@ -498,7 +505,7 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.In
 		}
 	}
 
-	out := f.inner.Quote(&effectiveIn, zeroForOne)
+	out := f.inner.Quote(&effectiveIn, tokenIn, tokenOut)
 	if out.IsZero() {
 		return uint256.Int{}
 	}

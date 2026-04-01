@@ -56,7 +56,7 @@ func NewQuoter(ls *statedb.LiveState, poolLimit, maxHops int) *Quoter {
 	for i := range pools {
 		p := &pools[i]
 		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolTokens(p.Address, p.Tokens...)
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 		dexMap[p.Address] = p.Dex

@@ -121,7 +121,9 @@ func (p *V2Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *V2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *V2Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
+
 	if zeroForOne && p.deadDir0 {
 		return uint256.Int{}
 	}

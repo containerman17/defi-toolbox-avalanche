@@ -76,7 +76,7 @@ func (p *BalancerV2Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
 	if amountIn.IsZero() {
 		return uint256.Int{}
 	}
@@ -84,21 +84,17 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.I
 		return uint256.Int{}
 	}
 
-	// For 2-token pools, zeroForOne maps directly to index 0→1 or 1→0.
-	// Tokens in info.Tokens are stored in sorted order (ascending address).
-	var indexIn, indexOut int
-	if zeroForOne {
-		indexIn = 0
-		indexOut = 1
-	} else {
-		indexIn = 1
-		indexOut = 0
+	// Find token indices in registration order.
+	indexIn, indexOut := -1, -1
+	for i, tok := range p.info.Tokens {
+		if tok == tokenIn {
+			indexIn = i
+		}
+		if tok == tokenOut {
+			indexOut = i
+		}
 	}
-
-	// Multi-token pools (>2): we only handle 2-token swaps here.
-	// The PoolQuoter interface only provides zeroForOne, which is insufficient
-	// to identify the token pair in a pool with >2 tokens.
-	if len(p.info.Tokens) > 2 {
+	if indexIn < 0 || indexOut < 0 || indexIn == indexOut {
 		return uint256.Int{}
 	}
 
@@ -106,7 +102,7 @@ func (p *BalancerV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.I
 	var rawBalIn, rawBalOut *big.Int
 
 	switch p.info.Specialization {
-	case balV2SpecMinimalSwapInfo:
+	case balV2SpecGeneral, balV2SpecMinimalSwapInfo:
 		rawBalIn = balV2ReadMinimalSwapInfoBalance(p.reader, p.info.PoolId, p.info.Tokens[indexIn])
 		rawBalOut = balV2ReadMinimalSwapInfoBalance(p.reader, p.info.PoolId, p.info.Tokens[indexOut])
 

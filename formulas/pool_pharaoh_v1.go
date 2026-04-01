@@ -38,7 +38,8 @@ func (p *PharaohV1Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *PharaohV1Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *PharaohV1Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 	out := QuotePharaohV1(p.state, amountIn, zeroForOne)
 	if out == nil || out.IsZero() {
 		return uint256.Int{}

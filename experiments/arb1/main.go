@@ -85,7 +85,7 @@ func main() {
 	pm := formulas.NewPoolManager(registry, stateReader)
 	for _, p := range embeddedPools {
 		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolTokens(p.Address, p.Tokens...)
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
@@ -101,10 +101,10 @@ func main() {
 	// Create scanner
 	scanner := NewScanner(cycles, pm, pt, WAVAX)
 
-	// Register pool token0 for direction resolution in rate table
+	// Register pool tokens for direction resolution in rate table
 	for _, p := range embeddedPools {
 		if len(p.Tokens) >= 2 {
-			scanner.RateTable().SetPoolToken0(p.Address, p.Tokens[0])
+			scanner.RateTable().SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
 		}
 	}
 

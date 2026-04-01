@@ -54,7 +54,8 @@ func (p *AlgebraPool) Address() common.Address {
 	return p.addr
 }
 
-func (p *AlgebraPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256.Int) {
+func (p *AlgebraPool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) (result uint256.Int) {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 	defer func() {
 		if r := recover(); r != nil {
 			result = uint256.Int{}

@@ -41,7 +41,7 @@ type nullLFJV2Pool struct {
 }
 
 func (p *nullLFJV2Pool) Address() common.Address { return p.addr }
-func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _ bool) uint256.Int {
+func (p *nullLFJV2Pool) Quote(_ *uint256.Int, _, _ common.Address) uint256.Int {
 	return uint256.Int{}
 }
 
@@ -156,7 +156,8 @@ func (p *LFJV2Pool) SetBlockTimestamp(ts uint64) {
 	p.blockTimestamp = ts
 }
 
-func (p *LFJV2Pool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256.Int) {
+func (p *LFJV2Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) (result uint256.Int) {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 	defer func() {
 		if r := recover(); r != nil {
 			result = uint256.Int{}

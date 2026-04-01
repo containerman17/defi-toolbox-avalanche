@@ -129,7 +129,8 @@ func (p *V4Pool) Address() common.Address {
 	return p.addr
 }
 
-func (p *V4Pool) Quote(amountIn *uint256.Int, zeroForOne bool) uint256.Int {
+func (p *V4Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
+	zeroForOne := tokenIn.Cmp(tokenOut) < 0
 	if amountIn.IsZero() || p.sqrtPriceX96.IsZero() {
 		return uint256.Int{}
 	}

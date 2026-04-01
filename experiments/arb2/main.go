@@ -65,8 +65,8 @@ var debugTokens = map[common.Address]struct {
 
 type poolEdge struct {
 	pool     *pf.Pool
+	tokenIn  common.Address
 	tokenOut common.Address
-	dir      bool // zeroForOne
 }
 
 // stage1 runs price discovery: two waves of quoting to price all tokens in WAVAX terms.
@@ -92,7 +92,7 @@ func stage1(pm *formulas.PoolManager, adj map[common.Address][]poolEdge) (map[co
 				if !priced {
 					continue
 				}
-				out := pm.Quote(e.pool.Address, knownPrice, !e.dir)
+				out := pm.Quote(e.pool.Address, knownPrice, e.tokenOut, token)
 				waveQuotes++
 				if out.IsZero() {
 					continue
@@ -164,6 +164,7 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 		dec0 := decimalScale(decimals[p.Tokens[0]])
 		dec1 := decimalScale(decimals[p.Tokens[1]])
 
+		t0Addr, t1Addr := p.Tokens[0], p.Tokens[1]
 		for s := 0; s < 5; s++ {
 			if t0Price != nil {
 				var amountIn uint256.Int
@@ -172,7 +173,7 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 					amountIn.Div(&amountIn, uint256.NewInt(sizeMultipliers[s].den))
 				}
 				if !amountIn.IsZero() {
-					out := pm.Quote(p.Address, &amountIn, true)
+					out := pm.Quote(p.Address, &amountIn, t0Addr, t1Addr)
 					totalQuotes++
 					if !out.IsZero() {
 						// dir=0: token0 in, token1 out
@@ -192,7 +193,7 @@ func stage2(pm *formulas.PoolManager, pools []pf.Pool, tokenPrice map[common.Add
 					amountIn.Div(&amountIn, uint256.NewInt(sizeMultipliers[s].den))
 				}
 				if !amountIn.IsZero() {
-					out := pm.Quote(p.Address, &amountIn, false)
+					out := pm.Quote(p.Address, &amountIn, t1Addr, t0Addr)
 					totalQuotes++
 					if !out.IsZero() {
 						// dir=1: token1 in, token0 out
@@ -264,12 +265,11 @@ func newPoolIndex(pools []pf.Pool) *poolIndex {
 	return pi
 }
 
-// Cycle is a compact cached cycle: pool indices + directions.
-// 12 bytes per cycle (4 uint16 + 4 bool + 1 hops).
+// Cycle is a compact cached cycle: pool indices + tokenIns.
 type Cycle struct {
-	Hops  int
-	Pools [4]uint16 // indices into poolIndex
-	Dirs  [4]bool   // true = zeroForOne
+	Hops     int
+	Pools    [4]uint16          // indices into poolIndex
+	TokenIns [4]common.Address  // tokenIn per hop
 }
 
 // enumerateCycles does a one-time DFS from hub to find all 2-4 hop cycles.
@@ -277,10 +277,10 @@ func enumerateCycles(adj map[common.Address][]poolEdge, hub common.Address, maxH
 	t0 := time.Now()
 
 	type frame struct {
-		token common.Address
-		depth int
-		pools [4]uint16
-		dirs  [4]bool
+		token    common.Address
+		depth    int
+		pools    [4]uint16
+		tokenIns [4]common.Address
 	}
 
 	// Dedup by canonical key
@@ -310,7 +310,7 @@ func enumerateCycles(adj map[common.Address][]poolEdge, hub common.Address, maxH
 		}
 		f := frame{token: e.tokenOut, depth: 1}
 		f.pools[0] = idx
-		f.dirs[0] = e.dir
+		f.tokenIns[0] = e.tokenIn
 		stack = append(stack, f)
 	}
 
@@ -340,8 +340,8 @@ func enumerateCycles(adj map[common.Address][]poolEdge, hub common.Address, maxH
 				c := Cycle{Hops: newDepth}
 				copy(c.Pools[:], f.pools[:])
 				c.Pools[f.depth] = idx
-				copy(c.Dirs[:], f.dirs[:])
-				c.Dirs[f.depth] = e.dir
+				copy(c.TokenIns[:], f.tokenIns[:])
+				c.TokenIns[f.depth] = e.tokenIn
 				key := canonicalize(&c)
 				if !seen[key] {
 					seen[key] = true
@@ -351,8 +351,8 @@ func enumerateCycles(adj map[common.Address][]poolEdge, hub common.Address, maxH
 				nf := frame{token: e.tokenOut, depth: newDepth}
 				copy(nf.pools[:], f.pools[:])
 				nf.pools[f.depth] = idx
-				copy(nf.dirs[:], f.dirs[:])
-				nf.dirs[f.depth] = e.dir
+				copy(nf.tokenIns[:], f.tokenIns[:])
+				nf.tokenIns[f.depth] = e.tokenIn
 				stack = append(stack, nf)
 			}
 		}
@@ -401,7 +401,7 @@ type stage3Result struct {
 
 // stage3 scores cached cycles against the rate table.
 // Returns top N candidates sorted by absolute profit descending.
-func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
+func stage3(cycles []Cycle, rates []PoolRate, pools []pf.Pool, topN int) []stage3Result {
 	t0 := time.Now()
 
 	results := make([]stage3Result, 0, topN+1)
@@ -414,9 +414,9 @@ func stage3(cycles []Cycle, rates []PoolRate, topN int) []stage3Result {
 			product := 1.0
 			valid := true
 			for h := 0; h < c.Hops; h++ {
-				dir := 0
-				if !c.Dirs[h] {
-					dir = 1
+				dir := 0 // token0→token1
+				if len(pools[c.Pools[h]].Tokens) >= 2 && c.TokenIns[h] != pools[c.Pools[h]].Tokens[0] {
+					dir = 1 // token1→token0
 				}
 				r := rates[c.Pools[h]].Rate[dir][s]
 				if r == 0 {
@@ -481,12 +481,12 @@ func expandCycle(c *Cycle, pools []pf.Pool, hub common.Address) (
 		poolAddrs[h] = p.Address
 		poolTypes[h] = p.PoolType
 		extraDatas[h] = p.ExtraData
-		if c.Dirs[h] {
-			tokenPairs[h*2] = p.Tokens[0]
-			tokenPairs[h*2+1] = p.Tokens[1]
+		tokenPairs[h*2] = c.TokenIns[h]
+		// tokenOut = next hop's tokenIn, or hub for last hop
+		if h+1 < n {
+			tokenPairs[h*2+1] = c.TokenIns[h+1]
 		} else {
-			tokenPairs[h*2] = p.Tokens[1]
-			tokenPairs[h*2+1] = p.Tokens[0]
+			tokenPairs[h*2+1] = hub
 		}
 	}
 	return
@@ -914,7 +914,7 @@ func main() {
 	pm := formulas.NewPoolManager(registry, stateReader)
 	for _, p := range pools {
 		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens[0], p.Tokens[1])
+			pm.SetPoolTokens(p.Address, p.Tokens...)
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
@@ -938,9 +938,13 @@ func main() {
 		if !known {
 			continue
 		}
-		t0, t1 := p.Tokens[0], p.Tokens[1]
-		adj[t0] = append(adj[t0], poolEdge{p, t1, true})
-		adj[t1] = append(adj[t1], poolEdge{p, t0, false})
+		for ti, tokenIn := range p.Tokens {
+			for tj, tokenOut := range p.Tokens {
+				if ti != tj {
+					adj[tokenIn] = append(adj[tokenIn], poolEdge{p, tokenIn, tokenOut})
+				}
+			}
+		}
 	}
 	fmt.Fprintf(os.Stderr, "[arb2] adjacency: %d tokens\n", len(adj))
 
@@ -1019,7 +1023,7 @@ func main() {
 		} else {
 			hubs[i].price = uint256.NewInt(1_000_000_000_000_000_000) // fallback: 1:1
 		}
-		s3results := stage3(hubs[i].cycles, rateTable, topN)
+		s3results := stage3(hubs[i].cycles, rateTable, pools, topN)
 		best := stage4(s3results, hubs[i].cycles, pools, state, cfg, hubs[i].token, ls.BaseFee(), caller, hubs[i].maxBalance, hubs[i].sizes, hubs[i].price)
 		if best != nil {
 			fmt.Fprintf(os.Stderr, "[arb2] %s PROFIT: net=%.0f, in=%s out=%s gas=%d\n",
@@ -1084,7 +1088,7 @@ func main() {
 			if p, ok := tokenPrice[hubs[i].token]; ok {
 				hubs[i].price = p
 			}
-			s3results := stage3(hubs[i].cycles, rateTable, topN)
+			s3results := stage3(hubs[i].cycles, rateTable, pools, topN)
 			best := stage4(s3results, hubs[i].cycles, pools, state, cfg, hubs[i].token, bi.baseFee, caller, hubs[i].maxBalance, hubs[i].sizes, hubs[i].price)
 			if best != nil {
 				fmt.Fprintf(os.Stderr, "[arb2] %s PROFIT: net=%.0f, in=%s out=%s gas=%d\n",

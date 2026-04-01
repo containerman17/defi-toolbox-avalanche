@@ -31,37 +31,41 @@ timeout 300 go run ./cmd/benchmark/ --limit 5000 2>&1
 | `--cpuprofile FILE` | Write CPU profile |
 | `--memprofile FILE` | Write memory profile |
 
-## Current State (2026-03-28)
+## Current State (2026-04-01)
 
 **Architecture**: EVM fallback removed. Every pool gets a formula answer (zero = no output).
 The single metric is **mismatches** (formula != EVM ground truth).
 
-**Benchmark** (1000 pools, 3 blocks): **97.7% correct, 1953 match, 47 mismatch.**
-Formula time: ~40ms total (no EVM fallback overhead).
+**Benchmark** (2000 pools, 1 block): **97.9% correct, 3915 match, 85 mismatch.**
+Formula time: ~35ms cached (map-based quote cache, 100% hit rate).
 
-### Mismatch Breakdown (47 remaining)
+Mismatch output now shows pool position in pools.txt: `MISMATCH 0x... dir=0 result=X evm=Y (pool#N)`.
+Lower pool# = more recently traded = higher priority to fix.
+
+### Mismatch Breakdown (85 remaining)
 
 | Pattern | Count | Description |
 |---------|-------|-------------|
-| formula=0, evm=nonzero | ~30 | Formula can't compute: bitmap exhaustion, 3-token BalV3, blacklisted, unregistered |
-| formula=nonzero, evm=0 | ~11 | Formula computes but EVM reverts: gas exhaustion, broken tokens, paused pools |
-| both nonzero, different | ~6 | Formula accuracy: PharaohV1 rounding, BalancerV3 rate drift |
+| formula=0, evm=nonzero | ~50 | Missing registries, bitmap exhaustion, unsupported pool types (Wombat, GyroECLP, 3-token BalV3) |
+| formula=nonzero, evm=0 | ~20 | Dead pools already blacklisted, stale benchmark block for re-funded pools |
+| both nonzero, different | ~15 | Pharaoh V1 stale factory fees (~1% off), FoT edge cases |
 
-### Blacklisted Pools (47 with :-1)
+### Structural gaps (not fixable with registry/config changes)
 
-Pools where un-blacklisting causes worse mismatches (formula returns non-zero but EVM reverts).
-These are pools that are dead, paused, or have broken tokens on-chain.
+| Gap | Pools | Effort |
+|-----|-------|--------|
+| Pharaoh V1 stale factory fees | ~6 | Medium: read fee from factory storage instead of hardcoded registry |
+| Pharaoh V1/V3 missing from registry | ~15 | Medium: on-chain probing script to populate registry |
+| 3-token Balancer V3 | ~5 | High: PoolQuoter interface change (zeroForOne → tokenIn/tokenOut) |
+| GyroECLP Balancer V3 | 2 | High: 781 lines of ellipse math to port |
+| Bitmap range exhaustion | ~10 | Low priority: only affects unrealistic 1e18 inputs with 6/8-decimal tokens |
+| V4 pools with hooks | ~5 | Unsupportable: dynamic fees from external contracts |
+| Wombat/Platypus | ~6 | Medium: implement stableswap math with coverage ratios |
 
-| Type | Count | Root cause |
-|------|-------|------------|
-| uniswap_v4 | 24 | Pools disabled/paused on-chain |
-| v2 family | 7 | vapordex hooks, broken token transfers |
-| lfj_v2 | 4 | One-sided liquidity, formula mismatch |
-| uniswap_v3/pharaoh_v3 | 5 | Drained or paused |
-| algebra | 1 | ERC20 transfer failure |
-| lfj_v1 | 4 | Broken token transfers |
-| pangolin_v2 | 1 | Transfer failure |
-| lfj_v2 (misc) | 1 | Misc |
+### Blacklisted Pools (~90 with :-1)
+
+Pools where formula returns non-zero but EVM reverts (dead, paused, broken tokens).
+Batch blacklisted on 2026-04-01: 44 pools in one commit after systematic scan.
 
 ## Root Causes Found
 
@@ -101,77 +105,133 @@ These are pools that are dead, paused, or have broken tokens on-chain.
 
 ## Investigation Tools & Techniques
 
-### Analyzing mismatches
-```bash
-# Count mismatches by pattern
-timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1 | grep MISMATCH | wc -l
+### Triage workflow (prioritize by pool activity)
 
-# Find mismatch pools ranked by position in pools.txt
-... | grep MISMATCH | awk '{print $2}' | sort -u | while read p; do
-  addr=$(echo "$p" | tr '[:upper:]' '[:lower:]')
-  line=$(grep -n "$addr" pool-collector/data/pools.txt | head -1 | cut -d: -f1)
-  echo "$line $p"
-done | sort -n
+The benchmark now shows pool position in mismatch output: `(pool#N)`.
+Lower N = more recently traded = higher priority. Focus on pool#1-300 first.
+
+```bash
+# Run benchmark and sort mismatches by pool position (most active first)
+timeout 300 go run ./benchmarks/formula-accuracy/ --blocks 1 --limit 2000 2>&1 \
+  | grep "MISMATCH" \
+  | sed 's/.*MISMATCH //' \
+  | awk '{addr=$1; dir=$2; res=$3; evm=$4; pos=$NF; gsub(/[()]/, "", pos); print pos, addr, dir, res, evm}' \
+  | sort -t'#' -k2 -n | head -20
 ```
 
-### Multi-block validation
+### Batch finding dead pools (formula=nonzero, evm=0)
+
+These are pools where the formula reads valid-looking state but the on-chain swap reverts.
+Safe to batch-blacklist — they're dead, paused, or have broken tokens.
+
 ```bash
-# Test formula correctness across multiple blocks (prevents overfitting)
-timeout 600 go run ./cmd/benchmark/ --limit 1000 --blocks 3 2>&1
+# Find all formula=nonzero, evm=0 pools not yet blacklisted
+timeout 300 go run ./benchmarks/formula-accuracy/ --blocks 1 --limit 2000 2>&1 \
+  | grep "MISMATCH" | grep "result=[1-9].*evm=0" | awk '{print $2}' | sort -u \
+  | while read addr; do
+    lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+    reg=$(grep "$lower" formulas/registry.txt | head -1 | cut -d: -f2)
+    [ "$reg" != "-1" ] && echo "sed -i 's/^${lower}:[0-9]*$/${lower}:-1/' formulas/registry.txt"
+  done
 ```
 
-### Checking a specific pool
+### Checking pool info quickly
+
 ```bash
-# Is it in the registry?
-grep -i '<address>' formulas/registry.txt
-
-# What formula ID does it have?
-# -1 = blacklisted, 0=V2, 1=Pharaoh, 2=V3, 3=LFJV2, 4=Algebra, 5=DODO, 6=V4, 7=BalV3, 8=BalV2
-
-# Is it in the V3 fee registry?
-grep -i '<address>' formulas/v3_registry.go
-
-# Is its token a FoT token?
-grep -i '<token_address>' formulas/fot.go
-
-# Check token overrides
-grep -i '<token_address>' router/data/token_overrides.json
+# Pool info + registry status in one command
+addr=0x...; lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+grep -i "^${lower}:" tools/pool-collector/data/pools.txt
+grep -i "${lower}" formulas/registry.txt
+grep -i "${lower}" formulas/v3_registry.go
+grep -i "${lower}" formulas/lfj_v2_registry.go
+grep -i "${lower}" formulas/pharaoh_v1_registry.go
 ```
 
-### Checking why a pool was blacklisted
+### Token investigation via Routescan
+
+When a pool mismatches, check the token source code for transfer restrictions:
+- Fee-on-transfer (`_transfer` with tax/fee deduction)
+- Max wallet limits (`require(balanceOf[to] <= maxWallet)`)
+- Paused tokens (`whenNotPaused` modifier on `_update`)
+- Blacklists (`require(!blacklisted[from] && !blacklisted[to])`)
+- Conditional fees (`isLiquidityPool[from]` or `isAutomatedMarketMakerPair`)
+
+Use Routescan MCP: `mcp__routescan__get_source_code` with `address` and `chainId=43114`.
+
+### Algebra gas debugging
+
 ```bash
-# Find the commit that set it to -1
-git log -p --all -S '<address>' -- formulas/registry.txt | head -40
+# Show step count and gas estimates for Algebra pools
+ALGEBRA_DEBUG=1 timeout 30 go run ./benchmarks/formula-accuracy/ \
+  --blocks 1 --pool 0x<address> 2>&1 | grep ALGEBRA
 ```
+
+Key values: `maxSteps`, `afterSwap` (0K = cheap, 2600K = expensive pending fees),
+`steps` at DONE (if steps > maxSteps, formula bailed early).
+
+### V3 fee/tickSpacing from on-chain
+
+When adding a V3 pool to `v3_registry.go`, read fee and tickSpacing:
+```bash
+# fee() selector = 0xddca3f43, tickSpacing() = 0xd0c93a7c
+curl -s -X POST http://localhost:9650/ext/bc/C/rpc -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x<pool>","data":"0xddca3f43"},"latest"]}'
+curl -s -X POST http://localhost:9650/ext/bc/C/rpc -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x<pool>","data":"0xd0c93a7c"},"latest"]}'
+```
+
+### LFJ V2 binStep from on-chain
+
+When adding a V2 pool to `lfj_v2_registry.go`, read binStep:
+```bash
+# getBinStep() selector = 0x374111b7
+curl -s -X POST http://localhost:9650/ext/bc/C/rpc -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"0x<pool>","data":"0x374111b7"},"latest"]}'
+```
+TokenXIsToken0: compare getTokenX() result with token0 from pools.txt.
 
 ### Testing a single pool (fast — <1 second)
 ```bash
-# Test one pool instead of all 1000 — use this during formula debugging
-timeout 30 go run ./cmd/benchmark/ --pool 0x50a0778BFF861f94473676C1CDf8709379906D43 2>&1
+timeout 30 go run ./benchmarks/formula-accuracy/ --pool 0x<address> 2>&1
 ```
-This runs only the specified pool through all 3 passes. Much faster than `--limit 1000`.
 
 ### Testing an un-blacklisting
 1. Change the pool's ID in `formulas/registry.txt` from -1 to the correct formula ID
-2. Run `timeout 30 go run ./cmd/benchmark/ --pool <address> 2>&1` to test just that pool
-3. Check if it appears in MISMATCH lines
-4. If no mismatch, run full benchmark: `timeout 120 go run ./cmd/benchmark/ --limit 1000 2>&1`
-5. If still clean, run `--blocks 3` to validate across blocks
-6. Commit the change
+2. Run `timeout 30 go run ./benchmarks/formula-accuracy/ --pool <address> 2>&1`
+3. If 100% correct, run full benchmark: `timeout 300 go run ./benchmarks/formula-accuracy/ --limit 2000 2>&1`
+4. If still clean, run `--blocks 3` to validate across blocks
+5. Commit the change
+
+### Mismatch categories and fix patterns
+
+| Pattern | Typical cause | Fix |
+|---------|--------------|-----|
+| formula=nonzero, evm=0 | Dead/paused pool, broken token | Blacklist (-1 in registry.txt) |
+| formula=0, evm=nonzero, pool not in registry | Missing registration | Add to registry.txt with correct formula ID |
+| formula=0, evm=nonzero, V3 not in v3_registry | Missing fee/tickSpacing | Add to v3_registry.go (read from on-chain) |
+| formula=0, evm=nonzero, LFJ V2 not in lfj_v2_registry | Missing binStep | Add to lfj_v2_registry.go (read from on-chain) |
+| formula=0, evm=nonzero, Pharaoh V1 not in pharaoh_v1_registry | Missing storage layout | Probe on-chain for slot positions, fee, stable flag |
+| formula ~1% off | FoT applied but pool exempt | Add to FotExemptPools in fot.go |
+| formula ~0.5% off | Pharaoh V1 stale factory fee | Need factory storage reads (architectural) |
+| formula=0, evm=nonzero, 6-decimal token | Bitmap range exhaustion (1e18 = unrealistic) | Add to deadPoolDirs (cosmetic fix) |
+| formula=0, 3-token BalV3 | PoolQuoter interface limitation | Needs interface change (architectural) |
 
 ### Key files
 | File | Purpose |
 |------|---------|
 | `formulas/registry.txt` | Pool → formula ID mapping (embedded) |
 | `formulas/registry.go` | Registry loading, formula ID constants |
-| `formulas/pool_quoter.go` | `PoolManager.Get()`, `buildQuoter()` switch |
-| `formulas/v3_registry.go` | V3 pool fee/tickSpacing map |
-| `formulas/fot.go` | Fee-on-transfer token detection |
-| `formulas/data/token_amounts.txt` | Token swap amounts for discover tool |
-| `router/data/token_overrides.json` | Token storage overrides (balance injection) |
-| `router/overrides.go` | Go-side override parsing (`tokenOverrideEntry`) |
-| `cmd/benchmark/main.go` | Benchmark with `--debug-coverage` flag |
-| `cmd/discover/main.go` | Discovery tool that assigns formula IDs |
+| `formulas/pool_quoter.go` | `PoolManager.Get()`, `buildQuoter()` switch, `deadPoolDirs` |
+| `formulas/v3_registry.go` | V3/V4 pool fee/tickSpacing map |
+| `formulas/lfj_v2_registry.go` | LFJ V2 pool binStep/tokenX map |
+| `formulas/pharaoh_v1_registry.go` | Pharaoh V1 pool storage layout config |
+| `formulas/fot.go` | Fee-on-transfer tokens + FotExemptPools |
+| `formulas/v3.go` | V3 layout detection (`v3ResolveLayout`) |
+| `formulas/algebra.go` | Algebra gas estimation constants |
+| `formulas/pool_v3.go` | V3 `evmWouldComplete()` gas prediction |
+| `contracts/data/token_overrides.json` | Token storage overrides (balance/allowance slots) |
+| `benchmarks/formula-accuracy/main.go` | Benchmark (--pool, --blocks, --cache, --limit) |
+| `tools/discover/main.go` | Discovery tool that assigns formula IDs |
 
 ### Formula ID reference
 | ID | Constant | Pool Type |

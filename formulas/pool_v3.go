@@ -137,8 +137,12 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		maxCompressed := int32(algebraMaxTick) / tickSpacing
 		fullRangeWord := int16(maxCompressed >> 8)
 		if fullRangeWord+1 > bitmapRadius {
-			extMin := centerWord - fullRangeWord - 1
-			extMax := centerWord + fullRangeWord + 1
+			// Use absolute word range to cover both MIN_TICK and MAX_TICK,
+			// regardless of where the current tick is. The center-relative
+			// calculation (centerWord ± fullRangeWord) misses the negative
+			// full-range word when centerWord > 0 (or positive when < 0).
+			extMin := -fullRangeWord - 1
+			extMax := fullRangeWord + 1
 			// Only scan words outside the already-scanned range
 			for wordPos := extMin; wordPos < bitmapMinWord; wordPos++ {
 				word, err := v3ReadBitmapWordBytes(bytesReader, poolAddr, layout.bitmap, wordPos)

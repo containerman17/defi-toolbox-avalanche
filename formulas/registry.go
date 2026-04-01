@@ -7,14 +7,41 @@ import (
 	"strings"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
 )
 
 //go:embed registry.txt
 var registryData string
 
+//go:embed data/token_amounts.txt
+var tokenAmountsData string
+
 // LoadEmbeddedRegistry loads the formula registry from embedded data.
 func LoadEmbeddedRegistry() *Registry {
 	return parseRegistryContent(registryData)
+}
+
+// LoadEmbeddedTokenAmounts returns a map of token address → swap amount (~1 AVAX worth).
+func LoadEmbeddedTokenAmounts() map[common.Address]*uint256.Int {
+	result := make(map[common.Address]*uint256.Int)
+	scanner := bufio.NewScanner(strings.NewReader(tokenAmountsData))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		addr := common.HexToAddress(parts[0])
+		amt := new(uint256.Int)
+		amt.SetFromHex(parts[1])
+		if !amt.IsZero() {
+			result[addr] = amt
+		}
+	}
+	return result
 }
 
 // Formula IDs

@@ -28,6 +28,42 @@ import (
 var ROUTER = router.DeployedRouter
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 
+// Hub tokens with ~$1 worth of each. Used as the "forward" input amount.
+// The reverse direction uses the EVM output from the forward direction.
+var hubAmounts = map[common.Address]*uint256.Int{
+	common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"): uint256.NewInt(45_000_000_000_000_000),  // WAVAX: 0.045 AVAX ≈ $1
+	common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): uint256.NewInt(1_000_000),              // USDC: 1 USDC
+	common.HexToAddress("0xa7d7079b0fead91f3e65f86e8915cb59c1a4c664"): uint256.NewInt(1_000_000),              // USDC.e: 1 USDC.e
+	common.HexToAddress("0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"): uint256.NewInt(1_000_000),              // USDt: 1 USDt
+	common.HexToAddress("0xd586e7f844cea2f87f50152665bcbc2c279d8d70"): uint256.NewInt(1_000_000_000_000_000_000), // DAI.e: 1 DAI
+	common.HexToAddress("0x152b9d0fdc40c096757f570a51e494bd4b943e50"): uint256.NewInt(12_000),                 // BTC.b: 0.00012 BTC ≈ $1
+	common.HexToAddress("0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"): uint256.NewInt(400_000_000_000_000),    // WETH.e: 0.0004 ETH ≈ $1
+	common.HexToAddress("0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be"): uint256.NewInt(45_000_000_000_000_000),  // sAVAX: ~0.045 sAVAX ≈ $1
+	common.HexToAddress("0x0000000000000000000000000000000000000000"): uint256.NewInt(45_000_000_000_000_000),  // native AVAX (V4 pools)
+}
+
+// poolAmounts stores the resolved input amounts per (pool, direction).
+// Forward direction uses hub amount; reverse uses EVM output from forward.
+type poolAmountKey struct {
+	pool common.Address
+	dir  int // 0 = token0→token1, 1 = token1→token0
+}
+
+// resolveHubDirection returns (hubTokenIdx, amount) for a pool.
+// hubTokenIdx is 0 or 1 (which token is the hub). Returns (-1, nil) if neither is a hub.
+func resolveHubDirection(tokens [2]common.Address) (int, *uint256.Int) {
+	// Prefer the token with FEWER pools (more likely a stablecoin/major asset)
+	// In practice, just check both and pick the first hub found.
+	// Prefer token1 first (often the quote asset: USDC, WAVAX)
+	if amt, ok := hubAmounts[tokens[1]]; ok {
+		return 1, amt
+	}
+	if amt, ok := hubAmounts[tokens[0]]; ok {
+		return 0, amt
+	}
+	return -1, nil
+}
+
 type quoteKey struct {
 	pool common.Address
 	dir  int
@@ -116,35 +152,114 @@ func runBlockBenchmark(
 	var groundMu sync.Mutex
 	evmGround := make(map[quoteKey]uint256.Int)
 
-	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth, %d workers)...", evmPool.Size())
-	p1t0 := time.Now()
+	// Resolve hub-based amounts for each pool.
+	// For each pool: hub token direction gets a ~$1 input, reverse gets the EVM forward output.
+	poolAmounts := make(map[poolAmountKey]*uint256.Int)
+	var skippedPools []int // indices of pools without a hub token
 
-	var wg sync.WaitGroup
+	// First, determine which pools have hub tokens and set forward amounts.
+	type poolQuoteWork struct {
+		poolIdx   int
+		fwdDir    int // 0 or 1: the direction where hub token is the input
+		fwdAmount *uint256.Int
+	}
+	var work []poolQuoteWork
+
+	// Count token appearances for diagnostics
+	tokenPoolCount := make(map[common.Address]int)
+	for i := range pools {
+		if len(pools[i].Tokens) >= 2 {
+			tokenPoolCount[pools[i].Tokens[0]]++
+			tokenPoolCount[pools[i].Tokens[1]]++
+		}
+	}
+
 	for i := range pools {
 		pool := &pools[i]
-		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-				continue
-			}
-			wg.Add(1)
-			go func(p *pathfinder.Pool, ti [2]int) {
-				defer wg.Done()
-				tokenIn := p.Tokens[ti[0]]
-				tokenOut := p.Tokens[ti[1]]
-				amountIn := uint256.NewInt(1_000_000_000_000_000_000)
-				calldata := pathfinder.EncodeSwapSingleWithExtra(p.Address, p.PoolType, tokenIn, tokenOut, amountIn, p.ExtraData)
-
-				ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
-
-				if evmErr == nil && len(ret) >= 32 {
-					var out uint256.Int
-					out.SetBytes(ret[:32])
-					groundMu.Lock()
-					evmGround[quoteKey{p.Address, ti[0]}] = out
-					groundMu.Unlock()
-				}
-			}(pool, tokenIdx)
+		if len(pool.Tokens) < 2 {
+			continue
 		}
+		tokens := [2]common.Address{pool.Tokens[0], pool.Tokens[1]}
+		hubIdx, hubAmt := resolveHubDirection(tokens)
+		if hubIdx < 0 {
+			skippedPools = append(skippedPools, i)
+			continue
+		}
+		// Forward = hub→other, reverse = other→hub
+		work = append(work, poolQuoteWork{poolIdx: i, fwdDir: hubIdx, fwdAmount: hubAmt})
+		poolAmounts[poolAmountKey{pool.Address, hubIdx}] = hubAmt
+	}
+
+	// Report skipped pools
+	if len(skippedPools) > 0 {
+		fmt.Fprintf(os.Stderr, "[benchmark] %d pools skipped (no hub token). Add hub amounts for:\n", len(skippedPools))
+		// Group by token, show top recommendations
+		type tokenRec struct {
+			addr  common.Address
+			count int
+		}
+		recMap := make(map[common.Address]int)
+		for _, idx := range skippedPools {
+			p := &pools[idx]
+			recMap[p.Tokens[0]]++
+			recMap[p.Tokens[1]]++
+		}
+		var recs []tokenRec
+		for addr, count := range recMap {
+			recs = append(recs, tokenRec{addr, count})
+		}
+		// Sort by count descending (inline)
+		for i := 0; i < len(recs); i++ {
+			for j := i + 1; j < len(recs); j++ {
+				if recs[j].count > recs[i].count {
+					recs[i], recs[j] = recs[j], recs[i]
+				}
+			}
+		}
+		for k := 0; k < len(recs) && k < 10; k++ {
+			fmt.Fprintf(os.Stderr, "  %s (%d skipped pools, %d total pools)\n",
+				recs[k].addr.Hex(), recs[k].count, tokenPoolCount[recs[k].addr])
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth, %d workers, %d pools)...", evmPool.Size(), len(work))
+	p1t0 := time.Now()
+
+	// Pass 1: EVM ground truth. Forward (hub→other) in parallel, then reverse
+	// (other→hub) uses the forward EVM output as input.
+	var wg sync.WaitGroup
+	for _, w := range work {
+		wg.Add(1)
+		go func(w poolQuoteWork) {
+			defer wg.Done()
+			pool := &pools[w.poolIdx]
+			fwdIn := pool.Tokens[w.fwdDir]
+			fwdOut := pool.Tokens[1-w.fwdDir]
+			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, fwdIn, fwdOut, w.fwdAmount, pool.ExtraData)
+			ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
+
+			if evmErr == nil && len(ret) >= 32 {
+				var fwdResult uint256.Int
+				fwdResult.SetBytes(ret[:32])
+				groundMu.Lock()
+				evmGround[quoteKey{pool.Address, w.fwdDir}] = fwdResult
+				groundMu.Unlock()
+
+				// Reverse: use forward EVM output as input
+				if !fwdResult.IsZero() {
+					revCalldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, fwdOut, fwdIn, &fwdResult, pool.ExtraData)
+					revRet, _, revErr := evmPool.Execute(DUMMY_SENDER, ROUTER, revCalldata)
+					if revErr == nil && len(revRet) >= 32 {
+						var revResult uint256.Int
+						revResult.SetBytes(revRet[:32])
+						groundMu.Lock()
+						evmGround[quoteKey{pool.Address, 1 - w.fwdDir}] = revResult
+						poolAmounts[poolAmountKey{pool.Address, 1 - w.fwdDir}] = new(uint256.Int).Set(&fwdResult)
+						groundMu.Unlock()
+					}
+				}
+			}
+		}(w)
 	}
 	wg.Wait()
 	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p1t0).Milliseconds())
@@ -159,10 +274,13 @@ func runBlockBenchmark(
 			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
 				continue
 			}
+			amountIn := poolAmounts[poolAmountKey{pool.Address, tokenIdx[0]}]
+			if amountIn == nil {
+				continue // skipped pool (no hub token)
+			}
 			tokenIn := pool.Tokens[tokenIdx[0]]
 			tokenOut := pool.Tokens[tokenIdx[1]]
 			zeroForOne := tokenIn.Cmp(tokenOut) < 0
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
 			if !skipFormulas {
 				if useCache {
@@ -202,12 +320,15 @@ func runBlockBenchmark(
 			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
 				continue
 			}
+			amountIn := poolAmounts[poolAmountKey{pool.Address, tokenIdx[0]}]
+			if amountIn == nil {
+				continue // skipped pool (no hub token)
+			}
 			ts := getStats(pool.PoolType)
 			ts.Quotes++
 			tokenIn := pool.Tokens[tokenIdx[0]]
 			tokenOut := pool.Tokens[tokenIdx[1]]
 			zeroForOne := tokenIn.Cmp(tokenOut) < 0
-			amountIn := uint256.NewInt(1_000_000_000_000_000_000)
 
 			key := quoteKey{pool.Address, tokenIdx[0]}
 			evmResult := evmGround[key]

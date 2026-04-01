@@ -2021,4 +2021,12 @@ var v3PoolFees = map[string][2]int32{
 	"0xffb7f0e9447ef8d74beb449bc4e9cc04f5684bd1": {10000, 200}, // uniswap_v3
 	"0xffc472cb252a382195bd3b5ca82c3744311cbceb": {10000, 200}, // uniswap_v3
 	"0xfff2266f61b10f4495648332f1c0f003f0a46e8d": {10000, 200}, // pharaoh_v3
+	"0x22a6fa6a0ab5eb883d5bc122e186899300492227": {3000, 50}, // pharaoh_v3
+	"0x3966a349c00c171964477577cc9d17a9d3293451": {100, 1}, // pharaoh_v3
+	"0x46d26c9d0c364a8564ed4c67bab59969379bcdcf": {3000, 50}, // pharaoh_v3
+	"0x529f19302c5b834832aa5af10f0a473b1138526f": {3000, 50}, // pharaoh_v3
+	"0x76100cb39062993e44f66b3f777f05b5d18f801a": {250, 5}, // pharaoh_v3
+	"0x962fcecb61068332df8c5c2fc2bcee74df229891": {3000, 50}, // pharaoh_v3
+	"0xab0ad8dc0bff2e645d44e6c38b6293360e736f13": {3000, 50}, // pharaoh_v3
+	"0xc4cfc3bd065bee748dd02c1235f8155876cbcd18": {100, 1}, // pharaoh_v3
 }

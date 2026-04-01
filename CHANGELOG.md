@@ -7,6 +7,13 @@
 - Quote latency: 62ms → 44ms/quote (2000 pools, maxHops=3, 40 rounds)
 - Cached benchmark: 16.4ms → 13.1ms (4000 quotes)
 
+### Combined session results (all optimizations)
+- **Native two-way quote**: 195ms → 44ms (4.4x faster)
+- **WASM two-way quote**: 230-300ms → 112-131ms (~2.2x faster)
+- **WASM one-way estimate**: ~55-65ms (well within 500ms block budget)
+- **Formula-accuracy cached**: 21.9ms → 13.1ms
+- Correctness unchanged: 96.4% match (3856/4000)
+
 ## 2026-04-01 — Block diff O(n) → O(diff), CodeHash cache, arb bot cleanup
 
 ### Performance: in-place block diff (3.1x faster quotes)

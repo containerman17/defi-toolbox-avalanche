@@ -13,7 +13,9 @@ import (
 type DODOPool struct {
 	addr         common.Address
 	state        *DODOState
-	baseIsToken0 bool // true if baseToken is the lower-address token (token0)
+	baseIsToken0 bool          // true if baseToken is the lower-address token (token0)
+	minBaseSwap  *uint256.Int  // DPPAdvanced: _MIN_BASE_SWAP_AMOUNT_ (slot 10), nil if not applicable
+	minQuoteSwap *uint256.Int  // DPPAdvanced: _MIN_QUOTE_SWAP_AMOUNT_ (slot 11), nil if not applicable
 }
 
 func newDODOPool(addr common.Address, reader StorageReader, token0 common.Address) *DODOPool {
@@ -35,11 +37,29 @@ func newDODOPool(addr common.Address, reader StorageReader, token0 common.Addres
 	// DODO's base token is independent of Uniswap-style token sort order.
 	baseIsToken0 := strings.EqualFold(dodoState.BaseToken, strings.ToLower(token0.Hex()))
 
-	return &DODOPool{
+	pool := &DODOPool{
 		addr:         addr,
 		state:        dodoState,
 		baseIsToken0: baseIsToken0,
 	}
+
+	// Read DPPAdvanced min swap amounts from slots 10/11 (if non-zero).
+	if minBase, err := stateReader(poolAddress, big.NewInt(10)); err == nil {
+		var v uint256.Int
+		v.SetBytes32(minBase[:])
+		if !v.IsZero() {
+			pool.minBaseSwap = new(uint256.Int).Set(&v)
+		}
+	}
+	if minQuote, err := stateReader(poolAddress, big.NewInt(11)); err == nil {
+		var v uint256.Int
+		v.SetBytes32(minQuote[:])
+		if !v.IsZero() {
+			pool.minQuoteSwap = new(uint256.Int).Set(&v)
+		}
+	}
+
+	return pool
 }
 
 func (p *DODOPool) Address() common.Address {
@@ -52,6 +72,19 @@ func (p *DODOPool) Quote(amountIn *uint256.Int, zeroForOne bool) (result uint256
 			result = uint256.Int{}
 		}
 	}()
+
+	// DPPAdvanced pools enforce _MIN_BASE_SWAP_AMOUNT_ / _MIN_QUOTE_SWAP_AMOUNT_.
+	// Check against known minimums to avoid false positives.
+	if p.minBaseSwap != nil || p.minQuoteSwap != nil {
+		sellBase := zeroForOne == p.baseIsToken0
+		if sellBase && p.minBaseSwap != nil && amountIn.Lt(p.minBaseSwap) {
+			return uint256.Int{}
+		}
+		if !sellBase && p.minQuoteSwap != nil && amountIn.Lt(p.minQuoteSwap) {
+			return uint256.Int{}
+		}
+	}
+
 	amtIn := amountIn.ToBig()
 	// Convert zeroForOne to sellBase: if baseToken is token0, then zeroForOne means sellBase.
 	// If baseToken is token1, then zeroForOne means sellQuote (so sellBase = !zeroForOne).

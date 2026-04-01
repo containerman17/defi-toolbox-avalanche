@@ -1,135 +1,163 @@
 # defi-toolbox-avalanche
 
-A full-stack DEX routing toolkit for Avalanche C-Chain. Covers pool discovery, swap execution, EVM-level quoting, and BFS pathfinding — everything needed to find and execute optimal swap routes.
+A full-stack DEX routing toolkit for Avalanche C-Chain. Covers pool discovery, formula-based quoting, EVM execution, BFS pathfinding, and on-chain arbitrage — everything needed to find and execute optimal swap routes.
 
 ## Architecture
 
 ```
 BFS Pathfinding (arbs / optimal swaps)
   |
-  |-- Formula Quoter         single-pool math (40x faster than EVM)
-  |-- Go EVM Layer           multi-pool execution (WASM + native)
-  |-- Router                 on-chain swap contract + quoting
-  |-- Pool Collector         on-chain pool discovery engine
-  |-- State Server           chain state for off-chain execution
+  |-- Formula Quoter         single-pool math (formulas/)
+  |-- Go EVM Layer           multi-pool execution, WASM + native (statedb/)
+  |-- Router                 on-chain swap contract (contracts/)
+  |-- Pool Collector         on-chain pool discovery (tools/pool-collector/)
+  |-- State Server           live chain state via WebSocket (cmd/state-server/)
 ```
 
 ### Components
 
-| Component | Location | Description | Benchmarks |
-|-----------|----------|-------------|------------|
-| Pool Collector | `pool-collector/` | Discovers 26,000+ pools across 35+ protocols | — |
-| Router | `router/` | Solidity contract (21 pool types) + TypeScript quoting | Backrun LFG swaps (~99% match) |
-| State Server | `tools/state-proxy/` | WebSocket RPC proxy with per-block state caching | — |
-| State Dumper | `tools/state-dumper/` | Full contract storage dumper via `debug_storageRangeAt` | — |
-| Go EVM Layer | external | EVM execution compiled to WASM and native Go | Speed per block, pool coverage |
-| Formula Quoter | external | Direct math for single-pool quotes | Correctness (must be 100%), speed |
-| BFS Pathfinding | planned | Graph search over all pool edges | Quality (max output), speed |
+| Component | Location | Description | Performance |
+|-----------|----------|-------------|-------------|
+| Formula Quoter | `formulas/` | Direct math for 10 pool types, 98.8% accuracy | 44ms / 2000 pools (native) |
+| State DB | `statedb/` | In-memory EVM state with per-block diffs | Gob wire format, 2s WASM connect |
+| State Server | `cmd/state-server/` | WebSocket server broadcasting per-block state diffs | ~900K storage entries |
+| Pool Collector | `tools/pool-collector/` | Discovers 26,000+ pools across 35+ protocols | — |
+| Router | `contracts/` | HayabusaRouter.sol (21 pool types) | On-chain at `0x476f...` |
+| BFS Pathfinder | `pathfinder/` | Graph search over all pool edges | — |
+| Quoter (WASM) | `cmd/quoter-example/wasm/` | Browser-ready WASM quoter | 115ms / 2000 pools |
+| Arbitrage Bot | `cmd/arbitrage-example/` | WAVAX arbitrage with EVM verification | — |
 
 ## Structure
 
 ```
-pool-collector/           On-chain pool discovery engine
-  providers/              Per-protocol log parsers (35 providers)
-  data/pools.txt          Pool catalog (26,000+ pools)
-  scripts/update.ts       Entry point: scan chain for new pools
+cmd/
+  state-server/             WebSocket state server (gob initial dump + JSON diffs)
+  arbitrage-example/        WAVAX arbitrage bot with on-chain execution
+  quoter-example/
+    wasm/                   Browser WASM quoter
+    native/                 Native Go quoter
+    profile/                Profiling harness
+    shared/                 Shared quoter + WASM state logic
+    http/                   HTTP quote server
 
-router/                   Solidity contract + TypeScript quoting
-  contracts/              HayabusaRouter.sol bytecode
-  data/                   Token storage slot overrides (320+ tokens)
-  scripts/                Entry points
-  benchmarks/             Route analyzer (backrun benchmark)
+formulas/                   Formula-based pool quoters (10 types)
+  pool_quoter.go            PoolManager, quote cache, dead pool dirs
+  pool_v2.go                V2 constant product (0.3% fee)
+  pool_v3.go                V3 concentrated liquidity (Uniswap/Pharaoh)
+  pool_v4.go                V4 singleton pool manager
+  pool_lfj_v2.go            LFJ V2 Liquidity Book (V2.0 + V2.1)
+  pool_algebra.go           Algebra V1 Integral
+  pool_dodo.go              DODO PMM
+  pool_pharaoh_v1.go        Pharaoh V1 (Solidly-fork)
+  pool_balancer_v2.go       Balancer V2 weighted/stable
+  pool_balancer_v3.go       Balancer V3 (2-token)
+  fot.go                    Fee-on-transfer token handling
+  registry.txt              Pool → formula ID mapping (7,900+ pools)
+  data/token_amounts.txt    Realistic ~$1 swap amounts per token
 
-examples/                 Debug scripts and one-off tests
+statedb/                    In-memory EVM state
+  livestate.go              Live state with block subscriptions
+  immutable.go              Storage/account maps with in-place diff
+  callstate.go              EVM call context (StateDB interface)
+  wire/dump.go              Gob wire format (zero external deps)
+
+contracts/                  On-chain router
+  HayabusaRouter.sol        Solidity source (21 pool types)
+  bytecode.hex              Compiled bytecode
+  overrides.go              Token balance/approval state overrides
+  token_overrides.json      Per-token storage slot configs (320+ tokens)
+
+pathfinder/                 BFS graph search
+  bfs.go                    Multi-hop path finding
+  pools.go                  Pool graph construction
+  encode.go                 Route encoding for router
 
 tools/
-  state-proxy/            Go — WebSocket RPC proxy with state caching
-  state-dumper/           Go — Full storage dump tool
+  pool-collector/           Pool discovery engine (TypeScript, 15 providers)
+  token-pricer/             EVM-based token price discovery at deploy block
+  discover/                 Pool type auto-detection
 
-rpc/                      WebSocket connection pool (viem transport)
-utils/                    Shared utilities (.env loader)
-mcp/                      MCP server for Routescan API
+benchmarks/
+  formula-accuracy/         Formula vs EVM correctness (98.8%, 2000 pools)
+  swap-replay/              Historical swap replay testing
+
+experiments/                Archived prototypes (arb1, arb2, arb3)
+mcp/                        MCP server for Routescan API
 ```
 
 ## Supported Protocols
 
 ### AMMs (Concentrated Liquidity)
 
-| Protocol | Type |
-|----------|------|
-| Uniswap V3 | Concentrated liquidity |
-| Uniswap V4 | Singleton pool manager |
-| Pharaoh V3 | Concentrated liquidity (Algebra-style fees) |
-| Blackhole CL | Concentrated liquidity (Algebra-fork) |
-| Algebra | Dynamic-fee concentrated liquidity |
+| Protocol | Formula | Type |
+|----------|---------|------|
+| Uniswap V3 | FormulaV3 | Concentrated liquidity |
+| Uniswap V4 | FormulaV4 | Singleton pool manager (+ ArenaHook) |
+| Pharaoh V3 | FormulaV3 | Concentrated liquidity (dynamic fees) |
+| Blackhole CL | FormulaAlgebra | Concentrated liquidity (dynamic fees) |
+| Algebra | FormulaAlgebra | Dynamic-fee concentrated liquidity |
 
-### AMMs (Constant Product)
+### AMMs (Constant Product / Bin-based)
 
-| Protocol | Type |
-|----------|------|
-| LFJ V1 (Trader Joe) | x*y=k |
-| LFJ V2 (Trader Joe) | Liquidity Book (bin-based) |
-| Pangolin V2 | x*y=k |
-| SushiSwap V2 | x*y=k |
-| Pharaoh V1 | x*y=k (Solidly-fork) |
-| Blackhole Volatile | x*y=k (Solidly-fork) |
-| Uniswap V2 | x*y=k |
-| Arena V2 | x*y=k (memecoins) |
-| Fraxswap, Swapsicle, Canary, Complus, Lydia, Hurricane, Thorus, RadioShack, VaporDEX, ElkDEX, YetiSwap, PartySwap, OliveSwap, HakuSwap, 0x | x*y=k |
+| Protocol | Formula | Type |
+|----------|---------|------|
+| LFJ V1 (Trader Joe) | FormulaV2 | x*y=k |
+| LFJ V2 (Trader Joe) | FormulaLFJV2 | Liquidity Book (V2.0 + V2.1) |
+| Pangolin V2 | FormulaV2 | x*y=k |
+| SushiSwap V2 | FormulaV2 | x*y=k |
+| Pharaoh V1 | FormulaPharaohV1 | x*y=k (dynamic factory fees) |
+| Blackhole Volatile | FormulaPharaohV1 | x*y=k |
+| Uniswap V2 | FormulaV2 | x*y=k |
+| Arena V2 | FormulaV2 | x*y=k (memecoins) |
+| Fraxswap, Swapsicle, Canary, Complus, Lydia, Hurricane, Thorus, RadioShack, VaporDEX, ElkDEX, YetiSwap, PartySwap, OliveSwap, HakuSwap, 0x | FormulaV2 | x*y=k |
 
 ### Stableswaps / Oracle / Vault
 
-| Protocol | Type |
-|----------|------|
-| Wombat, Platypus | Coverage ratio stableswap |
-| Synapse | StableSwap (Saddle-fork) |
-| WooFi V2 / WooPP | Oracle-based |
-| DODO | Proactive market maker |
-| Cavalre | Multiswap |
-| KyberSwap DMM | Dynamic market maker |
-| Balancer V2 / V3 | Weighted / stable pools |
-| Balancer V3 Buffered | Wrap/unwrap through ERC-4626 |
-| Trident | BentoBox-backed (SushiSwap) |
-| TransferFrom | RFQ / vault pull (Hashflow-style) |
+| Protocol | Formula | Type |
+|----------|---------|------|
+| DODO | FormulaDODO | Proactive market maker |
+| Balancer V2 | FormulaBalancerV2 | Weighted / stable pools |
+| Balancer V3 | FormulaBalancerV3 | Weighted / stable (2-token) |
+| Balancer V3 Buffered | — | Wrap/unwrap through ERC-4626 |
+| Wombat, Platypus | — | Coverage ratio stableswap (spec ready) |
+| Synapse | — | StableSwap |
+| WooFi V2 / WooPP | — | Oracle-based |
+| Cavalre | — | Multiswap |
+| KyberSwap DMM | — | Dynamic market maker |
+| Trident | — | BentoBox-backed |
+| TransferFrom | — | RFQ / vault pull |
 
-**21 pool types across 35+ protocol deployments, 26,000+ pools cataloged.**
+**10 formula types, 21 pool types, 35+ protocol deployments, 26,600+ pools cataloged, 7,900+ with formula quoters.**
 
 ## Quick Start
 
+Requires a local Avalanche C-Chain node at `http://localhost:9650/ext/bc/C/rpc`.
+
 ```bash
+# Run formula accuracy benchmark (2000 pools)
+timeout 300 go run ./benchmarks/formula-accuracy/ --limit 2000 2>&1
+
+# Run arbitrage bot
+go run ./cmd/arbitrage-example/ --pool-limit 200
+
+# Start state server
+go run ./cmd/state-server/
+
+# Update pool catalog (TypeScript)
 npm install
-
-# Discover/update pools (uses public RPC by default)
-node pool-collector/scripts/update.ts
-
-# Quote 0.1 WAVAX -> USDC across matching pools
-node examples/02_quote_pools/index.ts
+node tools/pool-collector/scripts/update.ts
 ```
 
-Custom RPC:
+## Performance
 
-```bash
-echo "RPC_URL=http://localhost:9650/ext/bc/C/rpc" > .env
-```
-
-## API
-
-```typescript
-import { quoteRoute, quoteFlat, ROUTER_ADDRESS } from "./router/index.ts";
-import { loadPools, discover } from "./pool-collector/index.ts";
-
-// Load pool catalog
-const { pools } = loadPools();
-
-// Quote a multi-hop route
-const amountOut = await quoteRoute(client, [
-  { pool: pool1, tokenIn: WAVAX, tokenOut: USDT },
-  { pool: pool2, tokenIn: USDT, tokenOut: USDC },
-], amountIn);
-
-// Quote a flat/DAG route (splits, merges, parallel paths)
-const amountOut = await quoteFlat(client, steps, tokenOut);
-```
+| Metric | Value |
+|--------|-------|
+| Formula accuracy | 98.8% (3929/3975 tested, 2000 pools) |
+| Native quote speed | 44ms / 2000 pools |
+| WASM quote speed | 115ms / 2000 pools |
+| WASM connect time | ~2s (gob wire format) |
+| Pool catalog | 26,600+ pools |
+| Formula coverage | 7,900+ pools with quoters |
 
 ## Status
 

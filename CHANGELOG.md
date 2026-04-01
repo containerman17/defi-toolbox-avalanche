@@ -1,28 +1,8 @@
 # Changelog
 
-## 2026-04-01 — LFJ V2.0 (old Liquidity Book) formula support
-
-### Coverage: LFJ V2.0 pools (6 pools, 12 quotes)
-Added formula support for 6 LFJ V2.0 pools that were returning 0 via nullLFJV2Pool.
-V2.0 uses a completely different storage layout from V2.1/V2.2:
-- PairInformation at slot 6 (activeId + global reserves) instead of packed _parameters
-- feeParameters at slot 10 with wider uint16 fields
-- bins mapping at slot 11 with uint112|uint112 packing (vs uint128|uint128)
-- tree[3] at slots 12-14, all mapping-based (V2.1 level0 is a direct slot)
-- Separate fee tracking requiring surplus skip (V2.0 `received()` subtracts fees)
-
-Un-blacklisted USDC/DAI.e pool (0x855ee4) — previously had evm=0, now works.
-LFJ V2 mismatches: 6 → 4. All 6 V2.0 pools produce correct output (100% match).
-
-### Files
-- `formulas/lfj_v2_v20.go` — new: V2.0 registry, state fetch, bin reader, tree level0
-- `formulas/lfj_v2_fast.go` — V2.0 dispatch in FetchLFJV2StateFast, QuoteLFJV2Fast, tree traversal
-- `formulas/pool_lfj_v2.go` — check both registries, skip surplus for V2.0
-- `formulas/registry.txt` — un-blacklist 0x855ee4 (formula=-1 → 3)
-
 ## 2026-04-01 — Full session: performance + coverage + benchmark overhaul
 
-### Final results: 97.0% correct (3856/3975 tested, 119 mismatches)
+### Final results: 98.8% correct (3929/3975 tested, 46 mismatches)
 
 ### Router override balance fix: 71.1% → 97.0%
 The router's token balance override was `1000 * 1e18` — enough for major tokens but
@@ -57,27 +37,37 @@ inflated numbers from zero-zero agreements on broken pools.
 - **Gob initial dump**: JSON hex → gob binary WebSocket frame. WASM connection 27s → 2s
 - **WASM quotes**: 230-300ms → 112-131ms (2.2x)
 
-### Formula coverage fixes (real improvements, independent of benchmark change)
-- **Registry fixes**: un-blacklist re-funded UniV3 BTC.b/USDC, add PangolinV3 WETH.e/WAVAX, add WAVAX/XAVA to lfj_v2_registry, register PeerToken/USDC V4
-- **Gas tuning**: Algebra afterSwap threshold 1e12→1e18 (pool 0xC13F, 147 steps), fix feePending1 check for dir=1
-- **V3 heavyGas**: `evmWouldComplete` now uses 55K/tick + 400K overhead for Pharaoh/Pangolin V3
-- **Dead pool blacklist**: batch blacklist 44 pools where formula computes but EVM reverts
-- **FoT exemptions**: HEFE/Always pool not in isLiquidityPool
-- **Pharaoh V3 layout**: try V2 storage namespace before V1 for beacon-upgraded pools
-- **V3 bitmap extension**: use absolute word range for full-range position detection
+### Formula coverage: 71.1% → 98.8% (+1120 matches)
+
+**Systemic fixes** (biggest impact):
+- **Router override 1e21→1e36** (+1038): meme tokens needed millions of tokens for $1 swaps
+- **LFJ V2 null bin guard removal** (+4): killed stablecoin pools at 1:1 parity (activeId=0x800000)
+- **Batch blacklist 44 dead pools** (+43): formula=nonzero, EVM reverts (broken tokens)
+- **Pharaoh V1 factory fee reads** (+13): fee on factory, not pool — read dynamically for beacon proxies
+- **9 Pharaoh V3 pool registrations** (+10): missing from v3_registry/pharaoh_v3_registry
+- **LFJ V2.0 formula implementation** (+12): completely different storage layout from V2.1
+
+**Individual fixes**:
+- Gas tuning: Algebra afterSwap threshold, V3 heavyGas evmWouldComplete
+- FoT exemptions: 5 HEFE pools, 2 ARENA_BURNER pools not in isLiquidityPool
+- Token overrides: DWC disableSlots[5] lubricating, GURS disableSlots[20] restrictionsOn
+- DODO min swap amount check from storage slots 10/11
+- V3 bitmap extension: absolute word range for full-range positions
+- Pharaoh V3 layout: try V2 namespace before V1 for beacon-upgraded pools
+- 7 V4 pools un-blacklisted (work with realistic amounts)
+- 1 UniV3, 2 LFJ V2 pools registered
 
 ### Arb bot updates
 - `evmVerifyPath` + `binarySearchSize` use `stateWithOverrides` with sender balance + allowance
 - Private key required at startup (removed dead `dryRun` code paths)
 
-### Remaining coverage gaps (1156 mismatches at realistic amounts)
-- Pharaoh V1 stale factory fees (~6 pools, needs factory storage reads for mutable fees)
-- Pharaoh V1/V3 missing from registry (~15 pools, needs on-chain probing)
-- 3-token Balancer V3 (~5 pools, needs PoolQuoter interface change for multi-token)
-- GyroECLP Balancer V3 (2 pools, 781 lines of specialized ellipse math)
-- V4 pools with hooks (~5 pools, dynamic fees from external contracts)
-- Many V2/LFJ V1 pools with broken tokens, paused contracts, FoT edge cases
-- Wombat/Platypus: no formula implementation (6 pools)
+### Remaining gaps (46 mismatches)
+- ~30 blacklisted pools with genuinely broken tokens (transfer restrictions, paused, reflect bugs)
+- Wombat/Platypus: no formula (4 mismatches, spec ready for Wombat)
+- Balancer V3 3-token + GyroECLP (4 mismatches, needs PoolQuoter interface change)
+- Pharaoh V3 one-sided liquidity (4 mismatches)
+- Pharaoh V1 remaining fee edge cases (2 mismatches)
+- LFJ V2 edge cases (2 mismatches)
 
 ## 2026-04-01 — Gob-encoded initial dump (27s → 2s connection)
 - Replaced JSON hex wire format with gob encoding for initial_dump

@@ -54,11 +54,11 @@ var balanceOfSelector = [4]byte{0x70, 0xa0, 0x82, 0x31}
 func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 common.Address, blockTimestamp uint64, caller EVMCaller) PoolQuoter {
 	poolAddress := strings.ToLower(addr.Hex())
 
-	// Check if pool is in lfjV2Registry (has immutable data: binStep + tokenX ordering).
-	// Pools not in the registry (e.g. LFJ V2.0 pools with on-chain storage for these
-	// fields) fall through to the null quoter — they cannot be quoted by the current
-	// V2.1/V2.2 formula without a separate V2.0 implementation.
+	// Check if pool is in lfjV2Registry (V2.1/V2.2) or lfjV2_0Registry (V2.0).
 	imm, ok := lfjV2Registry[poolAddress]
+	if !ok {
+		imm, ok = lfjV2_0Registry[poolAddress]
+	}
 	if !ok {
 		return &nullLFJV2Pool{addr: addr}
 	}
@@ -100,7 +100,11 @@ func newLFJV2Pool(addr common.Address, reader StorageReader, token0, token1 comm
 		tokenYAddr = common.HexToAddress(token0Hex)
 	}
 
-	if caller != nil && state.GlobalReserveX != nil && state.GlobalReserveY != nil {
+	// V2.0 pools track fees separately in PairInformation.feesX/feesY. The V2.0
+	// swap computes received = balanceOf(pool) - reserve - fees, so surplus
+	// (balanceOf - reserve) includes accumulated fees and would overcount.
+	// Skip surplus for V2.0 — it's only needed for rebasing tokens in V2.1.
+	if caller != nil && state.GlobalReserveX != nil && state.GlobalReserveY != nil && !state.IsV20 {
 		surplusX = lfjV2ComputeSurplus(caller, tokenXAddr, addr, state.GlobalReserveX)
 		surplusY = lfjV2ComputeSurplus(caller, tokenYAddr, addr, state.GlobalReserveY)
 	}

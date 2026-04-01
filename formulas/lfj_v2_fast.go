@@ -2,6 +2,7 @@ package formulas
 
 import (
 	"math/big"
+	"strings"
 	"sync"
 
 	"github.com/ava-labs/libevm/crypto"
@@ -368,7 +369,7 @@ func lfjV2FindFirstRightU256(read StateReader, poolAddress string, layout *lfjV2
 
 	bit = uint8(key1 & 0xFF)
 	if bit != 0 {
-		val, err := read(poolAddress, big.NewInt(int64(layout.treeLevel0Slot)))
+		val, err := lfjV2ReadTreeLevel0(read, poolAddress, layout)
 		if err != nil {
 			return 0, err
 		}
@@ -431,7 +432,7 @@ func lfjV2FindFirstLeftU256(read StateReader, poolAddress string, layout *lfjV2L
 
 	bit = uint8(key1 & 0xFF)
 	if bit != 255 {
-		val, err := read(poolAddress, big.NewInt(int64(layout.treeLevel0Slot)))
+		val, err := lfjV2ReadTreeLevel0(read, poolAddress, layout)
 		if err != nil {
 			return 0, err
 		}
@@ -460,7 +461,17 @@ func lfjV2FindFirstLeftU256(read StateReader, poolAddress string, layout *lfjV2L
 
 // FetchLFJV2StateFast reads LFJ V2 state, returning a fast layout for use with QuoteLFJV2Fast.
 func FetchLFJV2StateFast(read StateReader, poolAddress string, token0, token1 string) (*LFJV2State, *lfjV2LayoutFast, error) {
-	// Reuse existing FetchLFJV2StateStorage for the state, then convert layout
+	// Check V2.0 registry first
+	poolAddr := strings.ToLower(poolAddress)
+	if imm, ok := lfjV2_0Registry[poolAddr]; ok {
+		state, err := FetchLFJV2StateStorageV20(read, poolAddress, token0, token1, imm)
+		if err != nil {
+			return nil, nil, err
+		}
+		return state, &lfjV2LayoutFastV20, nil
+	}
+
+	// Reuse existing FetchLFJV2StateStorage for V2.1 state, then convert layout
 	state, origLayout, err := FetchLFJV2StateStorage(read, poolAddress, token0, token1)
 	if err != nil {
 		return nil, nil, err
@@ -512,7 +523,11 @@ func QuoteLFJV2Fast(read StateReader, state *LFJV2State, layout *lfjV2LayoutFast
 			reserveY.SetFromBig(cached.ReserveY)
 		} else {
 			var err error
-			reserveX, reserveY, err = lfjV2ReadBinU256(read, state.PoolAddress, layout.binsSlot, activeId)
+			if isV20Layout(layout) {
+				reserveX, reserveY, err = lfjV2ReadBinU256V20(read, state.PoolAddress, layout.binsSlot, activeId)
+			} else {
+				reserveX, reserveY, err = lfjV2ReadBinU256(read, state.PoolAddress, layout.binsSlot, activeId)
+			}
 			if err != nil {
 				break
 			}

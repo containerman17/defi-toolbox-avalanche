@@ -150,38 +150,88 @@ func runBlockBenchmark(
 		fmt.Fprintf(os.Stderr, "[benchmark] %d pools skipped (no token price, run tools/token-pricer)\n", skipped)
 	}
 
+	// Pass 1: EVM ground truth.
+	// For each pool, find the direction with a known input amount (from tokenAmounts),
+	// quote that direction, then use the EVM output as input for the reverse direction.
+	// This ensures both directions use realistic amounts.
 	fmt.Fprintf(os.Stderr, "[benchmark] pass 1 (EVM ground truth, %d workers)...", evmPool.Size())
 	p1t0 := time.Now()
 
-	var wg sync.WaitGroup
+	// Phase 1a: forward direction (known amount → pool) in parallel
+	type fwdWork struct {
+		poolIdx int
+		fwdDir  int // which token index has the known amount
+	}
+	var fwdJobs []fwdWork
 	for i := range pools {
 		pool := &pools[i]
-		for _, tokenIdx := range [][2]int{{0, 1}, {1, 0}} {
-			if tokenIdx[0] >= len(pool.Tokens) || tokenIdx[1] >= len(pool.Tokens) {
-				continue
-			}
-			amountIn := poolAmounts[poolAmountKey{pool.Address, tokenIdx[0]}]
-			if amountIn == nil {
-				continue
-			}
-			wg.Add(1)
-			go func(p *pathfinder.Pool, ti [2]int, amt *uint256.Int) {
-				defer wg.Done()
-				tokenIn := p.Tokens[ti[0]]
-				tokenOut := p.Tokens[ti[1]]
-				calldata := pathfinder.EncodeSwapSingleWithExtra(p.Address, p.PoolType, tokenIn, tokenOut, amt, p.ExtraData)
-
-				ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
-
-				if evmErr == nil && len(ret) >= 32 {
-					var out uint256.Int
-					out.SetBytes(ret[:32])
-					groundMu.Lock()
-					evmGround[quoteKey{p.Address, ti[0]}] = out
-					groundMu.Unlock()
-				}
-			}(pool, tokenIdx, amountIn)
+		if len(pool.Tokens) < 2 {
+			continue
 		}
+		// Pick the direction where we have a token amount.
+		// Prefer token0 as input (dir=0) if available, else token1 (dir=1).
+		if poolAmounts[poolAmountKey{pool.Address, 0}] != nil {
+			fwdJobs = append(fwdJobs, fwdWork{i, 0})
+		} else if poolAmounts[poolAmountKey{pool.Address, 1}] != nil {
+			fwdJobs = append(fwdJobs, fwdWork{i, 1})
+		}
+	}
+
+	var wg sync.WaitGroup
+	for _, job := range fwdJobs {
+		wg.Add(1)
+		go func(j fwdWork) {
+			defer wg.Done()
+			pool := &pools[j.poolIdx]
+			tokenIn := pool.Tokens[j.fwdDir]
+			tokenOut := pool.Tokens[1-j.fwdDir]
+			amountIn := poolAmounts[poolAmountKey{pool.Address, j.fwdDir}]
+			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
+
+			ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
+			if evmErr == nil && len(ret) >= 32 {
+				var out uint256.Int
+				out.SetBytes(ret[:32])
+				groundMu.Lock()
+				evmGround[quoteKey{pool.Address, j.fwdDir}] = out
+				// Set the reverse direction's amount to this EVM output
+				if !out.IsZero() {
+					revAmt := new(uint256.Int).Set(&out)
+					poolAmounts[poolAmountKey{pool.Address, 1 - j.fwdDir}] = revAmt
+				}
+				groundMu.Unlock()
+			}
+		}(job)
+	}
+	wg.Wait()
+
+	// Phase 1b: reverse direction (EVM forward output → pool) in parallel
+	var revJobs []fwdWork
+	for _, job := range fwdJobs {
+		revDir := 1 - job.fwdDir
+		if poolAmounts[poolAmountKey{pools[job.poolIdx].Address, revDir}] != nil {
+			revJobs = append(revJobs, fwdWork{job.poolIdx, revDir})
+		}
+	}
+	for _, job := range revJobs {
+		wg.Add(1)
+		go func(j fwdWork) {
+			defer wg.Done()
+			pool := &pools[j.poolIdx]
+			tokenIn := pool.Tokens[j.fwdDir]
+			tokenOut := pool.Tokens[1-j.fwdDir]
+			amountIn := poolAmounts[poolAmountKey{pool.Address, j.fwdDir}]
+			calldata := pathfinder.EncodeSwapSingleWithExtra(pool.Address, pool.PoolType, tokenIn, tokenOut, amountIn, pool.ExtraData)
+
+			ret, _, evmErr := evmPool.Execute(DUMMY_SENDER, ROUTER, calldata)
+			if evmErr == nil && len(ret) >= 32 {
+				var out uint256.Int
+				out.SetBytes(ret[:32])
+				groundMu.Lock()
+				evmGround[quoteKey{pool.Address, j.fwdDir}] = out
+				groundMu.Unlock()
+			}
+		}(job)
 	}
 	wg.Wait()
 	fmt.Fprintf(os.Stderr, " %dms\n", time.Since(p1t0).Milliseconds())

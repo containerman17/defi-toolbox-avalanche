@@ -148,7 +148,7 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 
 	// For each token with a known balance slot, set a realistic balance on the router.
 	// 1000 units (at 18 decimals) — enough for quoting but not so large it creates fake arb.
-	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1000), uint256.NewInt(1_000_000_000_000_000_000)) // 1000 * 1e18
+	largeBalance := new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)) // 1e30 — enough for low-value meme tokens
 
 	var overrides []pathfinder.ParsedOverride
 	hookSet := make(map[common.Address]bool)
@@ -217,7 +217,7 @@ func BuildSenderOverrides(sender, routerAddr common.Address, pools []pathfinder.
 		}
 	}
 
-	largeBalance := new(uint256.Int).Mul(uint256.NewInt(1000), uint256.NewInt(1_000_000_000_000_000_000)) // 1000 * 1e18
+	largeBalance := new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)) // 1e30 — enough for low-value meme tokens
 	maxUint256 := new(uint256.Int).Sub(new(uint256.Int).Lsh(uint256.NewInt(1), 256), uint256.NewInt(1))   // 2^256 - 1
 
 	var overrides []pathfinder.ParsedOverride

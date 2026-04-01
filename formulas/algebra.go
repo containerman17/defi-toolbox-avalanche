@@ -200,10 +200,12 @@ func QuoteAlgebraStorage(read StateReader, poolAddress string, amountIn *big.Int
 			val4 := new(big.Int).SetBytes(data4[:])
 			mask104 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 104), big.NewInt(1))
 			feePending0 := new(big.Int).And(val4, mask104)
+			feePending1 := new(big.Int).And(new(big.Int).Rsh(val4, 104), mask104)
 			// When pending fees exceed ~1e12 wei (1 µToken), the afterSwap
 			// triggers expensive fee transfers + TWAP oracle catch-up.
 			// Observed overhead: ~2.6M gas for pools with high pending fees.
-			if feePending0.Cmp(big.NewInt(1_000_000_000_000)) > 0 {
+			// Check both pending0 and pending1 — dir=1 accumulates fees in pending1.
+			if feePending0.Cmp(big.NewInt(1_000_000_000_000)) > 0 || feePending1.Cmp(big.NewInt(1_000_000_000_000)) > 0 {
 				afterSwapGas = 2_600_000
 			}
 		}

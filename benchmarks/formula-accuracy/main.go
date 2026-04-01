@@ -248,8 +248,8 @@ func runBlockBenchmark(
 					ts.Mismatch++
 					mismatchSet[key] = true
 					if len(mismatchLog) < 200 {
-						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s",
-							pool.Address.Hex(), tokenIdx[0], result.Dec(), evmResult.Dec()))
+						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s (pool#%d)",
+							pool.Address.Hex(), tokenIdx[0], result.Dec(), evmResult.Dec(), i+2))
 					}
 				}
 			}

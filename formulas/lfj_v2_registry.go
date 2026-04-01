@@ -355,6 +355,7 @@ var lfjV2Registry = map[string]LFJV2Immutables{
 	"0x5edf58b0fb18c2e932748240ec4989cf90c54cc1": {25, true},
 	"0x5f8e89e1e960413071b83b88b2ed6a2a567dfce7": {25, true},
 	"0x5fc0d69e5370ff1ab7ed76c54ef05264f23bbba1": {50, true},
+	"0x6079c6c97792c6f90351c166b54a363fd65157c2": {25, false},  // WAVAX/XAVA V2.1
 	"0x60a443aa215472111b31836924bedc802972c93c": {100, false},
 	"0x6145933b5a99602fbb14329848a21048e379c31b": {100, true},
 	"0x62560034276c580a1f1330ed282fb2d3fb908d3b": {100, true},

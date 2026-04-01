@@ -1,6 +1,26 @@
 # Changelog
 
-## 2026-04-01 — Full session: performance + coverage
+## 2026-04-01 — Full session: performance + coverage + benchmark overhaul
+
+### Benchmark overhaul: realistic amounts reveal true coverage
+
+The benchmark previously used a flat `1e18` input for all pools. This created
+two classes of false results:
+- **False matches**: broken pools where both formula AND EVM return 0 with absurd
+  inputs (1e18 USDC = 1 trillion, 1e18 BTC.b = 10 billion BTC). Both fail → "match."
+- **False mismatches**: working pools where formula bails from gas/bitmap exhaustion
+  on unrealistic amounts, but EVM succeeds with partial output.
+
+The old 97.8% metric was inflated by hundreds of zero-zero false matches.
+
+**New approach**: `tools/token-pricer` runs multi-wave EVM price discovery at the
+deploy block, starting from 0.1 AVAX (~$1) and spreading through all pools via
+`debugSwapSingle`. Each token gets a realistic amount. The benchmark reads these
+from `formulas/data/token_amounts.txt` (embedded, deterministic).
+
+**Result**: honest baseline of **70.7%** (2796/3952 tested quotes). The 1156
+mismatches are real formula-vs-EVM disagreements at ~$1 amounts — no more
+inflated numbers from zero-zero agreements on broken pools.
 
 ### Performance (4 optimizations, 4.4x native / 13.7x connection)
 - **In-place block diff**: `CloneWithDiff` → `ApplyDiffInPlace`, O(diff) instead of O(870K). 195ms → 77ms/quote
@@ -9,25 +29,27 @@
 - **Gob initial dump**: JSON hex → gob binary WebSocket frame. WASM connection 27s → 2s
 - **WASM quotes**: 230-300ms → 112-131ms (2.2x)
 
-### Formula coverage 96.4% → 97.8% (+56 matches)
-- **Registry fixes** (+5): un-blacklist re-funded UniV3 BTC.b/USDC, add PangolinV3 WETH.e/WAVAX, add WAVAX/XAVA to lfj_v2_registry, register PeerToken/USDC V4
-- **Gas tuning** (+2): Algebra afterSwap threshold 1e12→1e18 (pool 0xC13F, 147 steps), fix feePending1 check for dir=1
-- **V3 heavyGas** (+1): `evmWouldComplete` now uses 55K/tick + 400K overhead for Pharaoh/Pangolin V3
-- **Dead pool blacklist** (+43): batch blacklist 44 pools where formula computes but EVM reverts (broken tokens, paused contracts, drained pools)
-- **deadPoolDirs** (+5): ARENA_BURNER max_wallet, Algebra gas limit, NYA paused token, WAVAX/USDC bitmap range
-- **Pharaoh V3 layout** (future fix): try V2 storage namespace before V1 for beacon-upgraded pools
+### Formula coverage fixes (real improvements, independent of benchmark change)
+- **Registry fixes**: un-blacklist re-funded UniV3 BTC.b/USDC, add PangolinV3 WETH.e/WAVAX, add WAVAX/XAVA to lfj_v2_registry, register PeerToken/USDC V4
+- **Gas tuning**: Algebra afterSwap threshold 1e12→1e18 (pool 0xC13F, 147 steps), fix feePending1 check for dir=1
+- **V3 heavyGas**: `evmWouldComplete` now uses 55K/tick + 400K overhead for Pharaoh/Pangolin V3
+- **Dead pool blacklist**: batch blacklist 44 pools where formula computes but EVM reverts
+- **FoT exemptions**: HEFE/Always pool not in isLiquidityPool
+- **Pharaoh V3 layout**: try V2 storage namespace before V1 for beacon-upgraded pools
+- **V3 bitmap extension**: use absolute word range for full-range position detection
 
 ### Arb bot updates
 - `evmVerifyPath` + `binarySearchSize` use `stateWithOverrides` with sender balance + allowance
 - Private key required at startup (removed dead `dryRun` code paths)
 
-### Remaining coverage gaps (89 mismatches)
+### Remaining coverage gaps (1156 mismatches at realistic amounts)
 - Pharaoh V1 stale factory fees (~6 pools, needs factory storage reads for mutable fees)
 - Pharaoh V1/V3 missing from registry (~15 pools, needs on-chain probing)
 - 3-token Balancer V3 (~5 pools, needs PoolQuoter interface change for multi-token)
 - GyroECLP Balancer V3 (2 pools, 781 lines of specialized ellipse math)
-- Bitmap range exhaustion (~10 pools, unrealistic 1e18 inputs with 6/8-decimal tokens)
-- V4 pools with hooks (~5 pools, dynamic fees from external contracts, unsupportable)
+- V4 pools with hooks (~5 pools, dynamic fees from external contracts)
+- Many V2/LFJ V1 pools with broken tokens, paused contracts, FoT edge cases
+- Wombat/Platypus: no formula implementation (6 pools)
 
 ## 2026-04-01 — Gob-encoded initial dump (27s → 2s connection)
 - Replaced JSON hex wire format with gob encoding for initial_dump

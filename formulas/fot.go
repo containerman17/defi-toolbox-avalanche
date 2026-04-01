@@ -478,6 +478,7 @@ var FotExemptPools = map[string]bool{
 
 	// HEFE (0x18e3...): lfj_v1 HEFE/0x7a84 pool not registered in isLiquidityPool — no fee.
 	"0x357233526bb85746829e67b076490462e49bdaa6": true, // HEFE/0x7a84 lfj_v1
+	"0xe795273c9938b98554dc31831b4b4360ad869259": true, // HEFE/Always lfj_v1
 
 	// GoodToken (GOOD, 0x169e8f): fee only applies for the ONE registered lp address
 	// (set via setLiquidity). Only pool 0x21013fe86a is the registered lp.

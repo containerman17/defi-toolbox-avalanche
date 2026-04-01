@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-04-01 — Formula coverage 96.4% → 97.8%
+
+### Fixes applied
+- Un-blacklist re-funded UniV3 BTC.b/USDC pool
+- Add PangolinV3 WETH.e/WAVAX to v3_registry + registry.txt
+- Add WAVAX/XAVA to lfj_v2_registry (V2.1, binStep=25)
+- Register PeerToken/USDC V4 pool (88% fee, tickSpacing=17600)
+- Fix Algebra afterSwap gas threshold (1e12 → 1e18, was too aggressive)
+- Fix V3 evmWouldComplete for heavyGas pools (55K/tick, 400K overhead)
+- Fix Algebra feePending1 check for dir=1 swaps
+- Batch blacklist 44 dead pools (formula=nonzero, evm=0)
+- deadPoolDirs: ARENA_BURNER max_wallet, Algebra gas, NYA paused, WAVAX/USDC bitmap
+
+### Remaining gaps (89 mismatches)
+- Pharaoh V1 stale factory fees (~6 pools, needs factory storage reads)
+- Pharaoh V1/V3 missing from registry (~15 pools, needs probing)
+- 3-token Balancer V3 (~5 pools, needs PoolQuoter interface change)
+- GyroECLP Balancer V3 (2 pools, 781 lines of ellipse math)
+- Bitmap range exhaustion from unrealistic 1e18 inputs (~10 pools)
+- V4 pools with hooks (~5 pools, unsupportable by formula)
+
+### Benchmark
+- 2000 pools, 1 block: 97.8% correct (3911/4000), 89 mismatches
+- Pool position (#N) now shown in mismatch output for triage
+
 ## 2026-04-01 — Gob-encoded initial dump (27s → 2s connection)
 - Replaced JSON hex wire format with gob encoding for initial_dump
 - New `statedb/wire` package: shared struct with zero libevm deps (server + client both import)

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-02 — Un-blacklist USDC.e/USDC LFJ V2 + WETH.e/WAVAX Pharaoh V3
+
+- Un-blacklisted USDC.e/USDC LFJ V2 pool (was -1, now 3): both directions match.
+- Un-blacklisted WETH.e/WAVAX Pharaoh V3 pool (was -1, now 2): dir=0 matches,
+  dir=1 added to deadPoolDirs (one-sided liquidity, EVM reverts).
+- Block 1: 4103/4142 = **99.1%** (was 99.0%).
+
 ## 2026-04-02 — Coverage fixes: un-blacklist Gladiator pools
 
 - Un-blacklisted 2 Gladiator (ARENA_BURN) pools — `max_wallet` only affects receiving

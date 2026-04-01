@@ -467,6 +467,7 @@ var deadPoolDirs = map[common.Address]common.Address{
 	common.HexToAddress("0x9ba9c677d19347abfba1d6b6d6ceb61942071561"): common.HexToAddress("0x38f9bf9dce51833ec7f03c9dc218197999999999"), // NYA/WAVAX UniV3: NYA as input reverts (paused)
 	common.HexToAddress("0x4c79e30bc8eb6d83620b6166e49a27615eeed221"): common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"), // Gladiator/USDC: USDC→Gladiator hits max_wallet
 	common.HexToAddress("0xdf9db5a5f3a00e0e27def12af95b4528ec23cf86"): common.HexToAddress("0xc139aa91399600f6b72975ac3317b6d49cb30a69"), // Gladiator/Arena: Arena→Gladiator hits max_wallet
+	common.HexToAddress("0x66a5de11d1e1f20da825d974453f099c4bb13647"): common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"), // WETH.e/WAVAX PharaohV3: WAVAX→WETH.e one-sided liquidity
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

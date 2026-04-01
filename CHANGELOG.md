@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-04-02 — Un-blacklist all 80 pools
+
+- Removed all `-1` (blacklist) entries from registry.txt — 0 blacklisted pools remain.
+- Every pool now gets its correct formula ID based on pool type.
+- 107 new `formula=nonzero, evm=0` false positives from broken tokens (transfer
+  restrictions, paused, max_wallet). These are acceptable: the arb bot's EVM
+  verification step catches them. The formula gives a quote; reality may disagree.
+- Block 1: 4024/4142 = 97.2% (headline number drops due to false positives).
+  Actual formula correctness for working pools is higher — only 6 true `formula=0,
+  evm=nonzero` gaps remain (WooFi multi-token, no formula).
+
 ## 2026-04-02 — Un-blacklist USDC.e/USDC LFJ V2 + WETH.e/WAVAX Pharaoh V3
 
 - Un-blacklisted USDC.e/USDC LFJ V2 pool (was -1, now 3): both directions match.

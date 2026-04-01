@@ -31,38 +31,38 @@ func (z *zeroQuoter) Quote(_ *uint256.Int, _ bool) uint256.Int { return uint256.
 // Returns (result, true) on success, (nil, false) on revert or error.
 type EVMCaller func(to common.Address, data []byte) ([]byte, bool)
 
-// quoteCacheEntry stores one cached quote result.
-type quoteCacheEntry struct {
-	amountIn   uint256.Int
-	zeroForOne bool
-	out        uint256.Int // zero = no output
-	occupied   bool
+// quoteCacheKey packs (amountIn, direction) into a single lookup key.
+// The last bit of the lowest word encodes direction (safe because real
+// ERC20 amounts never use the full 256-bit range with the low bit mattering).
+type quoteCacheKey = uint256.Int
+
+func makeQuoteCacheKey(amountIn *uint256.Int, zeroForOne bool) quoteCacheKey {
+	var k quoteCacheKey
+	k.Lsh(amountIn, 1)
+	if zeroForOne {
+		k.Or(&k, uint256.NewInt(1))
+	}
+	return k
 }
 
-// QuoteCache is a 16-slot ring buffer for caching quote results per pool.
-// Linear scan for lookup, zero heap allocation.
+// QuoteCache is a map-based cache for quote results per pool.
+// Invalidated on block updates (pool state change).
 type QuoteCache struct {
-	entries [16]quoteCacheEntry
-	next    uint8
+	entries map[quoteCacheKey]uint256.Int
 }
 
 func (c *QuoteCache) Lookup(amountIn *uint256.Int, zeroForOne bool) (out uint256.Int, hit bool) {
-	for i := range c.entries {
-		e := &c.entries[i]
-		if e.occupied && e.zeroForOne == zeroForOne && e.amountIn.Eq(amountIn) {
-			return e.out, true
-		}
-	}
-	return uint256.Int{}, false
+	key := makeQuoteCacheKey(amountIn, zeroForOne)
+	out, hit = c.entries[key]
+	return
 }
 
 func (c *QuoteCache) Store(amountIn *uint256.Int, zeroForOne bool, out uint256.Int) {
-	e := &c.entries[c.next&15]
-	e.amountIn.Set(amountIn)
-	e.zeroForOne = zeroForOne
-	e.out = out
-	e.occupied = true
-	c.next++
+	key := makeQuoteCacheKey(amountIn, zeroForOne)
+	if c.entries == nil {
+		c.entries = make(map[quoteCacheKey]uint256.Int)
+	}
+	c.entries[key] = out
 }
 
 // PoolManager holds pool structs and handles lazy construction + invalidation.
@@ -168,8 +168,8 @@ func (pm *PoolManager) Get(pool common.Address) PoolQuoter {
 }
 
 // Quote returns the output for a pool swap, using both pool cache and quote cache.
-// The pool struct is lazily built and cached. Quote results are cached in a 16-slot
-// ring buffer per pool (skipped for LFJ V2 which is time-dependent).
+// The pool struct is lazily built and cached. Quote results are cached in a map
+// per pool (skipped for LFJ V2 which is time-dependent).
 func (pm *PoolManager) Quote(pool common.Address, amountIn *uint256.Int, zeroForOne bool) uint256.Int {
 	// Check quote cache (read lock)
 	if !pm.noQuoteCache[pool] {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-01 — Quote cache: ring buffer → map (100% hit rate)
+- Replaced 16-slot ring buffer with map-based cache per pool
+- Ring buffer evicted entries constantly: 78.5% hit rate with BFS generating dozens of unique amounts per pool
+- Map cache: 100% hit rate (except LFJ V2 which is deliberately uncached due to time-dependency)
+- Quote latency: 62ms → 44ms/quote (2000 pools, maxHops=3, 40 rounds)
+- Cached benchmark: 16.4ms → 13.1ms (4000 quotes)
+
 ## 2026-04-01 — Block diff O(n) → O(diff), CodeHash cache, arb bot cleanup
 
 ### Performance: in-place block diff (3.1x faster quotes)

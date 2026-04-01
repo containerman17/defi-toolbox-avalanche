@@ -95,7 +95,10 @@ var (
 func v3ResolveLayout(read StateReader, poolAddress string) (*v3Layout, error) {
 	layouts := []*v3Layout{&v3LayoutStandard, &v3LayoutProxy, &v3LayoutPangolinReward, &v3LayoutPangolin}
 	if pharaohV3Pools[poolAddress] {
-		layouts = []*v3Layout{&v3LayoutPharaohV1, &v3LayoutPharaohV2}
+		// Try V2 (pool.storage) first: migrated pools have live data at V2 positions
+		// and stale data at V1 positions that can pass validation. V2 positions are
+		// zero for non-migrated pools, so V2 detection fails cleanly → falls to V1.
+		layouts = []*v3Layout{&v3LayoutPharaohV2, &v3LayoutPharaohV1}
 	}
 	for _, l := range layouts {
 		_, _, err := v3ReadSlot0(read, poolAddress, l.slot0)

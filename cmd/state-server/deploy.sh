@@ -19,7 +19,7 @@ if [ -z "${FLY_APP:-}" ]; then
 fi
 
 # Regions to deploy to (1 machine each)
-REGIONS=(iad nrt)
+REGIONS=(iad)
 
 echo "Deploying $FLY_APP to ${REGIONS[*]}..."
 

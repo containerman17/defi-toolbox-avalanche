@@ -1,5 +1,9 @@
 # Changelog
 
+## 2026-04-02 — GitHub Pages: deploy examples
+
+- Added GitHub Actions workflow to deploy `examples/` to GitHub Pages on push to main.
+
 ## 2026-04-02 — WASM SDK: consolidate ethCall + quoter, serve from state server
 
 - **Merged `examples/wasm-ethcall/` into `cmd/quoter-example/wasm/`**: single WASM binary

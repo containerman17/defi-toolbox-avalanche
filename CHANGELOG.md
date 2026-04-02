@@ -2,6 +2,7 @@
 
 ## 2026-04-02 — Examples: add simple eth_call demo, renumber
 
+- **`examples/index.html`**: landing page linking to all demos.
 - **`examples/01_eth_call/`**: new minimal demo — calls `WAVAX.balanceOf(pool)` each block
   to show how `ethCall` works. Good starting point (changes every few seconds on mainnet).
 - **Renamed** `01_evm_call` → `02_live_quotes` to reflect complexity ordering.

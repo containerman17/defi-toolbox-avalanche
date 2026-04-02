@@ -23,6 +23,7 @@ package statedb
 
 import (
 	"fmt"
+	"log"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -146,7 +147,10 @@ func (s *StateDB) GetState(addr common.Address, key common.Hash, _ ...stateconf.
 }
 
 func (s *StateDB) getStorage(addr common.Address, key common.Hash) common.Hash {
-	val, _ := s.getStorageWithErr(addr, key)
+	val, err := s.getStorageWithErr(addr, key)
+	if err != nil {
+		log.Printf("[statedb] getStorage error: %v", err)
+	}
 	return val
 }
 

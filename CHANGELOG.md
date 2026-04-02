@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-02 — state-server: binary cache + caps + zstd dump (73MB → 3.2MB)
+
+- **Refactored state server cache** from `map[string]string` (hex-prefixed keys, ~1KB/slot)
+  to typed binary maps: `map[[20]byte]map[[32]byte][32]byte` for storage, plus typed maps
+  for balance, nonce, code. Eliminates all hex string manipulation at read/write time.
+- **Hard caps enforced at write time** (cache-level, not just dump-level):
+  - `maxContracts = 1,000` — max unique contract addresses in cache
+  - `maxSlotsPerContract = 10,000` — max storage slots per contract
+  - Existing keys always get updated (block diffs are authoritative); only new entries rejected.
+- **Overflow logging**: per-second batched warnings when caps are hit.
+- **zstd compression** on the initial gob dump: 73MB → 3.2MB (23x compression).
+  Pure Go `klauspost/compress/zstd`, works in WASM.
+- **Block diff wire format unchanged**: still JSON `[][2]string` with `s:/b:/n:/c:` prefixed
+  keys. Typed diff is converted to hex only for the ~200-entry broadcast (cheap).
+- **No consumer changes needed**: `wire.Decode()` transparently handles zstd decompression.
+- Benchmark results identical: 99.8% correct (1000 pools, 1 block).
+- Added `SetFetcher()` to StateDB for instrumentation/logging.
+- Added `experiments/dump-size/` for measuring dump stats.
+
 ## 2026-04-02 — swap-replay: router balance override + Snow Monkey fix → 4969/5000 (99.4%)
 
 - Added router-side balance override in `buildStateOverrides` — some tokens (reflection)

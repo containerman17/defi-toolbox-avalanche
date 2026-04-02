@@ -419,3 +419,13 @@ time=2026-04-02_02:03 git=77198e72 blocks=3 ms_per_pool=0.0043 total_ms=8.5 pool
 time=2026-04-02_02:03 git=77198e72 blocks=1 ms_per_pool=0.5136 total_ms=0.5 pools=1 formula=81 match=62 mismatch=19 correctness=76.5 nonzero=4.9
 time=2026-04-02_02:04 git=77198e72 blocks=1 ms_per_pool=0.1589 total_ms=0.2 pools=1 formula=81 match=62 mismatch=19 correctness=76.5 nonzero=4.9
 time=2026-04-02_02:05 git=77198e72 blocks=1 ms_per_pool=0.0052 total_ms=10.4 pools=2000 formula=4142 match=4134 mismatch=8 correctness=99.8 nonzero=92.5
+time=2026-04-02_06:04 git=42bae74b blocks=1 ms_per_pool=0.0056 total_ms=1.1 pools=200 formula=484 match=480 mismatch=4 correctness=99.2 nonzero=79.8
+time=2026-04-02_06:05 git=42bae74b blocks=1 ms_per_pool=0.0055 total_ms=1.1 pools=200 formula=484 match=480 mismatch=4 correctness=99.2 nonzero=79.8
+time=2026-04-02_06:06 git=42bae74b blocks=1 ms_per_pool=0.0090 total_ms=1.8 pools=200 formula=484 match=480 mismatch=4 correctness=99.2 nonzero=79.8
+time=2026-04-02_06:12 git=42bae74b blocks=1 ms_per_pool=0.0070 total_ms=7.0 pools=1000 formula=2155 match=2150 mismatch=5 correctness=99.8 nonzero=89.9
+time=2026-04-02_07:25 git=42bae74b blocks=1 ms_per_pool=0.0054 total_ms=5.4 pools=1000 formula=2155 match=2150 mismatch=5 correctness=99.8 nonzero=89.9
+time=2026-04-02_07:36 git=42bae74b blocks=1 ms_per_pool=0.0073 total_ms=0.7 pools=100 formula=277 match=273 mismatch=4 correctness=98.6 nonzero=71.5
+time=2026-04-02_07:37 git=42bae74b blocks=1 ms_per_pool=0.0066 total_ms=3.3 pools=500 formula=1138 match=1134 mismatch=4 correctness=99.6 nonzero=86.7
+time=2026-04-02_07:38 git=42bae74b blocks=1 ms_per_pool=0.0054 total_ms=5.4 pools=1000 formula=2155 match=2150 mismatch=5 correctness=99.8 nonzero=89.9
+time=2026-04-02_07:39 git=42bae74b blocks=1 ms_per_pool=0.0041 total_ms=8.2 pools=2000 formula=4142 match=4134 mismatch=8 correctness=99.8 nonzero=92.5
+time=2026-04-02_07:47 git=42bae74b blocks=3 ms_per_pool=0.0038 total_ms=13.4 pools=3500 formula=7094 match=6804 mismatch=290 correctness=95.9 nonzero=91.0

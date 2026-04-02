@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math/big"
 	"net/http"
 	"os"
 	"runtime"
@@ -67,29 +66,33 @@ func blockHex(n int) string {
 	return fmt.Sprintf("0x%x", n)
 }
 
-func padSlot(slot string) string {
-	s := strings.ToLower(strings.TrimPrefix(slot, "0x"))
-	if len(s) < 64 {
-		s = strings.Repeat("0", 64-len(s)) + s
+// hexToAddr parses a hex address string into [20]byte.
+func hexToAddr(s string) [20]byte {
+	s = strings.TrimPrefix(strings.ToLower(s), "0x")
+	b, _ := hex.DecodeString(s)
+	var addr [20]byte
+	if len(b) <= 20 {
+		copy(addr[20-len(b):], b)
 	}
-	return "0x" + s
+	return addr
 }
 
-func storageKey(address, slot string) string {
-	return "s:" + strings.ToLower(address) + ":" + padSlot(slot)
+// hexToHash parses a hex hash/slot string into [32]byte.
+func hexToHash(s string) [32]byte {
+	s = strings.TrimPrefix(strings.ToLower(s), "0x")
+	b, _ := hex.DecodeString(s)
+	var h [32]byte
+	if len(b) <= 32 {
+		copy(h[32-len(b):], b)
+	}
+	return h
 }
 
-func balanceKey(address string) string {
-	return "b:" + strings.ToLower(address)
-}
+// addrHex converts [20]byte to "0x..." hex string.
+func addrHex(a [20]byte) string { return "0x" + hex.EncodeToString(a[:]) }
 
-func nonceKey(address string) string {
-	return "n:" + strings.ToLower(address)
-}
-
-func codeKey(address string) string {
-	return "c:" + strings.ToLower(address)
-}
+// hashHex converts [32]byte to "0x..." hex string.
+func hashHex(h [32]byte) string { return "0x" + hex.EncodeToString(h[:]) }
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types
@@ -349,12 +352,30 @@ func (p *rpcPool) ethGetBlockByNumber(block int) (blockInfo, error) {
 }
 
 // ---------------------------------------------------------------------------
-// State cache
+// State cache — typed binary maps with caps
 // ---------------------------------------------------------------------------
 
+// Cache caps: reject new entries beyond these limits.
+const (
+	maxContracts        = 20_000  // max unique contract addresses
+	maxSlotsPerContract = 100_000 // max storage slots per contract
+)
+
+// blockDiff is the typed output of traceBlockDiffWS.
+type blockDiff struct {
+	storage map[[20]byte]map[[32]byte][32]byte
+	balance map[[20]byte][32]byte
+	nonce   map[[20]byte]uint64
+	code    map[[20]byte][]byte
+}
+
 type stateCache struct {
-	mu          sync.RWMutex
-	values      map[string]string
+	mu      sync.RWMutex
+	storage map[[20]byte]map[[32]byte][32]byte
+	balance map[[20]byte][32]byte
+	nonce   map[[20]byte]uint64
+	code    map[[20]byte][]byte
+
 	blockNumber int
 	timestamp   uint64
 	baseFee     uint64
@@ -363,43 +384,119 @@ type stateCache struct {
 
 func newStateCache() *stateCache {
 	return &stateCache{
-		values: make(map[string]string),
+		storage: make(map[[20]byte]map[[32]byte][32]byte),
+		balance: make(map[[20]byte][32]byte),
+		nonce:   make(map[[20]byte]uint64),
+		code:    make(map[[20]byte][]byte),
 	}
 }
 
-func (c *stateCache) get(key string) (string, bool) {
+// ── Typed getters ──
+
+func (c *stateCache) getStorage(addr [20]byte, slot [32]byte) ([32]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	v, ok := c.values[key]
+	if slots, ok := c.storage[addr]; ok {
+		v, ok := slots[slot]
+		return v, ok
+	}
+	return [32]byte{}, false
+}
+
+func (c *stateCache) getBalance(addr [20]byte) ([32]byte, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.balance[addr]
 	return v, ok
 }
 
-func (c *stateCache) set(key, value string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.values[key] = value
+func (c *stateCache) getNonce(addr [20]byte) (uint64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.nonce[addr]
+	return v, ok
 }
 
-func (c *stateCache) applyDiff(diff map[string]string) int {
+func (c *stateCache) getCode(addr [20]byte) ([]byte, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.code[addr]
+	return v, ok
+}
+
+// ── Typed setters (with caps) ──
+
+func (c *stateCache) setStorage(addr [20]byte, slot [32]byte, value [32]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	slots, exists := c.storage[addr]
+	if !exists {
+		if len(c.storage) >= maxContracts {
+			return
+		}
+		slots = make(map[[32]byte][32]byte)
+		c.storage[addr] = slots
+	}
+	if _, has := slots[slot]; !has && len(slots) >= maxSlotsPerContract {
+		return
+	}
+	slots[slot] = value
+}
+
+func (c *stateCache) setBalance(addr [20]byte, value [32]byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.balance[addr] = value
+}
+
+func (c *stateCache) setNonce(addr [20]byte, value uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nonce[addr] = value
+}
+
+func (c *stateCache) setCode(addr [20]byte, value []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.code[addr] = value
+}
+
+// applyDiffAndUpdateBlock applies a typed diff and updates block metadata.
+func (c *stateCache) applyDiffAndUpdateBlock(diff *blockDiff, block int, timestamp, baseFee, gasLimit uint64) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	applied := 0
-	for k, v := range diff {
-		c.values[k] = v
-		applied++
-	}
-	return applied
-}
 
-// applyDiffAndUpdateBlock applies a diff and updates block metadata under a single lock.
-func (c *stateCache) applyDiffAndUpdateBlock(diff map[string]string, block int, timestamp, baseFee, gasLimit uint64) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	applied := 0
-	for k, v := range diff {
-		c.values[k] = v
+	for addr, slots := range diff.storage {
+		dst, exists := c.storage[addr]
+		if !exists {
+			if len(c.storage) >= maxContracts {
+				continue
+			}
+			dst = make(map[[32]byte][32]byte)
+			c.storage[addr] = dst
+		}
+		for slot, value := range slots {
+			if _, has := dst[slot]; !has && len(dst) >= maxSlotsPerContract {
+				continue
+			}
+			dst[slot] = value
+			applied++
+		}
+	}
+	for addr, bal := range diff.balance {
+		c.balance[addr] = bal
 		applied++
 	}
+	for addr, n := range diff.nonce {
+		c.nonce[addr] = n
+		applied++
+	}
+	for addr, code := range diff.code {
+		c.code[addr] = code
+		applied++
+	}
+
 	c.blockNumber = block
 	c.timestamp = timestamp
 	c.baseFee = baseFee
@@ -407,121 +504,67 @@ func (c *stateCache) applyDiffAndUpdateBlock(diff map[string]string, block int, 
 	return applied
 }
 
-func (c *stateCache) dump() (int, uint64, uint64, uint64, [][2]string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	entries := make([][2]string, 0, len(c.values))
-	for k, v := range c.values {
-		entries = append(entries, [2]string{k, v})
-	}
-	return c.blockNumber, c.timestamp, c.baseFee, c.gasLimit, entries
-}
-
-// dumpGob converts the flat string cache into a gob-encoded GobDump.
-// Called under blockMu.RLock() to ensure a consistent snapshot.
+// dumpGob builds a gob+zstd encoded dump directly from the typed maps.
 func (c *stateCache) dumpGob() []byte {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	// Count total storage entries.
+	totalSlots := 0
+	for _, slots := range c.storage {
+		totalSlots += len(slots)
+	}
 
 	d := &wire.GobDump{
 		BlockNumber: uint64(c.blockNumber),
 		Timestamp:   c.timestamp,
 		BaseFee:     c.baseFee,
 		GasLimit:    c.gasLimit,
-		Storage:     make([]wire.StorageEntry, 0, len(c.values)),
+		Storage:     make([]wire.StorageEntry, 0, totalSlots),
+		Accounts:    make([]wire.AccountEntry, 0, len(c.balance)),
 	}
 
-	// Temporary map to group account fields (balance, nonce, code) by address.
-	type acctData struct {
-		balance string
-		nonce   string
-		code    string
-	}
-	accounts := make(map[string]*acctData)
-
-	for k, v := range c.values {
-		if strings.HasPrefix(k, "s:") {
-			// Storage: "s:<addr>:<slot>" -> hex value
-			parts := strings.SplitN(k, ":", 3)
-			if len(parts) != 3 {
-				continue
-			}
-			var e wire.StorageEntry
-			decodeHexTo(e.Addr[:], parts[1])
-			decodeHexTo(e.Slot[:], parts[2])
-			decodeHexTo(e.Value[:], v)
-			d.Storage = append(d.Storage, e)
-		} else if strings.HasPrefix(k, "b:") {
-			addr := k[2:]
-			if accounts[addr] == nil {
-				accounts[addr] = &acctData{}
-			}
-			accounts[addr].balance = v
-		} else if strings.HasPrefix(k, "n:") {
-			addr := k[2:]
-			if accounts[addr] == nil {
-				accounts[addr] = &acctData{}
-			}
-			accounts[addr].nonce = v
-		} else if strings.HasPrefix(k, "c:") {
-			addr := k[2:]
-			if accounts[addr] == nil {
-				accounts[addr] = &acctData{}
-			}
-			accounts[addr].code = v
+	for addr, slots := range c.storage {
+		for slot, value := range slots {
+			d.Storage = append(d.Storage, wire.StorageEntry{
+				Addr: addr, Slot: slot, Value: value,
+			})
 		}
 	}
 
-	d.Accounts = make([]wire.AccountEntry, 0, len(accounts))
-	for addrHex, a := range accounts {
-		var e wire.AccountEntry
-		decodeHexTo(e.Addr[:], addrHex)
-
-		// Balance: hex string → big.Int → 32-byte big-endian
-		if a.balance != "" {
-			bi, ok := new(big.Int).SetString(strings.TrimPrefix(a.balance, "0x"), 16)
-			if ok {
-				b := bi.Bytes()
-				// Right-align into 32 bytes (big-endian)
-				copy(e.Balance[32-len(b):], b)
-			}
+	// Collect all unique addresses that have balance, nonce, or code.
+	addrs := make(map[[20]byte]bool)
+	for a := range c.balance {
+		addrs[a] = true
+	}
+	for a := range c.nonce {
+		addrs[a] = true
+	}
+	for a := range c.code {
+		addrs[a] = true
+	}
+	for addr := range addrs {
+		e := wire.AccountEntry{Addr: addr}
+		if bal, ok := c.balance[addr]; ok {
+			e.Balance = bal
 		}
-
-		// Nonce: hex string → uint64
-		if a.nonce != "" {
-			ni, ok := new(big.Int).SetString(strings.TrimPrefix(a.nonce, "0x"), 16)
-			if ok {
-				e.Nonce = ni.Uint64()
-			}
+		if n, ok := c.nonce[addr]; ok {
+			e.Nonce = n
 		}
-
-		// Code: hex string → raw bytes
-		if a.code != "" && a.code != "0x" {
-			e.Code, _ = hex.DecodeString(strings.TrimPrefix(a.code, "0x"))
+		if code, ok := c.code[addr]; ok {
+			e.Code = code
 		}
-
 		d.Accounts = append(d.Accounts, e)
 	}
 
 	var buf bytes.Buffer
 	if err := wire.Encode(&buf, d); err != nil {
-		log.Printf("[error] gob encode: %v", err)
+		log.Printf("[error] dump encode: %v", err)
 		return nil
 	}
+	log.Printf("[dump] %d contracts, %d slots, %d accounts, %d bytes (zstd)",
+		len(c.storage), totalSlots, len(d.Accounts), buf.Len())
 	return buf.Bytes()
-}
-
-// decodeHexTo decodes a hex string (with optional 0x prefix) into a fixed-size byte slice.
-// Left-pads with zeros if the hex value is shorter than dst.
-func decodeHexTo(dst []byte, hexStr string) {
-	hexStr = strings.TrimPrefix(hexStr, "0x")
-	b, _ := hex.DecodeString(hexStr)
-	// Right-align: copy to end of dst (big-endian padding)
-	if len(b) <= len(dst) {
-		copy(dst[len(dst)-len(b):], b)
-	} else {
-		copy(dst, b[len(b)-len(dst):])
-	}
 }
 
 func (c *stateCache) getBlockNumber() int {
@@ -533,14 +576,18 @@ func (c *stateCache) getBlockNumber() int {
 func (c *stateCache) size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.values)
+	total := 0
+	for _, slots := range c.storage {
+		total += len(slots)
+	}
+	return total + len(c.balance) + len(c.nonce) + len(c.code)
 }
 
 // ---------------------------------------------------------------------------
 // Block diff via debug_traceBlockByNumber (WebSocket)
 // ---------------------------------------------------------------------------
 
-func traceBlockDiffWS(pool *rpcPool, block int) (map[string]string, error) {
+func traceBlockDiffWS(pool *rpcPool, block int) (*blockDiff, error) {
 	raw, err := pool.call("debug_traceBlockByNumber", []interface{}{
 		blockHex(block),
 		map[string]interface{}{
@@ -557,15 +604,20 @@ func traceBlockDiffWS(pool *rpcPool, block int) (map[string]string, error) {
 		return nil, fmt.Errorf("parse trace result: %w", err)
 	}
 
-	diff := make(map[string]string)
+	diff := &blockDiff{
+		storage: make(map[[20]byte]map[[32]byte][32]byte),
+		balance: make(map[[20]byte][32]byte),
+		nonce:   make(map[[20]byte]uint64),
+		code:    make(map[[20]byte][]byte),
+	}
 	for _, txRaw := range txResults {
 		var tx struct {
 			Result struct {
 				Post map[string]struct {
-					Balance *string            `json:"balance"`
-					Nonce   *json.Number       `json:"nonce"`
-					Code    *string            `json:"code"`
-					Storage map[string]string  `json:"storage"`
+					Balance *string           `json:"balance"`
+					Nonce   *json.Number      `json:"nonce"`
+					Code    *string           `json:"code"`
+					Storage map[string]string `json:"storage"`
 				} `json:"post"`
 			} `json:"result"`
 		}
@@ -576,24 +628,64 @@ func traceBlockDiffWS(pool *rpcPool, block int) (map[string]string, error) {
 			continue
 		}
 		for address, account := range tx.Result.Post {
+			addr := hexToAddr(address)
 			if account.Balance != nil {
-				diff[balanceKey(address)] = *account.Balance
+				diff.balance[addr] = hexToHash(*account.Balance)
 			}
 			if account.Nonce != nil {
 				n, err := strconv.ParseInt(account.Nonce.String(), 10, 64)
 				if err == nil {
-					diff[nonceKey(address)] = fmt.Sprintf("0x%x", n)
+					diff.nonce[addr] = uint64(n)
 				}
 			}
 			if account.Code != nil {
-				diff[codeKey(address)] = *account.Code
+				code := strings.TrimPrefix(*account.Code, "0x")
+				b, _ := hex.DecodeString(code)
+				diff.code[addr] = b
 			}
 			for slot, value := range account.Storage {
-				diff[storageKey(address, slot)] = value
+				if diff.storage[addr] == nil {
+					diff.storage[addr] = make(map[[32]byte][32]byte)
+				}
+				diff.storage[addr][hexToHash(slot)] = hexToHash(value)
 			}
 		}
 	}
 	return diff, nil
+}
+
+// diffSize returns the total number of entries in a blockDiff.
+func diffSize(d *blockDiff) int {
+	n := len(d.balance) + len(d.nonce) + len(d.code)
+	for _, slots := range d.storage {
+		n += len(slots)
+	}
+	return n
+}
+
+// diffToEntries converts a typed blockDiff to the [][2]string wire format
+// used for block_diff JSON broadcasts.
+func diffToEntries(d *blockDiff) [][2]string {
+	entries := make([][2]string, 0, diffSize(d))
+	for addr, slots := range d.storage {
+		ah := addrHex(addr)
+		for slot, value := range slots {
+			entries = append(entries, [2]string{
+				"s:" + ah + ":" + hashHex(slot),
+				hashHex(value),
+			})
+		}
+	}
+	for addr, bal := range d.balance {
+		entries = append(entries, [2]string{"b:" + addrHex(addr), hashHex(bal)})
+	}
+	for addr, n := range d.nonce {
+		entries = append(entries, [2]string{"n:" + addrHex(addr), fmt.Sprintf("0x%x", n)})
+	}
+	for addr, code := range d.code {
+		entries = append(entries, [2]string{"c:" + addrHex(addr), "0x" + hex.EncodeToString(code)})
+	}
+	return entries
 }
 
 // ---------------------------------------------------------------------------
@@ -655,18 +747,58 @@ func parseRequest(data []byte) (*clientRequest, *rpcError) {
 	}
 }
 
-func cacheKeyForRequest(req *clientRequest) string {
+// cacheLookup checks the typed cache for a request. Returns hex string value and hit bool.
+func cacheLookup(c *stateCache, req *clientRequest) (string, bool) {
+	addr := hexToAddr(req.Address)
 	switch req.Method {
 	case "state_getStorageAt":
-		return storageKey(req.Address, req.Slot)
+		v, ok := c.getStorage(addr, hexToHash(req.Slot))
+		if ok {
+			return hashHex(v), true
+		}
 	case "state_getBalance":
-		return balanceKey(req.Address)
+		v, ok := c.getBalance(addr)
+		if ok {
+			return hashHex(v), true
+		}
 	case "state_getNonce":
-		return nonceKey(req.Address)
+		v, ok := c.getNonce(addr)
+		if ok {
+			return fmt.Sprintf("0x%x", v), true
+		}
 	case "state_getCode":
-		return codeKey(req.Address)
-	default:
-		return ""
+		v, ok := c.getCode(addr)
+		if ok {
+			if len(v) == 0 {
+				return "0x", true
+			}
+			return "0x" + hex.EncodeToString(v), true
+		}
+	}
+	return "", false
+}
+
+// cacheStore writes a hex string value from an RPC response into the typed cache.
+func cacheStore(c *stateCache, req *clientRequest, hexValue string) {
+	addr := hexToAddr(req.Address)
+	switch req.Method {
+	case "state_getStorageAt":
+		c.setStorage(addr, hexToHash(req.Slot), hexToHash(hexValue))
+	case "state_getBalance":
+		c.setBalance(addr, hexToHash(hexValue))
+	case "state_getNonce":
+		n, err := strconv.ParseUint(strings.TrimPrefix(hexValue, "0x"), 16, 64)
+		if err == nil {
+			c.setNonce(addr, n)
+		}
+	case "state_getCode":
+		code := strings.TrimPrefix(hexValue, "0x")
+		if code == "" {
+			c.setCode(addr, nil)
+		} else {
+			b, _ := hex.DecodeString(code)
+			c.setCode(addr, b)
+		}
 	}
 }
 
@@ -1013,8 +1145,7 @@ func handleClientRequest(pool *rpcPool, s *stateServer, data []byte, wsWrite fun
 	s.blockMu.RLock()
 	currentBlock := s.cache.getBlockNumber()
 	req.BlockNumber = currentBlock
-	key := cacheKeyForRequest(req)
-	cached, cacheHit := s.cache.get(key)
+	cached, cacheHit := cacheLookup(s.cache, req)
 	s.blockMu.RUnlock()
 
 	if cacheHit {
@@ -1038,7 +1169,7 @@ func handleClientRequest(pool *rpcPool, s *stateServer, data []byte, wsWrite fun
 
 	s.blockMu.RLock()
 	if s.cache.getBlockNumber() == currentBlock {
-		s.cache.set(key, value)
+		cacheStore(s.cache, req, value)
 	}
 	s.blockMu.RUnlock()
 
@@ -1146,7 +1277,7 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 			t0 := time.Now()
 
 			type diffResult struct {
-				diff map[string]string
+				diff *blockDiff
 				err  error
 			}
 			type infoResult struct {
@@ -1182,11 +1313,9 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 			applied := s.cache.applyDiffAndUpdateBlock(dr.diff, block, ir.info.Timestamp, ir.info.BaseFee, ir.info.GasLimit)
 
 			// Broadcast ALL changed keys to all clients
-			if len(dr.diff) > 0 && s.clients.count() > 0 {
-				entries := make([][2]string, 0, len(dr.diff))
-				for k, v := range dr.diff {
-					entries = append(entries, [2]string{k, v})
-				}
+			ds := diffSize(dr.diff)
+			if ds > 0 && s.clients.count() > 0 {
+				entries := diffToEntries(dr.diff)
 				msg, _ := json.Marshal(map[string]interface{}{
 					"type":        "block_diff",
 					"blockNumber": block,
@@ -1204,7 +1333,7 @@ func blockLoop(pool *rpcPool, s *stateServer) error {
 
 			elapsed := time.Since(t0).Milliseconds()
 			logJSON(map[string]interface{}{
-				"event": "block", "block": block, "diffKeys": len(dr.diff),
+				"event": "block", "block": block, "diffKeys": ds,
 				"applied": applied, "cached": s.cache.size(),
 				"ms": elapsed, "clients": s.clients.count(),
 			})

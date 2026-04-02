@@ -79,7 +79,7 @@ func runBlockBenchmark(
 	stateServerHost string,
 	useCache bool,
 ) (*blockResult, error) {
-	stateServerURL := fmt.Sprintf("ws://%s/debug/%d", stateServerHost, blockNum)
+	stateServerURL := fmt.Sprintf("%s/debug/%d", strings.TrimRight(stateServerHost, "/"), blockNum)
 
 	ls, err := statedb.Connect(stateServerURL)
 	if err != nil {
@@ -451,7 +451,7 @@ func main() {
 	skipFormulas := flag.Bool("skip-formulas", false, "skip formula pass")
 	numBlocksFlag := flag.Int("blocks", 3, "number of blocks to test")
 	singlePoolFlag := flag.String("pool", "", "test a single pool address")
-	stateServerFlag := flag.String("state-server", "localhost:7449", "state server host:port")
+	stateServerFlag := flag.String("state-server", "ws://localhost:7449", "state server base URL")
 	useCacheFlag := flag.Bool("cache", false, "use formula quote cache")
 	cpuProfileFlag := flag.String("cpuprofile", "", "write CPU profile to file")
 	memProfileFlag := flag.String("memprofile", "", "write memory profile to file")

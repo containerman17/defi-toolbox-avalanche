@@ -162,7 +162,7 @@ function getRow(block) {
 function setLocal(block, result, ms) {
   const row = getRow(block);
   const msCell = row.tr.querySelector('.local-ms');
-  msCell.innerHTML = `<span class="text-green-300 font-medium">${ms.toFixed(1)}</span><span class="text-green-700 text-xs"> ms</span>`;
+  msCell.innerHTML = `<span class="text-green-300 font-medium whitespace-nowrap">${ms.toFixed(1)}&nbsp;ms</span>`;
   msCell.className = 'py-2 px-3 local-ms tabular-nums';
   row.tr.classList.remove('flash-local');
   void row.tr.offsetWidth;
@@ -173,7 +173,7 @@ function setLocal(block, result, ms) {
 function setRPC(block, result, ms) {
   const row = getRow(block);
   const msCell = row.tr.querySelector('.rpc-ms');
-  msCell.innerHTML = `<span class="text-yellow-300 font-medium">${ms.toFixed(0)}</span><span class="text-yellow-700 text-xs"> ms</span>`;
+  msCell.innerHTML = `<span class="text-yellow-300 font-medium whitespace-nowrap">${ms.toFixed(0)}&nbsp;ms</span>`;
   msCell.className = 'py-2 px-3 rpc-ms tabular-nums';
   row.tr.classList.remove('flash-rpc');
   void row.tr.offsetWidth;

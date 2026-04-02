@@ -1,14 +1,15 @@
 # Changelog
 
-## 2026-04-02 — Examples: eth_call latency comparison demo
+## 2026-04-02 — Examples: rework both demos
 
-- **`examples/01_eth_call/`**: reworked into a latency comparison — runs the same `eth_call`
-  via in-browser WASM EVM (on block subscription) and via public Avalanche RPC (sequential
-  per-block polling). Table shows block number + execution time side by side; latest return
-  values shown below. Contract and calldata are editable, prefilled with `USDC.totalSupply()`.
-  Uses Tailwind CSS, row flash animations, proper status progression.
-- **`examples/index.html`**: landing page linking to all demos.
-- **Renamed** `01_evm_call` → `02_live_quotes` to reflect complexity ordering.
+- **`examples/01_eth_call/`**: latency comparison — same `eth_call` via in-browser WASM EVM
+  (on block subscription) vs public Avalanche RPC (sequential per-block polling). Editable
+  contract/calldata, prefilled with `USDC.totalSupply()`. Tailwind CSS.
+- **`examples/02_live_quotes/`**: live spread table — continuous round-trip quotes (buy $100
+  USDC worth of each token, sell back) across WAVAX, WETH.e, BTC.b, EURC, stAVAX. Each quote
+  searches 2,000 pools via BFS pathfinding. Shows buy/sell amounts, per-quote ms, and spread %.
+- **`examples/index.html`**: updated descriptions.
+- **Renamed** `01_evm_call` → `02_live_quotes`.
 
 ## 2026-04-02 — GitHub Pages: deploy examples
 

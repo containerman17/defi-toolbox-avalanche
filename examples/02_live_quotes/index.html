@@ -2,30 +2,227 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>WASM Quoter Test</title>
+<title>Live Spread Table — DeFi Toolbox</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] },
+    }
+  }
+};
+</script>
 <style>
-  body { font-family: monospace; margin: 2em; background: #111; color: #eee; }
-  input, button { font-family: monospace; font-size: 14px; padding: 4px 8px; }
-  input { background: #222; color: #eee; border: 1px solid #555; width: 500px; }
-  button { cursor: pointer; background: #333; color: #eee; border: 1px solid #555; }
-  button:disabled { opacity: 0.4; cursor: default; }
-  #log { white-space: pre-wrap; margin-top: 1em; line-height: 1.4; }
+  @keyframes pulse-cell { 0% { background: rgba(34,197,94,0.12); } 100% { background: transparent; } }
+  .cell-flash { animation: pulse-cell 0.4s ease-out; }
 </style>
 </head>
-<body>
+<body class="bg-gray-950 text-gray-300 font-mono min-h-screen">
 
-<div>
-  <label>State Server:</label><br>
-  <input id="url" value="https://replacing-javascript-precisely-stays.trycloudflare.com">
-  <button id="connectBtn" onclick="start()">Connect</button>
+<!-- Hero -->
+<div class="max-w-5xl mx-auto pt-12 pb-8 px-6">
+  <h1 class="text-2xl text-white font-bold tracking-tight">
+    Live spread table
+  </h1>
+  <p class="text-gray-500 mt-2 max-w-2xl leading-relaxed">
+    Each quote searches <span class="text-white">2,000 liquidity pools</span> via BFS pathfinding,
+    evaluating multi-hop routes across every major DEX on Avalanche — Trader Joe, Uniswap V3,
+    Pangolin, Curve, Balancer, and more. All of this runs locally in your browser tab via
+    <span class="text-green-400">WebAssembly EVM</span>, with chain state synced over WebSocket.
+    No RPC calls, no backend, no API keys.
+  </p>
+  <p class="text-gray-600 mt-2 text-sm">
+    For each token below: buy $100 worth, then immediately sell it back.
+    The spread is the round-trip cost. Watch the ms columns — that's real execution time
+    for a full 2,000-pool pathfinding quote, running in JavaScript.
+  </p>
 </div>
-<div id="log"></div>
+
+<!-- Config -->
+<div class="max-w-5xl mx-auto px-6 pb-6">
+  <div class="flex gap-3 items-end">
+    <div class="flex-1">
+      <label class="text-[11px] text-gray-600 uppercase tracking-wider block mb-1">State Server</label>
+      <input id="url" value="https://replacing-javascript-precisely-stays.trycloudflare.com"
+        class="bg-gray-900 border border-gray-800 text-sm px-3 py-2 w-full rounded focus:outline-none focus:border-gray-600 transition text-gray-300">
+    </div>
+    <button id="connectBtn" onclick="start()"
+      class="bg-green-600 hover:bg-green-500 disabled:opacity-30 disabled:cursor-default text-sm px-5 py-2 rounded text-white font-medium transition whitespace-nowrap">
+      Connect &amp; Start
+    </button>
+  </div>
+  <div id="status" class="text-[11px] text-gray-600 mt-2 h-4"></div>
+</div>
+
+<!-- Stats bar -->
+<div id="stats" class="max-w-5xl mx-auto px-6 pb-4 hidden">
+  <div class="flex gap-6 text-xs text-gray-600">
+    <span>Quotes: <span id="stat-count" class="text-gray-400">0</span></span>
+    <span>Avg: <span id="stat-avg" class="text-gray-400">—</span></span>
+    <span>Block: <span id="stat-block" class="text-gray-400">—</span></span>
+  </div>
+</div>
+
+<!-- Spread table -->
+<div class="max-w-5xl mx-auto px-6 pb-12">
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="text-[11px] uppercase tracking-wider text-gray-600">
+        <th class="py-2.5 px-3 text-left border-b border-gray-800">Token</th>
+        <th class="py-2.5 px-3 text-right border-b border-gray-800">Buy (100 USDC →)</th>
+        <th class="py-2.5 px-3 text-right border-b border-gray-800 w-16">ms</th>
+        <th class="py-2.5 px-3 text-right border-b border-gray-800">Sell (→ USDC)</th>
+        <th class="py-2.5 px-3 text-right border-b border-gray-800 w-16">ms</th>
+        <th class="py-2.5 px-3 text-right border-b border-gray-800 w-20">Spread</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div id="empty-state" class="text-center text-gray-700 text-sm py-12">
+    Connect to a state server to begin
+  </div>
+</div>
 
 <script>
-const log = (msg) => {
-  document.getElementById('log').textContent += msg + '\n';
-  console.log(msg);
-};
+const USDC = '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E';
+const AMOUNT_100_USDC = '100000000'; // 100 * 1e6
+
+const TOKENS = [
+  { symbol: 'WAVAX',  addr: '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7', decimals: 18 },
+  { symbol: 'WETH.e', addr: '0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB', decimals: 18 },
+  { symbol: 'BTC.b',  addr: '0x152b9d0FdC40C096757F570A51E494bd4b943E50', decimals: 8 },
+  { symbol: 'EURC',   addr: '0xC891EB4CbdEFf6e073e859e987815Ed1505c2ACD', decimals: 6 },
+  { symbol: 'stAVAX', addr: '0xa25EaF2906FA1a3a13EdAc9B9657108Af7B703e3', decimals: 18 },
+];
+
+const status = document.getElementById('status');
+const statsBar = document.getElementById('stats');
+const statCount = document.getElementById('stat-count');
+const statAvg = document.getElementById('stat-avg');
+const statBlock = document.getElementById('stat-block');
+const emptyState = document.getElementById('empty-state');
+const tbody = document.getElementById('rows');
+
+// Build table rows
+const tokenRows = {};
+for (const tok of TOKENS) {
+  const tr = document.createElement('tr');
+  tr.className = 'border-b border-gray-800/30 hover:bg-gray-900/30 transition-colors';
+  tr.innerHTML = `
+    <td class="py-2.5 px-3">
+      <span class="text-white font-medium">${tok.symbol}</span>
+      <span class="text-gray-700 text-xs ml-1.5">${tok.addr.slice(0,6)}...${tok.addr.slice(-4)}</span>
+    </td>
+    <td class="py-2.5 px-3 text-right text-gray-700 buy">—</td>
+    <td class="py-2.5 px-3 text-right text-gray-700 buy-ms tabular-nums">—</td>
+    <td class="py-2.5 px-3 text-right text-gray-700 sell">—</td>
+    <td class="py-2.5 px-3 text-right text-gray-700 sell-ms tabular-nums">—</td>
+    <td class="py-2.5 px-3 text-right text-gray-700 spread">—</td>
+  `;
+  tbody.appendChild(tr);
+  tokenRows[tok.symbol] = tr;
+}
+
+function formatToken(amountStr, decimals) {
+  const n = BigInt(amountStr);
+  const d = BigInt(10) ** BigInt(decimals);
+  const whole = n / d;
+  const frac = (n % d).toString().padStart(decimals, '0').slice(0, Math.min(decimals, 6));
+  return whole.toLocaleString() + '.' + frac;
+}
+
+function formatUSDC(amountStr) {
+  const n = BigInt(amountStr);
+  const whole = n / 1000000n;
+  const frac = (n % 1000000n).toString().padStart(6, '0');
+  return '$' + whole.toLocaleString() + '.' + frac.slice(0, 2);
+}
+
+function flashCell(td) {
+  td.classList.remove('cell-flash');
+  void td.offsetWidth;
+  td.classList.add('cell-flash');
+}
+
+function updateBuy(tok, buyAmount, ms) {
+  const tr = tokenRows[tok.symbol];
+  const buyCell = tr.querySelector('.buy');
+  const buyMsCell = tr.querySelector('.buy-ms');
+
+  buyCell.textContent = formatToken(buyAmount, tok.decimals);
+  buyCell.className = 'py-2.5 px-3 text-right buy text-green-400';
+  buyMsCell.innerHTML = `<span class="text-green-300 whitespace-nowrap">${ms.toFixed(0)}&nbsp;ms</span>`;
+  buyMsCell.className = 'py-2.5 px-3 text-right buy-ms tabular-nums';
+  flashCell(buyCell);
+}
+
+function updateSell(tok, sellBackAmount, ms) {
+  const tr = tokenRows[tok.symbol];
+  const sellCell = tr.querySelector('.sell');
+  const sellMsCell = tr.querySelector('.sell-ms');
+  const spreadCell = tr.querySelector('.spread');
+
+  sellCell.textContent = formatUSDC(sellBackAmount);
+  sellCell.className = 'py-2.5 px-3 text-right sell text-green-400';
+  sellMsCell.innerHTML = `<span class="text-green-300 whitespace-nowrap">${ms.toFixed(0)}&nbsp;ms</span>`;
+  sellMsCell.className = 'py-2.5 px-3 text-right sell-ms tabular-nums';
+
+  const spreadBps = Number(100000000n - BigInt(sellBackAmount)) / 10000; // basis points
+  const spreadPct = spreadBps / 100;
+  const spreadClass = spreadPct < 0.1 ? 'text-green-500' : spreadPct < 0.5 ? 'text-yellow-500' : 'text-red-400';
+  spreadCell.textContent = spreadPct.toFixed(2) + '%';
+  spreadCell.className = `py-2.5 px-3 text-right spread ${spreadClass}`;
+
+  flashCell(sellCell);
+}
+
+let quoteCount = 0;
+let totalQuoteMs = 0;
+
+async function quoteLoop() {
+  emptyState.style.display = 'none';
+  statsBar.classList.remove('hidden');
+
+  // warmup
+  for (const tok of TOKENS) {
+    await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC);
+  }
+
+  while (true) {
+    for (const tok of TOKENS) {
+      // Buy: 100 USDC → token
+      const t0 = performance.now();
+      const buy = await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC);
+      const buyMs = performance.now() - t0;
+      if (buy.error || !buy.forward) continue;
+      const buyAmount = buy.forward.amountOut;
+
+      quoteCount++;
+      totalQuoteMs += buyMs;
+      updateBuy(tok, buyAmount, buyMs);
+      statCount.textContent = quoteCount.toLocaleString();
+      statAvg.textContent = (totalQuoteMs / quoteCount).toFixed(0) + ' ms/quote';
+
+      await new Promise(r => setTimeout(r, 50));
+
+      // Sell: token → USDC
+      const t1 = performance.now();
+      const sell = await globalThis.quote(tok.addr, USDC, buyAmount);
+      const sellMs = performance.now() - t1;
+      if (sell.error || !sell.forward) continue;
+
+      quoteCount++;
+      totalQuoteMs += sellMs;
+      updateSell(tok, sell.forward.amountOut, sellMs);
+      statCount.textContent = quoteCount.toLocaleString();
+      statAvg.textContent = (totalQuoteMs / quoteCount).toFixed(0) + ' ms/quote';
+
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+}
 
 async function start() {
   const btn = document.getElementById('connectBtn');
@@ -34,68 +231,31 @@ async function start() {
   const base = document.getElementById('url').value.replace(/\/+$/, '');
   const wsUrl = base.replace(/^http/, 'ws') + '/live';
 
-  // Load wasm_exec.js from state server
-  log('loading wasm_exec.js...');
+  status.textContent = 'Downloading WASM EVM...';
   const execResp = await fetch(base + '/sdk/wasm_exec.js');
-  const execJs = await execResp.text();
-  new Function(execJs)();
+  new Function(await execResp.text())();
 
-  // Load and instantiate WASM
-  log('loading quoter.wasm...');
-  const t0 = Date.now();
   const wasmResp = await fetch(base + '/sdk/quoter.wasm');
   const wasmBytes = await wasmResp.arrayBuffer();
+  const mb = (wasmBytes.byteLength / 1e6).toFixed(1);
+  status.textContent = `Compiling ${mb}MB WASM...`;
+
   const go = new Go();
   const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
-  log(`instantiated in ${Date.now() - t0}ms (${wasmBytes.byteLength} bytes)`);
-
   go.run(instance);
   await new Promise(r => setTimeout(r, 100));
 
-  // Connect
-  const WAVAX = '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7';
-  const USDC  = '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E';
-  const maxBlocks = 5;
-
-  log(`\nconnecting to ${wsUrl}...`);
-  const t1 = Date.now();
+  status.textContent = 'Syncing chain state...';
   await globalThis.connect(wsUrl, 2000, 3);
-  log(`connected in ${Date.now() - t1}ms`);
+  status.textContent = 'Live — quoting continuously';
 
-  // Warmup quote
-  log('\n=== warmup quote ===');
-  globalThis.resetFetchCount();
-  const tw = Date.now();
-  const warmup = await globalThis.quote(WAVAX, USDC, '1000000000000000000');
-  log(`warmup: ${Date.now() - tw}ms  out=${warmup.forward.amountOut}  fetches=${globalThis.getFetchCount()}`);
+  document.getElementById('url').disabled = true;
 
-  // Track latest block
-  let latestBlock = 0;
   globalThis.subscribeBlocks((block, timestamp) => {
-    latestBlock = block;
+    statBlock.textContent = block;
   });
 
-  // Wait for blocks, quote each one
-  let lastBlock = 0;
-  log(`\n=== waiting for ${maxBlocks} blocks ===`);
-
-  for (let i = 0; i < maxBlocks; ) {
-    while (latestBlock === lastBlock) {
-      await new Promise(r => setTimeout(r, 10));
-    }
-    lastBlock = latestBlock;
-    i++;
-
-    globalThis.resetFetchCount();
-    const t = Date.now();
-    const result = await globalThis.quote(WAVAX, USDC, '1000000000000000000');
-    const ms = Date.now() - t;
-    const fetches = globalThis.getFetchCount();
-    const fwd = result.forward;
-    log(`block ${lastBlock}  quote: ${ms}ms  out=${fwd.amountOut}  fetches=${fetches}`);
-  }
-
-  log('\ndone');
+  quoteLoop();
 }
 </script>
 </body>

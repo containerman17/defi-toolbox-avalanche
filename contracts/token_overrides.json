@@ -802,7 +802,8 @@
   },
   {
     "address": "0x03e8d118a1864c7dc53bf91e007ab7d91f5a06fa",
-    "slot": 2
+    "slot": 2,
+    "allowance_slot": 16
   },
   {
     "address": "0x0a10d108e2d81ccc793e37b56206c84bf96ddc57",
@@ -1158,7 +1159,8 @@
   },
   {
     "address": "0x264c1383ea520f73dd837f915ef3a732e204a493",
-    "slot": 2
+    "slot": 2,
+    "allowance_slot": 16
   },
   {
     "address": "0x2cb622f144a9a8291434ab9c97bebbf3284bdc9a",
@@ -10766,7 +10768,8 @@
   {
     "address": "0x2c472e913635c85143369adc9962bbb56efc446a",
     "slot": 0,
-    "erc7201_base": "0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00"
+    "erc7201_base": "0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00",
+    "erc7201_allowance": "0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace01"
   },
   {
     "address": "0xc3344870d52688874b06d844e0c36cc39fc727f6",
@@ -10798,6 +10801,7 @@
   {
     "address": "0x108468885eba2932901d409af6bf97bf9c3eda50",
     "slot": 0,
-    "erc7201_base": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b4"
+    "erc7201_base": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b4",
+    "erc7201_allowance": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b5"
   }
 ]

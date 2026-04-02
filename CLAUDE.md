@@ -1,8 +1,13 @@
 # DeFi Toolbox — Avalanche C-Chain
 
-## Changelog
+## Changelog (MANDATORY — enforced by pre-commit hook)
 
-Keep [CHANGELOG.md](CHANGELOG.md) updated after every significant change, investigation, or dead-end. Add entries at the top in the existing format (date header + subsections with bullet points).
+**Every commit MUST include changes to CHANGELOG.md.** A git pre-commit hook will reject commits without it — do not bypass it.
+
+Add entries at the top in the existing format (date header + subsections with bullet points). Include:
+- What changed and why
+- Before/after results where applicable (metrics, error counts, performance)
+- Dead-ends and investigations that didn't pan out (so they aren't repeated)
 
 ## Coverage Investigation
 

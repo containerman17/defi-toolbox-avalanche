@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-02 — swap-replay: token overrides + convert fix → 2941/3000 (98.0%)
+
+### Token override fixes (contracts/token_overrides.json)
+- AnyswapV3/V5ERC20 tokens (`0x264c1383`, `0x03e8d118`): added `allowance_slot: 16`.
+  Non-standard layout: balance at slot 2, but 13 intervening state variables push
+  allowance mapping to slot 16. Without this, `transferFrom` reverted.
+- ERC-7201 tokens (`0x2c472e91`, `0x108468885eba`): added `erc7201_allowance` field
+  (base+1). The override system didn't compute allowance slots for these tokens.
+
+### Convert fix (benchmarks/swap-replay/02_convert.ts)
+- Split-route builder didn't extract `rfqOutputAmount` for TRANSFER_FROM
+  (hashflow_rfq) pools — 3 call sites fixed. Without the encoded output amount
+  in extraData, the test harness couldn't set vault balance/allowance overrides.
+- Re-converted 2 affected payloads (0x01318231, 0x08673d58).
+
+### README update
+- Documented that the benchmark uses the state server's `/eth-call` endpoint
+  at `ws://localhost:7449/eth-call` (no env var override needed).
+
 ## 2026-04-02 — WooFi V2 formula + coverage tuning → 99.8%
 
 - **WooFi V2 formula** (FormulaWooFi=12): oracle-based PMM, multi-token through USDC.

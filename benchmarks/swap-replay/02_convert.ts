@@ -1327,13 +1327,24 @@ function buildPayload(
       if (chainedDownstream.has(si)) continue; // consumed by an upstream chain
 
       const step = splitSteps[si];
-      const f = hopToSwapFields(step, poolMap)!;
+      // For Hashflow vaults (TRANSFER_FROM), extract the output amount from transfers
+      let rfqOutputAmount: bigint | undefined;
+      if (HASHFLOW_VAULTS.has(step.pool)) {
+        const vaultOutTransfers = transfers.filter(t => t.from === step.pool && t.token === step.tokenOut);
+        rfqOutputAmount = vaultOutTransfers.reduce((sum, t) => sum + t.amount, 0n);
+      }
+      const f = hopToSwapFields({ ...step, rfqOutputAmount }, poolMap)!;
 
       // If this step is chained to a downstream step, build a multi-hop step
       if (chainMap.has(si)) {
         const downIdx = chainMap.get(si)!;
         const downStep = splitSteps[downIdx];
-        const df = hopToSwapFields(downStep, poolMap)!;
+        let downRfqOutputAmount: bigint | undefined;
+        if (HASHFLOW_VAULTS.has(downStep.pool)) {
+          const vaultOutTransfers = transfers.filter(t => t.from === downStep.pool && t.token === downStep.tokenOut);
+          downRfqOutputAmount = vaultOutTransfers.reduce((sum, t) => sum + t.amount, 0n);
+        }
+        const df = hopToSwapFields({ ...downStep, rfqOutputAmount: downRfqOutputAmount }, poolMap)!;
 
         const allPools = [f.pool, df.pool];
         const allPoolTypes = [f.poolType, df.poolType];
@@ -1411,7 +1422,12 @@ function buildPayload(
             // Reuse the sibling's chained downstream
             const downIdx = chainMap.get(sj)!;
             const downStep = splitSteps[downIdx];
-            const df = hopToSwapFields(downStep, poolMap)!;
+            let sibDownRfqAmount: bigint | undefined;
+            if (HASHFLOW_VAULTS.has(downStep.pool)) {
+              const vaultOutTransfers = transfers.filter(t => t.from === downStep.pool && t.token === downStep.tokenOut);
+              sibDownRfqAmount = vaultOutTransfers.reduce((sum, t) => sum + t.amount, 0n);
+            }
+            const df = hopToSwapFields({ ...downStep, rfqOutputAmount: sibDownRfqAmount }, poolMap)!;
 
             const allPools = [f.pool, df.pool];
             const allPoolTypes = [f.poolType, df.poolType];

@@ -4,12 +4,17 @@ Regression benchmark for HayabusaRouter. Replays real aggregator swaps (Odos, LF
 
 ## Usage
 
-Requires a local Avalanche node with `debug_traceCall` support.
+Requires the **state server** (`cmd/state-server`) to be running. The test harness connects to its `/eth-call` WebSocket endpoint (default `ws://localhost:7449/eth-call`) which provides an eth_call caching proxy over the local Avalanche node. No environment variables needed — the URL is hardcoded in `03_test.ts`.
+
+```
+node 03_test.ts
+```
+
+The `convert.ts` step requires direct RPC access for `debug_traceCall`:
 
 ```
 export RPC_URL=http://localhost:9650/ext/bc/C/rpc
-node convert.ts
-node test.ts
+node 02_convert.ts
 ```
 
 ## Files

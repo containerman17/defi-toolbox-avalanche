@@ -1,10 +1,13 @@
 # Changelog
 
-## 2026-04-02 — Examples: add simple eth_call demo, renumber
+## 2026-04-02 — Examples: eth_call latency comparison demo
 
+- **`examples/01_eth_call/`**: reworked into a latency comparison — runs the same `eth_call`
+  via in-browser WASM EVM (on block subscription) and via public Avalanche RPC (sequential
+  per-block polling). Table shows block number + execution time side by side; latest return
+  values shown below. Contract and calldata are editable, prefilled with `USDC.totalSupply()`.
+  Uses Tailwind CSS, row flash animations, proper status progression.
 - **`examples/index.html`**: landing page linking to all demos.
-- **`examples/01_eth_call/`**: new minimal demo — calls `USDC.totalSupply()` each block
-  to show how `ethCall` works. Good starting point (changes every few seconds on mainnet).
 - **Renamed** `01_evm_call` → `02_live_quotes` to reflect complexity ordering.
 
 ## 2026-04-02 — GitHub Pages: deploy examples

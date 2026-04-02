@@ -2,94 +2,254 @@
 <html>
 <head>
 <meta charset="utf-8">
-<title>eth_call demo</title>
+<title>In-Browser EVM — DeFi Toolbox</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { mono: ['JetBrains Mono', 'Fira Code', 'monospace'] },
+    }
+  }
+};
+</script>
 <style>
-  body { font-family: monospace; margin: 2em; background: #111; color: #eee; }
-  input, button { font-family: monospace; font-size: 14px; padding: 4px 8px; }
-  input { background: #222; color: #eee; border: 1px solid #555; width: 500px; }
-  button { cursor: pointer; background: #333; color: #eee; border: 1px solid #555; }
-  button:disabled { opacity: 0.4; cursor: default; }
-  #log { white-space: pre-wrap; margin-top: 1em; line-height: 1.4; }
+  @keyframes flash-green { 0% { background: rgba(34,197,94,0.15); } 100% { background: transparent; } }
+  @keyframes flash-yellow { 0% { background: rgba(234,179,8,0.15); } 100% { background: transparent; } }
+  .flash-local { animation: flash-green 0.6s ease-out; }
+  .flash-rpc { animation: flash-yellow 0.6s ease-out; }
 </style>
 </head>
-<body>
+<body class="bg-gray-950 text-gray-300 font-mono min-h-screen">
 
-<div>
-  <label>State Server:</label><br>
-  <input id="url" value="https://replacing-javascript-precisely-stays.trycloudflare.com">
-  <button id="connectBtn" onclick="start()">Connect</button>
+<!-- Hero -->
+<div class="max-w-4xl mx-auto pt-12 pb-8 px-6">
+  <h1 class="text-2xl text-white font-bold tracking-tight">
+    Full EVM execution. In your browser.
+  </h1>
+  <p class="text-gray-500 mt-2 max-w-2xl leading-relaxed">
+    A WebAssembly EVM runs locally in this tab, synced to Avalanche C-Chain state via WebSocket.
+    When a new block arrives, your browser executes <code class="text-green-400">eth_call</code> against
+    its own copy of the chain — no RPC round-trip, no waiting.
+  </p>
+  <p class="text-gray-600 mt-2 text-sm">
+    The table below runs the same call two ways: <span class="text-green-400">locally in WASM</span>
+    (triggered on each block) and via the <span class="text-yellow-400">Avalanche public RPC</span>
+    (polling sequentially). Watch the local column fill in first.
+  </p>
 </div>
-<div id="log"></div>
+
+<!-- Config -->
+<div class="max-w-4xl mx-auto px-6 pb-6">
+  <div class="bg-gray-900/50 border border-gray-800/50 rounded px-4 py-4 space-y-3">
+    <div class="flex gap-3">
+      <div class="flex-1">
+        <label class="text-[11px] text-gray-600 uppercase tracking-wider block mb-1">Contract</label>
+        <input id="to" value="0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"
+          class="bg-gray-950 border border-gray-800 text-sm px-3 py-2 w-full rounded focus:outline-none focus:border-gray-600 transition text-gray-300">
+      </div>
+      <div class="flex-1">
+        <label class="text-[11px] text-gray-600 uppercase tracking-wider block mb-1">Calldata</label>
+        <input id="calldata" value="0x18160ddd"
+          class="bg-gray-950 border border-gray-800 text-sm px-3 py-2 w-full rounded focus:outline-none focus:border-gray-600 transition text-gray-300">
+      </div>
+    </div>
+    <div class="flex gap-3 items-end">
+      <div class="flex-1">
+        <label class="text-[11px] text-gray-600 uppercase tracking-wider block mb-1">State Server</label>
+        <input id="url" value="https://replacing-javascript-precisely-stays.trycloudflare.com"
+          class="bg-gray-950 border border-gray-800 text-sm px-3 py-2 w-full rounded focus:outline-none focus:border-gray-600 transition text-gray-300">
+      </div>
+      <button id="connectBtn" onclick="start()"
+        class="bg-green-600 hover:bg-green-500 disabled:opacity-30 disabled:cursor-default text-sm px-5 py-2 rounded text-white font-medium transition whitespace-nowrap">
+        Connect &amp; Start
+      </button>
+    </div>
+    <div class="text-[11px] text-gray-700">
+      Prefilled with <code class="text-gray-500">USDC.totalSupply()</code> — change to call any contract.
+    </div>
+  </div>
+  <div id="status" class="text-[11px] text-gray-600 mt-2 h-4"></div>
+</div>
+
+<!-- Table -->
+<div class="max-w-4xl mx-auto px-6 pb-4">
+  <table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="text-[11px] uppercase tracking-wider">
+        <th class="py-2.5 px-3 text-left text-gray-600 border-b border-gray-800 w-28">Block</th>
+        <th class="py-2.5 px-3 text-left text-green-600 border-b border-gray-800">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5 align-middle"></span>
+          In-Browser EVM
+        </th>
+        <th class="py-2.5 px-3 text-left text-yellow-600 border-b border-gray-800">
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-yellow-500 mr-1.5 align-middle"></span>
+          Public RPC
+        </th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <div id="empty-state" class="text-center text-gray-700 text-sm py-12">
+    Connect to a state server to begin
+  </div>
+</div>
+
+<!-- Latest results -->
+<div id="latest" class="max-w-4xl mx-auto px-6 pb-12 hidden">
+  <div class="border-t border-gray-800/50 pt-4 flex gap-8 text-xs">
+    <div>
+      <span class="text-gray-600 uppercase tracking-wider">Latest local result</span>
+      <div id="latest-local" class="text-green-400 mt-1 text-sm break-all">—</div>
+    </div>
+    <div>
+      <span class="text-gray-600 uppercase tracking-wider">Latest RPC result</span>
+      <div id="latest-rpc" class="text-yellow-400 mt-1 text-sm break-all">—</div>
+    </div>
+  </div>
+</div>
 
 <script>
-const log = (msg) => {
-  document.getElementById('log').textContent += msg + '\n';
-};
+const RPC_URL = 'https://api.avax.network/ext/bc/C/rpc';
+const MAX_ROWS = 20;
+
+let callTo, callData;
+
+const rows = {};
+const tbody = document.getElementById('rows');
+const status = document.getElementById('status');
+const emptyState = document.getElementById('empty-state');
+const latestSection = document.getElementById('latest');
+const latestLocal = document.getElementById('latest-local');
+const latestRpc = document.getElementById('latest-rpc');
+
+function formatResult(hex) {
+  try {
+    return BigInt(hex).toLocaleString();
+  } catch {
+    return hex;
+  }
+}
+
+function getRow(block) {
+  if (rows[block]) return rows[block];
+
+  emptyState.style.display = 'none';
+  latestSection.classList.remove('hidden');
+
+  const tr = document.createElement('tr');
+  tr.className = 'border-b border-gray-800/30 hover:bg-gray-900/30 transition-colors';
+  tr.innerHTML = `
+    <td class="py-2 px-3 text-gray-500 tabular-nums">${block}</td>
+    <td class="py-2 px-3 local-ms text-gray-800 tabular-nums">—</td>
+    <td class="py-2 px-3 rpc-ms text-gray-800 tabular-nums">—</td>
+  `;
+  tbody.prepend(tr);
+  rows[block] = { tr };
+
+  const allRows = tbody.querySelectorAll('tr');
+  if (allRows.length > MAX_ROWS) {
+    const last = allRows[allRows.length - 1];
+    const blockNum = last.querySelector('td').textContent;
+    delete rows[blockNum];
+    last.remove();
+  }
+
+  return rows[block];
+}
+
+function setLocal(block, result, ms) {
+  const row = getRow(block);
+  const msCell = row.tr.querySelector('.local-ms');
+  msCell.innerHTML = `<span class="text-green-300 font-medium">${ms.toFixed(1)}</span><span class="text-green-700 text-xs"> ms</span>`;
+  msCell.className = 'py-2 px-3 local-ms tabular-nums';
+  row.tr.classList.remove('flash-local');
+  void row.tr.offsetWidth;
+  row.tr.classList.add('flash-local');
+  latestLocal.textContent = formatResult(result);
+}
+
+function setRPC(block, result, ms) {
+  const row = getRow(block);
+  const msCell = row.tr.querySelector('.rpc-ms');
+  msCell.innerHTML = `<span class="text-yellow-300 font-medium">${ms.toFixed(0)}</span><span class="text-yellow-700 text-xs"> ms</span>`;
+  msCell.className = 'py-2 px-3 rpc-ms tabular-nums';
+  row.tr.classList.remove('flash-rpc');
+  void row.tr.offsetWidth;
+  row.tr.classList.add('flash-rpc');
+  latestRpc.textContent = formatResult(result);
+}
+
+async function rpcJson(method, params) {
+  const resp = await fetch(RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
+  });
+  const json = await resp.json();
+  if (json.error) throw new Error(json.error.message);
+  return json.result;
+}
+
+async function rpcLoop() {
+  const hexBlock = await rpcJson('eth_blockNumber', []);
+  let targetBlock = parseInt(hexBlock, 16);
+
+  while (true) {
+    const blockHex = '0x' + targetBlock.toString(16);
+    const t0 = performance.now();
+    try {
+      const result = await rpcJson('eth_call', [{ to: callTo, data: callData }, blockHex]);
+      const ms = performance.now() - t0;
+      setRPC(targetBlock, result, ms);
+      targetBlock++;
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 700));
+    }
+  }
+}
 
 async function start() {
   const btn = document.getElementById('connectBtn');
   btn.disabled = true;
 
+  callTo = document.getElementById('to').value.trim();
+  callData = document.getElementById('calldata').value.trim();
+
   const base = document.getElementById('url').value.replace(/\/+$/, '');
   const wsUrl = base.replace(/^http/, 'ws') + '/live';
 
-  // Load wasm_exec.js from state server
-  log('loading wasm_exec.js...');
+  status.textContent = 'Downloading WASM EVM...';
   const execResp = await fetch(base + '/sdk/wasm_exec.js');
   new Function(await execResp.text())();
 
-  // Load and instantiate WASM
-  log('loading quoter.wasm...');
-  const t0 = Date.now();
   const wasmResp = await fetch(base + '/sdk/quoter.wasm');
   const wasmBytes = await wasmResp.arrayBuffer();
+  const mb = (wasmBytes.byteLength / 1e6).toFixed(1);
+  status.textContent = `Compiling ${mb}MB WASM...`;
+
   const go = new Go();
   const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
-  log(`wasm ready in ${Date.now() - t0}ms (${(wasmBytes.byteLength / 1e6).toFixed(1)}MB)`);
-
   go.run(instance);
   await new Promise(r => setTimeout(r, 100));
 
-  // Connect to state server
-  log(`\nconnecting to ${wsUrl}...`);
-  const t1 = Date.now();
+  status.textContent = 'Syncing chain state...';
   await globalThis.connect(wsUrl, 2000, 3);
-  log(`connected in ${Date.now() - t1}ms`);
+  status.textContent = 'Live — watching blocks';
 
-  // USDC totalSupply()
-  const USDC = '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E';
-  const calldata = '0x18160ddd'; // totalSupply()
-
-  log(`\ncalling USDC.totalSupply()`);
-  log('watching for changes each block...\n');
-
-  let lastBlock = 0;
-  let lastResult = '';
+  document.getElementById('to').disabled = true;
+  document.getElementById('calldata').disabled = true;
+  document.getElementById('url').disabled = true;
 
   globalThis.subscribeBlocks((block, timestamp) => {
-    if (block === lastBlock) return;
-    lastBlock = block;
-
-    globalThis.ethCall(USDC, calldata).then(res => {
-      if (res.error) {
-        log(`block ${block}  error: ${res.error}`);
-        return;
-      }
-      const raw = res.result;
-      // USDC has 6 decimals
-      const wei = BigInt(raw);
-      const whole = wei / 10n**6n;
-      const frac = (wei % 10n**6n).toString().padStart(6, '0');
-      const display = `${whole.toLocaleString()}.${frac} USDC`;
-
-      if (raw !== lastResult) {
-        log(`block ${block}  ${display}  (${res.ms.toFixed(1)}ms)  ← changed`);
-        lastResult = raw;
-      } else {
-        log(`block ${block}  ${display}  (${res.ms.toFixed(1)}ms)`);
-      }
+    globalThis.ethCall(callTo, callData).then(res => {
+      if (res.error) return;
+      setLocal(block, res.result, res.ms);
     });
   });
+
+  rpcLoop();
 }
 </script>
 </body>

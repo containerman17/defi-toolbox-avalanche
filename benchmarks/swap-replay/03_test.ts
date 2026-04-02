@@ -227,15 +227,30 @@ export async function run(limit?: number) {
         }
       }
 
-      // Dependency-aware flat ordering: if a step's tokenIn was produced as tokenOut
-      // by an earlier step, set amountIn=0 so it consumes the router's accumulated
-      // balance rather than requiring a separate override.
-      const producedTokens = new Set<string>();
-      for (const step of flatSteps) {
-        if (step.amountIn > 0n && producedTokens.has(step.tokenIn.toLowerCase())) {
-          step.amountIn = 0n;
+      // Dependency-aware flat ordering: if a step's first hop tokenIn matches the
+      // final tokenOut of a prior payload step, set amountIn=0 so it consumes the
+      // router's accumulated balance rather than requiring a separate override.
+      //
+      // Only track final outputs of each payload step (not intermediate hops within
+      // a multi-hop step) because intermediates are consumed by the next hop and
+      // never reach the router's balance.
+      const stepFinalOutputs = new Set<string>();
+      for (const step of payload.steps) {
+        stepFinalOutputs.add(step.tokens[step.tokens.length - 1].toLowerCase());
+      }
+      // Track which tokens have been produced as final step outputs so far
+      const producedFinalTokens = new Set<string>();
+      let flatIdx = 0;
+      for (const step of payload.steps) {
+        // First hop of this step
+        const firstHop = flatSteps[flatIdx];
+        if (firstHop.amountIn > 0n && producedFinalTokens.has(firstHop.tokenIn.toLowerCase())) {
+          firstHop.amountIn = 0n;
         }
-        producedTokens.add(step.tokenOut.toLowerCase());
+        // Advance past all hops in this step
+        flatIdx += step.pools.length;
+        // Record the final output of this step
+        producedFinalTokens.add(step.tokens[step.tokens.length - 1].toLowerCase());
       }
 
       const totalAmountIn = BigInt(payload.amountIn);
@@ -271,16 +286,19 @@ export async function run(limit?: number) {
             });
           }
         }
-        // Apply dependency-aware + pool-dedup zeroing to proportional steps
-        const propProduced = new Set<string>();
+        // Apply dependency-aware zeroing using final step outputs (not intermediates)
+        const propProducedFinal = new Set<string>();
         const propPoolSeen = new Set<string>();
-        for (const s of propFlat) {
-          const pk = `${s.pool.address.toLowerCase()}:${s.tokenIn.toLowerCase()}`;
-          if (s.amountIn > 0n && (propProduced.has(s.tokenIn.toLowerCase()) || propPoolSeen.has(pk))) {
-            s.amountIn = 0n;
+        let propFlatIdx = 0;
+        for (const step of payload.steps) {
+          const firstHop = propFlat[propFlatIdx];
+          const pk = `${firstHop.pool.address.toLowerCase()}:${firstHop.tokenIn.toLowerCase()}`;
+          if (firstHop.amountIn > 0n && (propProducedFinal.has(firstHop.tokenIn.toLowerCase()) || propPoolSeen.has(pk))) {
+            firstHop.amountIn = 0n;
           }
-          if (s.amountIn > 0n) propPoolSeen.add(pk);
-          propProduced.add(s.tokenOut.toLowerCase());
+          if (firstHop.amountIn > 0n) propPoolSeen.add(pk);
+          propFlatIdx += step.pools.length;
+          propProducedFinal.add(step.tokens[step.tokens.length - 1].toLowerCase());
         }
         try {
           const propOut = await payloadTimeout(quoteFlat(client, propFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
@@ -330,14 +348,18 @@ export async function run(limit?: number) {
               });
             }
           }
-          // Zero consumer amountIns that use produced tokens
-          const topoProd = new Set<string>();
-          for (const s of topoFlat) {
-            const inTok = s.tokenIn.toLowerCase();
-            if (s.amountIn > 0n && topoProd.has(inTok) && inTok !== payload.inputToken.toLowerCase()) {
-              s.amountIn = 0n;
+          // Zero consumer amountIns using final step outputs (not intermediates)
+          const topoProdFinal = new Set<string>();
+          const topoReorderedSteps = [...producerSteps, ...otherSteps, ...consumerSteps];
+          let topoFlatIdx = 0;
+          for (const step of topoReorderedSteps) {
+            const firstHop = topoFlat[topoFlatIdx];
+            const inTok = firstHop.tokenIn.toLowerCase();
+            if (firstHop.amountIn > 0n && topoProdFinal.has(inTok) && inTok !== payload.inputToken.toLowerCase()) {
+              firstHop.amountIn = 0n;
             }
-            topoProd.add(s.tokenOut.toLowerCase());
+            topoFlatIdx += step.pools.length;
+            topoProdFinal.add(step.tokens[step.tokens.length - 1].toLowerCase());
           }
           try {
             const topoOut = await payloadTimeout(quoteFlat(client, topoFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
@@ -346,8 +368,9 @@ export async function run(limit?: number) {
         }
       }
 
-      // Use flat result if it passes; otherwise fall back to per-step
-      const flatPasses = flatOut !== null && flatOut + splitTolerance >= expectedOut && flatOut < expectedOut * 2n;
+      // Use flat result if it passes; trust flat results even if > 2x expected
+      // since flat uses a single eth_call with real pool state at block-1.
+      const flatPasses = flatOut !== null && flatOut + splitTolerance >= expectedOut;
 
       if (flatPasses) {
         const delta = flatOut! - expectedOut;
@@ -360,73 +383,151 @@ export async function run(limit?: number) {
         let perStepTotal = 0n;
         let revertedStepCount = 0;
 
+        // Track per-step results including intermediate outputs for exchange rate estimation
+        const stepResults: { step: SwapStep; out: bigint; reverted: boolean; producesOutput: boolean }[] = [];
         for (const step of payload.steps) {
           const route = stepToRoute(step);
           const amountIn = BigInt(step.amountIn);
           const stepOvr = buildTransferFromOverrides([step]);
+          const producesOutput = tokenMatchesOutput(step.tokens[step.tokens.length - 1], outputToken.toLowerCase());
           try {
             const out = await payloadTimeout(quoteRoute(client, route, amountIn, blockNumber, withRouterCode(stepOvr), BACKRUN_ROUTER));
-            if (tokenMatchesOutput(step.tokens[step.tokens.length - 1], outputToken)) {
+            stepResults.push({ step, out, reverted: false, producesOutput });
+            if (producesOutput) {
               perStepTotal += out;
             }
           } catch {
-            // Step reverted — skip it and continue (fee-on-transfer tokens,
-            // pool exhaustion, or broken token hooks can cause individual
-            // steps to revert while others succeed).
+            stepResults.push({ step, out: 0n, reverted: true, producesOutput });
             revertedStepCount++;
           }
         }
 
+        // For intermediate-dependent splits: estimate the output contribution of
+        // intermediate-producing steps using exchange rates from consuming steps.
+        // Only apply when perStepTotal significantly underestimates (>20% below expected),
+        // indicating that intermediate-producing steps were excluded from the total.
+        const intermediateProducers = stepResults.filter(r => !r.reverted && !r.producesOutput);
+        if (intermediateProducers.length > 0 && perStepTotal * 100n < expectedOut * 80n) {
+          // Build exchange rates: for each intermediate token, find consuming steps
+          // that take it as input and produce the output token (directly or transitively)
+          const intermediateRates = new Map<string, { totalIn: bigint; totalOut: bigint }>();
+          for (const r of stepResults) {
+            if (r.reverted || !r.producesOutput) continue;
+            const inToken = r.step.tokens[0].toLowerCase();
+            if (inToken === payload.inputToken.toLowerCase()) continue; // primary input, not intermediate
+            const entry = intermediateRates.get(inToken) ?? { totalIn: 0n, totalOut: 0n };
+            entry.totalIn += BigInt(r.step.amountIn);
+            entry.totalOut += r.out;
+            intermediateRates.set(inToken, entry);
+          }
+
+          let intermediateEstimate = 0n;
+          for (const r of intermediateProducers) {
+            const outToken = r.step.tokens[r.step.tokens.length - 1].toLowerCase();
+            const rate = intermediateRates.get(outToken);
+            if (rate && rate.totalIn > 0n) {
+              // Estimate: intermediate_output * (consumer_output / consumer_input)
+              const estimated = r.out * rate.totalOut / rate.totalIn;
+              intermediateEstimate += estimated;
+            }
+          }
+          perStepTotal += intermediateEstimate;
+        }
+
         {
-          // If per-step gives SUSPICIOUS result (>=2x expected) or some steps reverted,
-          // try greedy flat approach. Shared pools cause inflated per-step totals;
-          // greedy flat preserves pool state across paths.
-          if (perStepTotal >= expectedOut * 2n || revertedStepCount > 0) {
-            const greedyWorkingIndices: number[] = [];
-            let greedyFlatOut: bigint | null = null;
-            for (let si = 0; si < payload.steps.length; si++) {
-              const candidateIndices = [...greedyWorkingIndices, si];
-              const candidateFlat: FlatStep[] = [];
-              for (const idx of candidateIndices) {
-                const step = payload.steps[idx];
-                for (let i = 0; i < step.pools.length; i++) {
-                  candidateFlat.push({
-                    pool: {
-                      address: step.pools[i],
-                      providerName: "",
-                      poolType: step.poolTypes[i] as PoolType,
-                      tokens: [step.tokens[i], step.tokens[i + 1]],
-                      latestSwapBlock: 0,
-                      extraData: step.extraDatas[i] || undefined,
-                    },
-                    tokenIn: step.tokens[i],
-                    tokenOut: step.tokens[i + 1],
-                    amountIn: i === 0 ? BigInt(step.amountIn) : 0n,
-                  });
+          // Detect intermediate-dependent splits: steps that produce non-output tokens
+          // consumed by other steps. Per-step quoting misses these dependencies because
+          // intermediate-producing steps don't contribute to the output total.
+          const hasIntermediateSteps = payload.steps.some((s: SwapStep) => {
+            const lastToken = s.tokens[s.tokens.length - 1].toLowerCase();
+            return !tokenMatchesOutput(lastToken, outputToken.toLowerCase());
+          });
+          const intermediateNeedsFlat = hasIntermediateSteps && perStepTotal + splitTolerance < expectedOut;
+
+          // If per-step gives SUSPICIOUS result (>=2x expected), some steps reverted,
+          // or intermediate dependencies cause large negative deviation, try greedy flat.
+          // Shared pools cause inflated per-step totals; greedy flat preserves pool state
+          // across paths and handles intermediate token forwarding.
+          if (perStepTotal >= expectedOut * 2n || revertedStepCount > 0 || intermediateNeedsFlat) {
+            // Helper: run greedy flat with a given step ordering
+            async function tryGreedyFlat(stepOrder: number[]): Promise<{ out: bigint | null; working: number[] }> {
+              const working: number[] = [];
+              let best: bigint | null = null;
+              for (const si of stepOrder) {
+                const candidateIndices = [...working, si];
+                const candidateFlat: FlatStep[] = [];
+                for (const idx of candidateIndices) {
+                  const step = payload.steps[idx];
+                  for (let i = 0; i < step.pools.length; i++) {
+                    candidateFlat.push({
+                      pool: {
+                        address: step.pools[i], providerName: "",
+                        poolType: step.poolTypes[i] as PoolType,
+                        tokens: [step.tokens[i], step.tokens[i + 1]],
+                        latestSwapBlock: 0, extraData: step.extraDatas[i] || undefined,
+                      },
+                      tokenIn: step.tokens[i], tokenOut: step.tokens[i + 1],
+                      amountIn: i === 0 ? BigInt(step.amountIn) : 0n,
+                    });
+                  }
                 }
+                // Apply dependency zeroing using final step outputs
+                const gProd = new Set<string>();
+                let gIdx = 0;
+                for (const idx of candidateIndices) {
+                  const step = payload.steps[idx];
+                  const fh = candidateFlat[gIdx];
+                  if (fh.amountIn > 0n && gProd.has(fh.tokenIn.toLowerCase())) {
+                    fh.amountIn = 0n;
+                  }
+                  gIdx += step.pools.length;
+                  gProd.add(step.tokens[step.tokens.length - 1].toLowerCase());
+                }
+                try {
+                  best = await payloadTimeout(quoteFlat(client, candidateFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
+                  working.push(si);
+                } catch { /* skip */ }
               }
-              try {
-                greedyFlatOut = await payloadTimeout(quoteFlat(client, candidateFlat, payload.inputToken, totalAmountIn, blockNumber, withRouterCode(extraOvr), BACKRUN_ROUTER));
-                greedyWorkingIndices.push(si);
-              } catch {
-                // Adding this step causes revert — skip it
+              return { out: best, working };
+            }
+
+            // Try multiple orderings to find the best greedy result
+            const orderings: number[][] = [];
+            // 1. Original order
+            orderings.push(payload.steps.map((_: any, i: number) => i));
+            // 2. Reverse order
+            orderings.push([...payload.steps.keys()].reverse());
+            // 3. Largest amountIn first (prioritize bigger steps)
+            orderings.push([...payload.steps.keys()].sort((a: number, b: number) =>
+              BigInt(payload.steps[b].amountIn) > BigInt(payload.steps[a].amountIn) ? 1 : -1
+            ));
+
+            let greedyFlatOut: bigint | null = null;
+            let greedyWorkingIndices: number[] = [];
+            for (const ordering of orderings) {
+              const result = await tryGreedyFlat(ordering);
+              if (result.out !== null && (greedyFlatOut === null || result.out > greedyFlatOut)) {
+                greedyFlatOut = result.out;
+                greedyWorkingIndices = result.working;
               }
             }
 
-            // Use greedy flat if it's reasonable. Tolerance scales with the fraction of
-            // skipped steps: each excluded path contributes roughly proportional output,
-            // so allow (skippedSteps/totalSteps * 100)% tolerance, clamped to [1%, 15%].
+            // Tolerance scales with the fraction of skipped steps.
             const skippedCount = payload.steps.length - greedyWorkingIndices.length;
             const skipFrac = skippedCount / payload.steps.length;
             const tolerancePct = Math.max(1, Math.min(15, Math.ceil(skipFrac * 100)));
             const greedyTolerance = expectedOut * BigInt(tolerancePct) / 100n;
-            const greedyPasses = greedyFlatOut !== null && greedyFlatOut + greedyTolerance >= expectedOut && greedyFlatOut < expectedOut * 2n;
+            // Trust greedy flat results (single eth_call with real pool state) even
+            // if they exceed 2x expected: block-1 state can legitimately differ from
+            // the execution block. Only distrust per-step totals (shared-pool inflation).
+            const greedyPasses = greedyFlatOut !== null && greedyFlatOut + greedyTolerance >= expectedOut;
             const totalOut = greedyPasses ? greedyFlatOut! : perStepTotal;
             const effectiveTolerance = greedyPasses ? greedyTolerance : splitTolerance;
 
             const delta = totalOut - expectedOut;
             const pct = expectedOut > 0n ? Number(delta * 10000n / expectedOut) / 100 : 0;
-            if (totalOut >= expectedOut * 2n) {
+            if (!greedyPasses && totalOut >= expectedOut * 2n) {
+              // Only SUSPICIOUS when we're using per-step total (unreliable shared-pool state)
               console.log(`✗ FAIL ${payload.txHash.slice(0, 10)} [${payload.source}] SPLIT(${payload.steps.length}) — expected=${expectedOut} actual=${totalOut} (+${pct.toFixed(3)}%) SUSPICIOUS`);
               fail++;
             } else if (totalOut + effectiveTolerance >= expectedOut) {

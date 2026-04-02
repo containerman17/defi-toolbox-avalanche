@@ -1096,9 +1096,15 @@ function hopToSwapFields(hop: { pool: string; tokenIn: string; tokenOut: string;
   const stored = findPool(hop.pool, hop.tokenIn, hop.tokenOut, poolMap);
   if (!stored) return undefined;
   if (stored.poolType === 9) {
+    // When the hop was looked up by pseudo-address (in poolMap), verify the V4 pool is also
+    // findable via the PoolManager singleton (which applies filters like hooks and fee limits).
+    // Without this check, findTailHops may pick high-fee V4 pools that fail later validation.
+    if (hop.pool !== V4_POOL_MANAGER && !findPool(V4_POOL_MANAGER, hop.tokenIn, hop.tokenOut, poolMap)) {
+      return undefined;
+    }
     // Use wrapNative-augmented extraData when the V4 step was normalized from native AVAX to WAVAX
     const extraData = (hop as any)._wrapNativeExtraData ?? stored.extraData ?? "";
-    return { pool: "0x06380C0e0912312B5150364B9DC4542BA0DbBc85", poolType: 9, extraData, providerName: stored.providerName };
+    return { pool: V4_POOL_MANAGER, poolType: 9, extraData, providerName: stored.providerName };
   }
   // Balancer V3 buffered: encode extraData as abi.encode(wrappedIn, pool, wrappedOut)
   if (stored.poolType === 11 && hop.bufWrappedIn && hop.bufPool && hop.bufWrappedOut) {
@@ -1816,6 +1822,23 @@ async function main() {
       if (bridgeStep) {
         hops.unshift({ pool: bridgeStep.pool, tokenIn: bridgeStep.tokenIn, tokenOut: bridgeStep.tokenOut,
           bufWrappedIn: bridgeStep.bufWrappedIn, bufPool: bridgeStep.bufPool, bufWrappedOut: bridgeStep.bufWrappedOut });
+      } else {
+        // Half-buffered: BalV3 pool swap outputs a wrapped ERC4626 token, which then needs
+        // unwrapping to produce hops[0].tokenIn. Chain: BalV3(inputToken→wrapped) + ERC4626(wrapped→underlying).
+        const target = hops[0].tokenIn;
+        for (const bs of balancerBufferedSteps) {
+          if (bs.tokenIn !== inputToken) continue;
+          const wrappedVault = poolMap.get(bs.tokenOut);
+          if (!wrappedVault || wrappedVault.poolType !== 10) continue;
+          const underlyingTok = wrappedVault.tokens.map(t => t.toLowerCase()).find(t => t !== bs.tokenOut);
+          if (underlyingTok !== target) continue;
+          // Insert BalV3 pool hop + ERC4626 unwrap hop
+          hops.unshift(
+            { pool: bs.pool, tokenIn: bs.tokenIn, tokenOut: bs.tokenOut },
+            { pool: bs.tokenOut, tokenIn: bs.tokenOut, tokenOut: target },
+          );
+          break;
+        }
       }
     }
 

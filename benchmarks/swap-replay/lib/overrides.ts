@@ -20,6 +20,9 @@ interface TokenOverrideEntry {
   hookContract?: string;
   /** Raw storage slots on the token contract to zero out (e.g. disable maxWallet checks) */
   disableSlots?: number[];
+  /** Mapping slot(s) where mapping[holder]=true should be set for sender and router
+   *  (e.g. excludedFromLockPeriod, isExcludedFromFee). */
+  whitelistSlots?: number[];
 }
 
 let _overrides: Map<string, TokenOverrideEntry> | null = null;
@@ -242,6 +245,18 @@ export function buildStateOverrides(opts: {
     for (const [addr, val] of Object.entries(allowOvr)) {
       if (!merged[addr]) merged[addr] = {};
       Object.assign(merged[addr], val.stateDiff);
+    }
+    // Whitelist slots: set mapping[addr]=true for sender and router
+    // (e.g. excludedFromLockPeriod, isExcludedFromFee)
+    const entry = loadOverrides().get(token);
+    if (entry?.whitelistSlots) {
+      if (!merged[token]) merged[token] = {};
+      for (const ws of entry.whitelistSlots) {
+        for (const addr of [senderAddress, routerAddress]) {
+          const slot = keccak256AddressUint(addr.toLowerCase(), ws);
+          merged[token][slot] = pad(toHex(1), { size: 32 });
+        }
+      }
     }
   }
 

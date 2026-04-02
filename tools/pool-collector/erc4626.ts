@@ -36,6 +36,16 @@ export const ERC4626_VAULTS: StoredPool[] = [
     latestSwapBlock: 999999999,
   },
   {
+    address: "0x1f0570a081fee0e4df6eac470f9d2d53cdeda1c5", // waAvaUSDC_v2 (Aave v3 USDC vault, used in BalV3 USDp pool)
+    providerName: "erc4626",
+    poolType: POOL_TYPE_ERC4626,
+    tokens: [
+      "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e", // USDC (underlying)
+      "0x1f0570a081fee0e4df6eac470f9d2d53cdeda1c5", // waAvaUSDC_v2 (shares)
+    ],
+    latestSwapBlock: 999999999,
+  },
+  {
     address: "0x59933c571d200dc6a7fd1cda22495db442082e34", // waAvaUSDT
     providerName: "erc4626",
     poolType: POOL_TYPE_ERC4626,

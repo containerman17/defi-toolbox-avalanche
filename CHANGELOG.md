@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-04-02 — swap-replay: test harness + overrides improvements → 2954/3000 (98.5%)
+
+### Test harness improvements (benchmarks/swap-replay/03_test.ts)
+- Fixed dependency-aware flat ordering to track only final step outputs, not
+  intermediate hops within multi-hop chains (A→B→C: B never reaches router balance).
+- Added intermediate-dependent split estimation: when per-step total is >20% below
+  expected and intermediate-producing steps exist, estimate their contribution.
+- Extended greedy flat trigger to also handle intermediate-dependent large deviations.
+- Added multi-ordering to greedy flat (original, reverse, largest-first).
+- Trust flat/greedy-flat results even when > 2x expected — single eth_call with real
+  pool state is trustworthy; only per-step totals should be SUSPICIOUS.
+
+### Token overrides
+- HUNDRED token (`0x4586af10`): added `whitelistSlots: [8]` to bypass
+  `excludedFromLockPeriod` timelock mapping. Fixes "Time lock is still active" reverts.
+- New `whitelistSlots` mechanism in overrides.ts: sets `mapping[addr] = true` for both
+  sender and router to bypass token transfer restrictions.
+
+### Convert improvements (benchmarks/swap-replay/02_convert.ts)
+- V4 PoolManager address case fix + pool validation.
+- Added BalV3 half-buffered head bridge (ERC4626 unwrap chaining).
+- Added waAvaUSDC_v2 vault to ERC4626 registry.
+
 ## 2026-04-02 — swap-replay: token overrides + convert fix → 2941/3000 (98.0%)
 
 ### Token override fixes (contracts/token_overrides.json)

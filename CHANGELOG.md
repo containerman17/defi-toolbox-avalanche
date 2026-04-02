@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-02 — swap-replay: router balance override + Snow Monkey fix → 4969/5000 (99.4%)
+
+- Added router-side balance override in `buildStateOverrides` — some tokens (reflection)
+  check `_balances` on transfer but update `_rOwned` on transferFrom, so the router also
+  needs a balance override to avoid "transfer amount exceeds balance" after receiving tokens.
+- Snow Monkey (`0xfa0008d2`): added `whitelistSlots: [22, 23]` to bypass transfer restrictions.
+
 ## 2026-04-02 — swap-replay: router multi-path fix → 3971/4000 (99.3%)
 
 ### Router fix (contracts/HayabusaRouter.sol)

@@ -240,6 +240,14 @@ export function buildStateOverrides(opts: {
       if (!merged[addr]) merged[addr] = {};
       Object.assign(merged[addr], val.stateDiff);
     }
+    // Router balance — needed for tokens with broken internal accounting
+    // (e.g. reflection tokens where transferFrom updates _rOwned but transfer
+    // checks _tOwned/_balances, causing "transfer amount exceeds balance")
+    const routerBalOvr = getBalanceOverride(token, amount, routerAddress);
+    for (const [addr, val] of Object.entries(routerBalOvr)) {
+      if (!merged[addr]) merged[addr] = {};
+      Object.assign(merged[addr], val.stateDiff);
+    }
     // Sender→router allowance
     const allowOvr = getAllowanceOverride(token, senderAddress, routerAddress);
     for (const [addr, val] of Object.entries(allowOvr)) {

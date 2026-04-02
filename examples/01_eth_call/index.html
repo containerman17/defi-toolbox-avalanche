@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>eth_call demo</title>
+<style>
+  body { font-family: monospace; margin: 2em; background: #111; color: #eee; }
+  input, button { font-family: monospace; font-size: 14px; padding: 4px 8px; }
+  input { background: #222; color: #eee; border: 1px solid #555; width: 500px; }
+  button { cursor: pointer; background: #333; color: #eee; border: 1px solid #555; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #log { white-space: pre-wrap; margin-top: 1em; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div>
+  <label>State Server:</label><br>
+  <input id="url" value="">
+  <button id="connectBtn" onclick="start()">Connect</button>
+</div>
+<div id="log"></div>
+
+<script>
+const log = (msg) => {
+  document.getElementById('log').textContent += msg + '\n';
+};
+
+async function start() {
+  const btn = document.getElementById('connectBtn');
+  btn.disabled = true;
+
+  const base = document.getElementById('url').value.replace(/\/+$/, '');
+  const wsUrl = base.replace(/^http/, 'ws') + '/live';
+
+  // Load wasm_exec.js from state server
+  log('loading wasm_exec.js...');
+  const execResp = await fetch(base + '/sdk/wasm_exec.js');
+  new Function(await execResp.text())();
+
+  // Load and instantiate WASM
+  log('loading quoter.wasm...');
+  const t0 = Date.now();
+  const wasmResp = await fetch(base + '/sdk/quoter.wasm');
+  const wasmBytes = await wasmResp.arrayBuffer();
+  const go = new Go();
+  const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
+  log(`wasm ready in ${Date.now() - t0}ms (${(wasmBytes.byteLength / 1e6).toFixed(1)}MB)`);
+
+  go.run(instance);
+  await new Promise(r => setTimeout(r, 100));
+
+  // Connect to state server
+  log(`\nconnecting to ${wsUrl}...`);
+  const t1 = Date.now();
+  await globalThis.connect(wsUrl, 2000, 3);
+  log(`connected in ${Date.now() - t1}ms`);
+
+  // WAVAX contract — balanceOf(address) for Trader Joe LBPool (WAVAX/USDC, 20bp)
+  const WAVAX = '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7';
+  const POOL  = '0xD446eb1660F766d533BeCeEf890Df7A69d26f7d1';
+  // balanceOf(address) selector = 0x70a08231, then address padded to 32 bytes
+  const calldata = '0x70a08231' + POOL.slice(2).toLowerCase().padStart(64, '0');
+
+  log(`\ncalling WAVAX.balanceOf(${POOL})`);
+  log('watching for changes each block...\n');
+
+  let lastBlock = 0;
+  let lastResult = '';
+
+  globalThis.subscribeBlocks((block, timestamp) => {
+    if (block === lastBlock) return;
+    lastBlock = block;
+
+    globalThis.ethCall(WAVAX, calldata).then(res => {
+      if (res.error) {
+        log(`block ${block}  error: ${res.error}`);
+        return;
+      }
+      const raw = res.result;
+      // parse uint256 from hex
+      const wei = BigInt(raw);
+      const whole = wei / 10n**18n;
+      const frac = (wei % 10n**18n).toString().padStart(18, '0').slice(0, 4);
+      const display = `${whole}.${frac} WAVAX`;
+
+      if (raw !== lastResult) {
+        log(`block ${block}  ${display}  (${res.ms.toFixed(1)}ms)  ← changed`);
+        lastResult = raw;
+      } else {
+        log(`block ${block}  ${display}  (${res.ms.toFixed(1)}ms)`);
+      }
+    });
+  });
+}
+</script>
+</body>
+</html>

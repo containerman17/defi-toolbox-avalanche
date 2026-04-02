@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-02 — Examples: add simple eth_call demo, renumber
+
+- **`examples/01_eth_call/`**: new minimal demo — calls `WAVAX.balanceOf(pool)` each block
+  to show how `ethCall` works. Good starting point (changes every few seconds on mainnet).
+- **Renamed** `01_evm_call` → `02_live_quotes` to reflect complexity ordering.
+
 ## 2026-04-02 — GitHub Pages: deploy examples
 
 - Added GitHub Actions workflow to deploy `examples/` to GitHub Pages on push to main.
@@ -14,7 +20,7 @@
 - **Dockerfile builds WASM in Docker**: `make build-wasm` runs in the builder stage, WASM
   files are copied into the embed dir before the state server binary is built.
 - **Added `run.sh`**: builds Docker image and runs with `--network host`.
-- **Added browser demo** (`examples/01_evm_call/index.html`): single HTML file that loads
+- **Added browser demo** (`examples/02_live_quotes/index.html`): single HTML file that loads
   WASM from the state server, connects via WebSocket, and runs per-block quotes.
 - **Consolidated test scripts**: merged `test_blocks.mjs` into `test.mjs` (kept the
   block-polling version, dropped the one-shot version).

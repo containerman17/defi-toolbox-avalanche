@@ -82,6 +82,14 @@
 ### README update
 - Documented that the benchmark uses the state server's `/eth-call` endpoint
   at `ws://localhost:7449/eth-call` (no env var override needed).
+## 2026-04-02 — WASM eth_call latency example
+
+- **New `examples/wasm-ethcall/`**: WASM example that calls LFJ LBQuoter V2.2
+  `findBestPathFromAmountIn([WAVAX, USDC], 1 AVAX)` every block — local WASM EVM
+  vs public Avalanche RPC node. ~10x speedup (4.7ms vs 47ms), 100% result match.
+  Build: `make build-wasm-ethcall`, run: `node examples/wasm-ethcall/run.mjs`.
+- Added `ExecuteWithGas` to `CachedContext` — like `Execute` but with custom gas limit.
+  Needed for complex contracts like LBQuoter that exceed the default 5M gas limit.
 
 ## 2026-04-02 — WooFi V2 formula + coverage tuning → 99.8%
 

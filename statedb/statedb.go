@@ -686,6 +686,19 @@ func (ctx *CachedContext) Execute(state *StateDB, from, to common.Address, data 
 	return ret, gasLimit - gasLeft, err
 }
 
+// ExecuteWithGas is like Execute but with a custom gas limit.
+func (ctx *CachedContext) ExecuteWithGas(state *StateDB, from, to common.Address, data []byte, gasLimit uint64) ([]byte, uint64, error) {
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: ctx.gasPrice,
+	}
+	precompiles := vm.ActivePrecompiles(ctx.rules)
+	state.Prepare(ctx.rules, from, ctx.blockCtx.Coinbase, &to, precompiles, nil)
+	evm := vm.NewEVM(ctx.blockCtx, txCtx, state, ctx.chainCfg, vm.Config{})
+	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, gasLimit, uint256.NewInt(0))
+	return ret, gasLimit - gasLeft, err
+}
+
 // ExecuteWithCallState runs an EVM call on a CallState overlay.
 // Uses CallerContract for JUMPDEST sharing across calls.
 func (ctx *CachedContext) ExecuteWithCallState(cs *CallState, from, to common.Address, data []byte) ([]byte, uint64, error) {

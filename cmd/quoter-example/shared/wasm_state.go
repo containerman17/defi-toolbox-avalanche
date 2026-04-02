@@ -302,6 +302,6 @@ func ConnectBrowser(url string) (*statedb.LiveState, *BrowserTransport, error) {
 		ls.HandleBlockDiff(msg)
 	}
 
-	fmt.Fprintf(os.Stderr, "[wasm] connected, block=%d\n", dump.BlockNumber)
+	fmt.Fprintf(os.Stderr, "[wasm] connected, block=%d, %d storage keys, %d accounts\n", dump.BlockNumber, len(dump.Storage), len(dump.Accounts))
 	return ls, bt, nil
 }

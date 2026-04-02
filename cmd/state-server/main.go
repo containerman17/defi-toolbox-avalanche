@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
+	"embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+//go:embed sdk
+var sdkFS embed.FS
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -1051,6 +1055,23 @@ func main() {
 	// /eth-call — independent eth_call caching proxy
 	http.HandleFunc("/eth-call", func(w http.ResponseWriter, r *http.Request) {
 		handleEthCallWS(pool, callCache, w, r)
+	})
+
+	// /sdk/ — serve embedded WASM SDK files with CORS
+	http.HandleFunc("/sdk/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		name := strings.TrimPrefix(r.URL.Path, "/sdk/")
+		data, err := sdkFS.ReadFile("sdk/" + name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if strings.HasSuffix(name, ".wasm") {
+			w.Header().Set("Content-Type", "application/wasm")
+		} else if strings.HasSuffix(name, ".js") {
+			w.Header().Set("Content-Type", "application/javascript")
+		}
+		w.Write(data)
 	})
 
 	addr := fmt.Sprintf("%s:%d", listenHost, listenPort)

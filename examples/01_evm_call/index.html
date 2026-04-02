@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WASM Quoter Test</title>
+<style>
+  body { font-family: monospace; margin: 2em; background: #111; color: #eee; }
+  input, button { font-family: monospace; font-size: 14px; padding: 4px 8px; }
+  input { background: #222; color: #eee; border: 1px solid #555; width: 500px; }
+  button { cursor: pointer; background: #333; color: #eee; border: 1px solid #555; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  #log { white-space: pre-wrap; margin-top: 1em; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div>
+  <label>State Server:</label><br>
+  <input id="url" value="https://replacing-javascript-precisely-stays.trycloudflare.com">
+  <button id="connectBtn" onclick="start()">Connect</button>
+</div>
+<div id="log"></div>
+
+<script>
+const log = (msg) => {
+  document.getElementById('log').textContent += msg + '\n';
+  console.log(msg);
+};
+
+async function start() {
+  const btn = document.getElementById('connectBtn');
+  btn.disabled = true;
+
+  const base = document.getElementById('url').value.replace(/\/+$/, '');
+  const wsUrl = base.replace(/^http/, 'ws') + '/live';
+
+  // Load wasm_exec.js from state server
+  log('loading wasm_exec.js...');
+  const execResp = await fetch(base + '/sdk/wasm_exec.js');
+  const execJs = await execResp.text();
+  new Function(execJs)();
+
+  // Load and instantiate WASM
+  log('loading quoter.wasm...');
+  const t0 = Date.now();
+  const wasmResp = await fetch(base + '/sdk/quoter.wasm');
+  const wasmBytes = await wasmResp.arrayBuffer();
+  const go = new Go();
+  const { instance } = await WebAssembly.instantiate(wasmBytes, go.importObject);
+  log(`instantiated in ${Date.now() - t0}ms (${wasmBytes.byteLength} bytes)`);
+
+  go.run(instance);
+  await new Promise(r => setTimeout(r, 100));
+
+  // Connect
+  const WAVAX = '0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7';
+  const USDC  = '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E';
+  const maxBlocks = 5;
+
+  log(`\nconnecting to ${wsUrl}...`);
+  const t1 = Date.now();
+  await globalThis.connect(wsUrl, 2000, 3);
+  log(`connected in ${Date.now() - t1}ms`);
+
+  // Warmup quote
+  log('\n=== warmup quote ===');
+  globalThis.resetFetchCount();
+  const tw = Date.now();
+  const warmup = await globalThis.quote(WAVAX, USDC, '1000000000000000000');
+  log(`warmup: ${Date.now() - tw}ms  out=${warmup.forward.amountOut}  fetches=${globalThis.getFetchCount()}`);
+
+  // Track latest block
+  let latestBlock = 0;
+  globalThis.subscribeBlocks((block, timestamp) => {
+    latestBlock = block;
+  });
+
+  // Wait for blocks, quote each one
+  let lastBlock = 0;
+  log(`\n=== waiting for ${maxBlocks} blocks ===`);
+
+  for (let i = 0; i < maxBlocks; ) {
+    while (latestBlock === lastBlock) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+    lastBlock = latestBlock;
+    i++;
+
+    globalThis.resetFetchCount();
+    const t = Date.now();
+    const result = await globalThis.quote(WAVAX, USDC, '1000000000000000000');
+    const ms = Date.now() - t;
+    const fetches = globalThis.getFetchCount();
+    const fwd = result.forward;
+    log(`block ${lastBlock}  quote: ${ms}ms  out=${fwd.amountOut}  fetches=${fetches}`);
+  }
+
+  log('\ndone');
+}
+</script>
+</body>
+</html>

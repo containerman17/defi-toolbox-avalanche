@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-02 — WASM SDK: consolidate ethCall + quoter, serve from state server
+
+- **Merged `examples/wasm-ethcall/` into `cmd/quoter-example/wasm/`**: single WASM binary
+  now exposes both `quote()` and `ethCall()`. Removed the separate ethcall example.
+- **State server serves WASM SDK**: embedded `quoter.wasm` + `wasm_exec.js` via `go:embed`,
+  served at `/sdk/` with `application/wasm` content type and CORS headers. Users fetch the
+  SDK directly from the state server they're already connected to.
+- **Dockerfile builds WASM in Docker**: `make build-wasm` runs in the builder stage, WASM
+  files are copied into the embed dir before the state server binary is built.
+- **Added `run.sh`**: builds Docker image and runs with `--network host`.
+- **Added browser demo** (`examples/01_evm_call/index.html`): single HTML file that loads
+  WASM from the state server, connects via WebSocket, and runs per-block quotes.
+- **Consolidated test scripts**: merged `test_blocks.mjs` into `test.mjs` (kept the
+  block-polling version, dropped the one-shot version).
+- **Makefile cleanup**: fixed `build-wasm` target to point to `cmd/quoter-example/wasm/`,
+  removed `build-wasm-ethcall` target.
+- **Connect log** now prints storage key and account counts.
+
 ## 2026-04-02 — state-server: binary cache + caps + zstd dump (73MB → 3.2MB)
 
 - **Refactored state server cache** from `map[string]string` (hex-prefixed keys, ~1KB/slot)

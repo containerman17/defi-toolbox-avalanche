@@ -1,4 +1,4 @@
-.PHONY: build build-native build-wasm build-wasm-ethcall build-state-server clean
+.PHONY: build build-native build-wasm build-state-server clean
 
 BIN = evm-quoter/bin
 
@@ -8,12 +8,8 @@ build-native:
 	go build -o $(BIN)/harness-native ./cmd/native
 
 build-wasm:
-	GOOS=js GOARCH=wasm go build -tags nethttpomit,osusergo,netgo -o $(BIN)/harness.wasm ./cmd/wasm
-	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" $(BIN)/wasm_exec.js
-
-build-wasm-ethcall:
-	GOOS=js GOARCH=wasm go build -tags nethttpomit,osusergo,netgo -o examples/wasm-ethcall/ethcall.wasm ./examples/wasm-ethcall
-	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" examples/wasm-ethcall/wasm_exec.js
+	GOOS=js GOARCH=wasm go build -tags nethttpomit,osusergo,netgo -o cmd/quoter-example/wasm/quoter.wasm ./cmd/quoter-example/wasm
+	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/quoter-example/wasm/wasm_exec.js
 
 build-state-server:
 	go build -o $(BIN)/state-server ./cmd/state-server

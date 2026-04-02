@@ -4,6 +4,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+
+# Build WASM SDK
+RUN make build-wasm
+RUN cp cmd/quoter-example/wasm/quoter.wasm cmd/state-server/sdk/quoter.wasm
+RUN cp cmd/quoter-example/wasm/wasm_exec.js cmd/state-server/sdk/wasm_exec.js
+
+# Build state server (with WASM embedded)
 RUN CGO_ENABLED=0 go build -o /state-server ./cmd/state-server
 
 FROM alpine:3.21

@@ -3,20 +3,29 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"syscall/js"
+	"time"
 
 	"defi-toolbox/cmd/quoter-example/shared"
+	"defi-toolbox/statedb"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/core/vm"
 )
 
 var quoter *shared.Quoter
 var transport *shared.BrowserTransport
+var ls *statedb.LiveState
 
 func main() {
 	js.Global().Set("connect", js.FuncOf(connectFn))
 	js.Global().Set("quote", js.FuncOf(quoteFn))
+	js.Global().Set("ethCall", js.FuncOf(ethCallFn))
 	js.Global().Set("subscribeBlocks", js.FuncOf(subscribeBlocksFn))
 	js.Global().Set("getFetchCount", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
 		if transport == nil {
@@ -55,11 +64,12 @@ func connectFn(this js.Value, args []js.Value) interface{} {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
-			ls, bt, err := shared.ConnectBrowser(url)
+			liveState, bt, err := shared.ConnectBrowser(url)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
 			}
+			ls = liveState
 			transport = bt
 			quoter = shared.NewQuoter(ls, poolLimit, maxHops)
 			quoter.StartBlockLoop()
@@ -96,6 +106,59 @@ func quoteFn(this js.Value, args []js.Value) interface{} {
 				return
 			}
 			b, _ := json.Marshal(resp)
+			resolve.Invoke(js.Global().Get("JSON").Call("parse", string(b)))
+		}()
+		return nil
+	})
+	return js.Global().Get("Promise").New(handler)
+}
+
+// ethCall(to, data) — runs eth_call locally in the WASM EVM.
+// Returns a Promise that resolves to {result, gasUsed, ms}.
+func ethCallFn(this js.Value, args []js.Value) interface{} {
+	if ls == nil {
+		return jsError("not connected")
+	}
+	if len(args) < 2 {
+		return jsError("ethCall requires (to, data)")
+	}
+	to := common.HexToAddress(args[0].String())
+	data := common.FromHex(args[1].String())
+
+	handler := js.FuncOf(func(this js.Value, promiseArgs []js.Value) interface{} {
+		resolve := promiseArgs[0]
+		go func() {
+			ls.RLock()
+			cfg := ls.EVMConfig()
+			state := ls.State()
+			ctx := statedb.GetCachedContext(cfg)
+
+			gasLimit := cfg.GasLimit
+			if gasLimit == 0 {
+				gasLimit = 40_000_000
+			}
+
+			t0 := time.Now()
+			result, gasUsed, err := ctx.ExecuteWithGas(
+				state, common.Address{}, to, data, gasLimit,
+			)
+			elapsed := time.Since(t0)
+			ls.RUnlock()
+
+			obj := map[string]interface{}{
+				"ms": elapsed.Seconds() * 1000,
+			}
+			if err != nil {
+				obj["error"] = err.Error()
+				obj["gasUsed"] = int(gasUsed)
+				if errors.Is(err, vm.ErrExecutionReverted) {
+					obj["revertData"] = "0x" + hex.EncodeToString(result)
+				}
+			} else {
+				obj["gasUsed"] = int(gasUsed)
+				obj["result"] = "0x" + hex.EncodeToString(result)
+			}
+			b, _ := json.Marshal(obj)
 			resolve.Invoke(js.Global().Get("JSON").Call("parse", string(b)))
 		}()
 		return nil

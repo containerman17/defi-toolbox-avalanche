@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-04-02 — WooFi V2 formula + coverage tuning → 99.8%
+
+- **WooFi V2 formula** (FormulaWooFi=12): oracle-based PMM, multi-token through USDC.
+  Reads oracle price/coeff/spread from WooracleV2_2, pool reserves from WooPPV2.
+  Handles base→quote, quote→base, base→base (via quote) swap cases.
+  Formula verified correct (62/81 match), but NOT registered yet — EVM test infra
+  can't execute most pairs through HayabusaRouter (approvals/routing issue).
+- Removed stale BTC.b/SolvBTC dead dir (+1 match).
+- Added Majinoors FoT at 3.5% (+2 matches).
+- Added ArenaHook V4 dead dir (+1 match).
+
 ## 2026-04-02 — Selective un-blacklist + broken token registry → 99.8%
 
 - Un-blacklisted all 31 pools that showed as mismatches (formula=0, evm=nonzero).

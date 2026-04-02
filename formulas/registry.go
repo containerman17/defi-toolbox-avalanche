@@ -57,6 +57,7 @@ const (
 	FormulaBalancerV2  = 8  // Balancer V2 (Weighted pools via Vault singleton)
 	FormulaWombat      = 10 // Wombat DynamicPoolV2 (stableswap with yield-bearing tokens)
 	FormulaPlatypus    = 11 // Platypus stableswap (price slippage curve)
+	FormulaWooFi       = 12 // WooFi V2 (oracle-based PMM, multi-token through quote)
 	FormulaNoImpl      = 9  // Pool type is known but has no formula implementation.
 	                        // Setting this prevents EVM fallback: PoolManager.Get() caches
 	                        // a deadPoolQuoter (returns nil,false) instead of returning nil.

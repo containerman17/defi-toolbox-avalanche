@@ -343,13 +343,34 @@ contract HayabusaRouter {
     ) external payable returns (uint256) {
         address tokenIn = tokens[0];
         address tokenOut = tokens[pools.length * 2 - 1];
-        uint256 totalIn = amountsIn[0];
-        if (totalIn == 0) revert("swap: amountsIn[0] must be nonzero");
+        if (amountsIn[0] == 0) revert("swap: amountsIn[0] must be nonzero");
 
-        // Snapshot tokenOut balance before any transfers
+        // Pull tokens from sender for ALL steps that need fresh input.
+        // Sum amountsIn per unique input token and do one transferFrom each.
+        {
+            // First pass: always pull tokenIn (tokens[0]) for the total of all
+            // amountsIn entries that match tokenIn.
+            uint256 totalIn = 0;
+            for (uint256 i = 0; i < pools.length;) {
+                if (amountsIn[i] > 0 && tokens[i * 2] == tokenIn) {
+                    totalIn += amountsIn[i];
+                }
+                unchecked { ++i; }
+            }
+            IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
+
+            // Second pass: pull any non-tokenIn tokens that steps need.
+            for (uint256 i = 1; i < pools.length;) {
+                if (amountsIn[i] > 0 && tokens[i * 2] != tokenIn) {
+                    IERC20(tokens[i * 2]).transferFrom(msg.sender, address(this), amountsIn[i]);
+                }
+                unchecked { ++i; }
+            }
+        }
+
+        // Snapshot tokenOut balance before any swaps
         uint256 outBefore = IERC20(tokenOut).balanceOf(msg.sender);
 
-        IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
         _executeSwapInner(pools, poolTypes, tokens, amountsIn, extraDatas);
 
         // Transfer all tokenOut held by router to caller.

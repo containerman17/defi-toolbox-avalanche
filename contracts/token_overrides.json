@@ -790,7 +790,8 @@
   {
     "address": "0x323665443cef804a3b5206103304bd4872ea4253",
     "slot": 208,
-    "shift": 32
+    "shift": 32,
+    "allowance_slot": 52
   },
   {
     "address": "0x00697f5f6dc2ca0a17e6c89bccd1173a61ea24a6",
@@ -10804,5 +10805,9 @@
     "slot": 0,
     "erc7201_base": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b4",
     "erc7201_allowance": "0xc991b2e918acaba8e5721668ed0b1982684e5a8692a621bcd2d7ef326bb015b5"
+  },
+  {
+    "address": "0xfa0008d21919a27b80a2a59e197f5392bb4f048c",
+    "slot": 2
   }
 ]

@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-04-02 — swap-replay: router multi-path fix → 3971/4000 (99.3%)
+
+### Router fix (contracts/HayabusaRouter.sol)
+- **Root cause**: `swap()` only called `transferFrom(sender, router, amountsIn[0])` — pulling
+  tokens for the first step only. Split swaps with multiple paths needing fresh input tokens
+  from the sender would revert with "ERC20: transfer amount exceeds balance" on the second
+  path. This caused ALL SUSPICIOUS failures (25+ cases) where per-step quoting inflated
+  totals because the flat/greedy-flat approach couldn't execute multi-path splits.
+- **Fix**: `swap()` now sums all `amountsIn[i]` entries that match `tokenIn` and pulls the
+  total in one `transferFrom`. For steps using a different input token, it does a separate
+  `transferFrom` per token. This allows the flat encoding to correctly handle split swaps.
+- Before: 3937/4000 (98.4%). After: 3971/4000 (99.3%). +34 passes.
+
+### Token overrides (contracts/token_overrides.json)
+- USDV (`0x32366544`): added `allowance_slot: 52` — USDV is an upgradeable proxy with
+  custom `userStates` mapping for balances (slot 208, shift=32) but standard OZ
+  `_allowances` at slot 52. The default `slot+1=209` was wrong, causing "insufficient
+  allowance" reverts. (The swap still fails due to USDV's color system requiring consistent
+  color supply, but the allowance error is resolved.)
+- Snow Monkey / NANAS (`0xfa0008d2`): added balance slot 2. Standard ERC20PresetMinterPauser.
+  (Direct swaps already passed via existing pool state; SPLIT failures are pool-state issues
+  at block-1, not token override issues.)
+
+### Investigation dead-ends
+- USDV color system: USDV tracks per-user "colors" in a `State` struct. Our balance override
+  sets color=0 (via shift=32), but recoloring from color 0 fails with `InvalidUser()` when
+  color 0 has no supply in `colorInfo`. Would need deep color supply overrides to fix — not
+  worth the complexity for one pool.
+- Snow Monkey SPLIT failures: pool `0xdf316f` reverts with "Joe: K" at block-1 for certain
+  amounts, but works fine at other blocks. Pool state issue, not token override issue.
+- WooFi pool reverts: multiple SPLIT failures have WooFi steps that revert with "arithmetic
+  underflow or overflow" at block-1. The pool has insufficient liquidity for the requested
+  amounts at that block state. Genuine block-state divergence.
+
 ## 2026-04-02 — swap-replay: test harness + overrides improvements → 2954/3000 (98.5%)
 
 ### Test harness improvements (benchmarks/swap-replay/03_test.ts)

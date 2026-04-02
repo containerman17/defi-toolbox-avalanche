@@ -1,0 +1,16 @@
+# app name is intentionally omitted — pass via:
+#   source .env && fly deploy --app "$FLY_APP"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 7449
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "2gb"

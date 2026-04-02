@@ -1027,7 +1027,6 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"endpoints": endpoints,
 			"ethCall":   "/eth-call",
-			"upstream":  upstreamWsURL,
 		})
 	})
 

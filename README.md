@@ -24,21 +24,25 @@ BFS Pathfinding (arbs / optimal swaps)
 | Pool Collector | `tools/pool-collector/` | Discovers 26,000+ pools across 35+ protocols | — |
 | Router | `contracts/` | HayabusaRouter.sol (21 pool types) | On-chain at `0x476f...` |
 | BFS Pathfinder | `pathfinder/` | Graph search over all pool edges | — |
-| Quoter (WASM) | `cmd/quoter-example/wasm/` | Browser-ready WASM quoter | 115ms / 2000 pools |
-| Arbitrage Bot | `cmd/arbitrage-example/` | WAVAX arbitrage with EVM verification | — |
+| WASM SDK | `cmd/wasm-sdk/` | Browser-ready WASM quoter + eth_call | 115ms / 2000 pools |
+| Quoter API | `quoter/` | Quote orchestration (BFS + formulas + EVM) | — |
 
 ## Structure
 
 ```
 cmd/
   state-server/             WebSocket state server (gob initial dump + JSON diffs)
-  arbitrage-example/        WAVAX arbitrage bot with on-chain execution
-  quoter-example/
-    wasm/                   Browser WASM quoter
-    native/                 Native Go quoter
-    profile/                Profiling harness
-    shared/                 Shared quoter + WASM state logic
-    http/                   HTTP quote server
+  wasm-sdk/                 Browser WASM SDK (quoter + eth_call)
+
+quoter/                     Quote API (BFS pathfinding + formula engine + EVM verification)
+
+examples/
+  go/
+    arbitrage/              WAVAX arbitrage bot with on-chain execution
+    http-quoter/            HTTP quote server
+  browser/
+    01_eth_call/            In-browser EVM vs public RPC latency comparison
+    02_live_quotes/         Live round-trip spread table
 
 formulas/                   Formula-based pool quoters (10 types)
   pool_quoter.go            PoolManager, quote cache, dead pool dirs
@@ -137,8 +141,8 @@ Requires a local Avalanche C-Chain node at `http://localhost:9650/ext/bc/C/rpc`.
 # Run formula accuracy benchmark (2000 pools)
 timeout 300 go run ./benchmarks/formula-accuracy/ --limit 2000 2>&1
 
-# Run arbitrage bot
-go run ./cmd/arbitrage-example/ --pool-limit 200
+# Run arbitrage example
+go run ./examples/go/arbitrage/ --pool-limit 200
 
 # Start state server
 go run ./cmd/state-server/

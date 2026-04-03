@@ -3,7 +3,7 @@ name: Deploy Examples to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: [examples/**]
+    paths: [examples/browser/**]
 
 permissions:
   contents: read
@@ -21,6 +21,6 @@ jobs:
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: examples
+          path: examples/browser
       - id: deployment
         uses: actions/deploy-pages@v4

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"defi-toolbox/cmd/quoter-example/shared"
+	"defi-toolbox/quoter"
 	"defi-toolbox/statedb"
 )
 
@@ -30,11 +30,11 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "connected to %s, block=%d\n", *stateServer, ls.Block())
 
-	q := shared.NewQuoter(ls, *poolLimit, *maxHops)
+	q := quoter.NewQuoter(ls, *poolLimit, *maxHops)
 	q.StartBlockLoop()
 
 	http.HandleFunc("/quote", func(w http.ResponseWriter, r *http.Request) {
-		req := shared.QuoteRequest{
+		req := quoter.QuoteRequest{
 			TokenIn:  r.URL.Query().Get("tokenIn"),
 			TokenOut: r.URL.Query().Get("tokenOut"),
 			AmountIn: r.URL.Query().Get("amountIn"),

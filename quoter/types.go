@@ -1,4 +1,4 @@
-package shared
+package quoter
 
 // QuoteRequest is the input for a two-way quote.
 // ID is optional — if set, it is echoed back in the response for matching.

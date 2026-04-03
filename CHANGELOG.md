@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-04-03 — Restructure: products vs examples
+
+- **`cmd/wasm-sdk/`**: renamed from `cmd/quoter-example/wasm/` — this is a product, not an example.
+  `wasm_state.go` (browser WebSocket transport) moved from `shared/` into the same package.
+- **`quoter/`**: new top-level library extracted from `cmd/quoter-example/shared/`. Contains
+  `Quoter`, `QuoteRequest/Response`, BFS pathfinding orchestration. Platform-agnostic.
+- **`examples/go/arbitrage/`**: moved from `cmd/arbitrage-example/`.
+- **`examples/go/http-quoter/`**: moved from `cmd/quoter-example/http/`.
+- **`examples/browser/`**: browser demos moved under `browser/` subfolder.
+- **Deleted**: `cmd/quoter-example/native/` and `cmd/quoter-example/profile/` (internal tools, not needed).
+- Updated Makefile, Dockerfile, GitHub Pages workflow, README.
+
 ## 2026-04-02 — Examples: rework both demos
 
 - **`examples/01_eth_call/`**: latency comparison — same `eth_call` via in-browser WASM EVM

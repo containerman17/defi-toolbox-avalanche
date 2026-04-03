@@ -1,6 +1,6 @@
 //go:build js && wasm
 
-package shared
+package main
 
 import (
 	"bytes"

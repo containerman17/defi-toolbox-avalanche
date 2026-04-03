@@ -9,7 +9,7 @@ cache/
 archive/quoting-go/quoting-go
 benchmarks/swap-replay/payloads/
 temp-scripts/
-/native
+
 /benchmark
 /state-server
 /discover
@@ -18,11 +18,11 @@ temp-scripts/
 /arb2
 /arb3
 /arb4
-/arbitrage-example
+/arbitrage
 /check_state
 /check_arb
 /pool_watcher
 /formula-accuracy
-/quoter-example
+/wasm-sdk
 *.wasm
 wasm_exec.js

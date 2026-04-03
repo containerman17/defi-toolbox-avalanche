@@ -11,15 +11,15 @@ import (
 	"syscall/js"
 	"time"
 
-	"defi-toolbox/cmd/quoter-example/shared"
+	qt "defi-toolbox/quoter"
 	"defi-toolbox/statedb"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/vm"
 )
 
-var quoter *shared.Quoter
-var transport *shared.BrowserTransport
+var quoter *qt.Quoter
+var transport *BrowserTransport
 var ls *statedb.LiveState
 
 func main() {
@@ -64,14 +64,14 @@ func connectFn(this js.Value, args []js.Value) interface{} {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
-			liveState, bt, err := shared.ConnectBrowser(url)
+			liveState, bt, err := ConnectBrowser(url)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
 			}
 			ls = liveState
 			transport = bt
-			quoter = shared.NewQuoter(ls, poolLimit, maxHops)
+			quoter = qt.NewQuoter(ls, poolLimit, maxHops)
 			quoter.StartBlockLoop()
 			resolve.Invoke(js.Null())
 		}()
@@ -89,7 +89,7 @@ func quoteFn(this js.Value, args []js.Value) interface{} {
 		return jsError("quote requires tokenIn, tokenOut, amountIn")
 	}
 
-	req := shared.QuoteRequest{
+	req := qt.QuoteRequest{
 		TokenIn:  args[0].String(),
 		TokenOut: args[1].String(),
 		AmountIn: args[2].String(),

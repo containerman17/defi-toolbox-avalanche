@@ -7,8 +7,8 @@ COPY . .
 
 # Build WASM SDK
 RUN make build-wasm
-RUN cp cmd/quoter-example/wasm/quoter.wasm cmd/state-server/sdk/quoter.wasm
-RUN cp cmd/quoter-example/wasm/wasm_exec.js cmd/state-server/sdk/wasm_exec.js
+RUN cp cmd/wasm-sdk/quoter.wasm cmd/state-server/sdk/quoter.wasm
+RUN cp cmd/wasm-sdk/wasm_exec.js cmd/state-server/sdk/wasm_exec.js
 
 # Build state server (with WASM embedded)
 RUN CGO_ENABLED=0 go build -o /state-server ./cmd/state-server

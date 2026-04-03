@@ -10,7 +10,8 @@
 - **`examples/go/http-quoter/`**: moved from `cmd/quoter-example/http/`.
 - **`examples/browser/`**: browser demos moved under `browser/` subfolder.
 - **Deleted**: `cmd/quoter-example/native/` and `cmd/quoter-example/profile/` (internal tools, not needed).
-- Updated Makefile, Dockerfile, GitHub Pages workflow, README.
+- Updated Makefile, Dockerfile, GitHub Pages workflow.
+- Rewrote README to reflect new structure (products / library / examples).
 
 ## 2026-04-02 — Examples: rework both demos
 

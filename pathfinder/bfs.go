@@ -91,7 +91,7 @@ const topK = 3
 // approval overrides already applied. The caller creates this once and reuses
 // it across calls so that code hash caches persist.
 func FindBestRoute(
-	pm *formulas.PoolManager,
+	pm formulas.PoolQuoterSource,
 	adj map[common.Address][]PoolEdge,
 	pools []Pool,
 	stateWithOverrides *statedb.StateDB,

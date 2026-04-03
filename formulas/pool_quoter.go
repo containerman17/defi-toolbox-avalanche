@@ -21,6 +21,12 @@ type PoolQuoter interface {
 	Address() common.Address
 }
 
+// PoolQuoterSource is the interface consumed by pathfinder BFS.
+// Both PoolManager and PoolManagerOverlay implement it.
+type PoolQuoterSource interface {
+	Quote(pool common.Address, amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int
+}
+
 // zeroQuoter is a PoolQuoter that always returns zero.
 // Used for blacklisted/unknown pools so Get() never returns nil.
 type zeroQuoter struct{ addr common.Address }
@@ -73,8 +79,9 @@ type PoolManager struct {
 	tokenModels    *TokenModelRegistry
 	blockTimestamp uint64 // block.timestamp for volatility reference updates (LFJ V2)
 
-	// depSlots: reverse map from (contractAddr, slot) → poolAddr for cache busting.
-	depSlots map[common.Address]map[common.Hash]common.Address
+	// depSlots: reverse map from (contractAddr, slot) → pool addresses for cache busting.
+	// Multiple pools may read the same slot (e.g. Balancer vault).
+	depSlots map[common.Address]map[common.Hash][]common.Address
 
 	// Quote cache: 16-slot ring buffer per pool. Skipped for LFJ V2 (time-dependent).
 	quoteCaches  map[common.Address]*QuoteCache
@@ -98,7 +105,7 @@ func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 		poolTypes:    make(map[common.Address]int),
 		poolDex:      make(map[common.Address]string),
 		tokenModels:  NewTokenModelRegistry(reader),
-		depSlots:     make(map[common.Address]map[common.Hash]common.Address),
+		depSlots:     make(map[common.Address]map[common.Hash][]common.Address),
 		quoteCaches:  make(map[common.Address]*QuoteCache),
 		noQuoteCache: make(map[common.Address]bool),
 		balanceCache: make(map[common.Address][]uint256.Int),
@@ -303,10 +310,21 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		for _, a := range accessed {
 			m := pm.depSlots[a.addr]
 			if m == nil {
-				m = make(map[common.Hash]common.Address)
+				m = make(map[common.Hash][]common.Address)
 				pm.depSlots[a.addr] = m
 			}
-			m[a.slot] = pool
+			// Append pool if not already present
+			pools := m[a.slot]
+			found := false
+			for _, p := range pools {
+				if p == pool {
+					found = true
+					break
+				}
+			}
+			if !found {
+				m[a.slot] = append(pools, pool)
+			}
 		}
 	}
 
@@ -412,12 +430,20 @@ func (pm *PoolManager) Invalidate(addr common.Address) {
 	delete(pm.quoteCaches, addr)
 	delete(pm.balanceCache, addr)
 	pm.cacheMu.Unlock()
-	// Clean up depSlots: remove entries pointing to this pool.
+	// Clean up depSlots: remove this pool from all slot slices.
 	// On next Get(), buildQuoter will re-record the slots.
 	for contract, slots := range pm.depSlots {
-		for slot, poolAddr := range slots {
-			if poolAddr == addr {
+		for slot, poolAddrs := range slots {
+			filtered := poolAddrs[:0]
+			for _, pa := range poolAddrs {
+				if pa != addr {
+					filtered = append(filtered, pa)
+				}
+			}
+			if len(filtered) == 0 {
 				delete(slots, slot)
+			} else {
+				slots[slot] = filtered
 			}
 		}
 		if len(slots) == 0 {
@@ -426,34 +452,24 @@ func (pm *PoolManager) Invalidate(addr common.Address) {
 	}
 }
 
-// InvalidateBySlot invalidates the pool that depends on a specific (contract, slot).
-// Returns the invalidated pool address, or zero if no pool was affected.
-func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common.Hash) common.Address {
+// InvalidateBySlot invalidates all pools that depend on a specific (contract, slot).
+// Returns the invalidated pool addresses.
+func (pm *PoolManager) InvalidateBySlot(contractAddr common.Address, slot common.Hash) []common.Address {
 	slots, ok := pm.depSlots[contractAddr]
 	if !ok {
-		return common.Address{}
+		return nil
 	}
-	poolAddr, ok := slots[slot]
-	if !ok {
-		return common.Address{}
+	poolAddrs, ok := slots[slot]
+	if !ok || len(poolAddrs) == 0 {
+		return nil
 	}
-	delete(pm.pools, poolAddr)
-	pm.cacheMu.Lock()
-	delete(pm.quoteCaches, poolAddr)
-	delete(pm.balanceCache, poolAddr)
-	pm.cacheMu.Unlock()
-	// Remove all depSlots entries for this pool so they get re-recorded on rebuild
-	for c, s := range pm.depSlots {
-		for sl, pa := range s {
-			if pa == poolAddr {
-				delete(s, sl)
-			}
-		}
-		if len(s) == 0 {
-			delete(pm.depSlots, c)
-		}
+	// Copy slice — Invalidate modifies depSlots
+	addrs := make([]common.Address, len(poolAddrs))
+	copy(addrs, poolAddrs)
+	for _, addr := range addrs {
+		pm.Invalidate(addr)
 	}
-	return poolAddr
+	return addrs
 }
 
 // poolHex returns the lowercase hex string for a pool address.
@@ -532,5 +548,39 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Ad
 	}
 
 	return out
+}
+
+// ── Getters for overlay construction ────────────────────────────────
+
+// DepSlots returns the reverse dependency map: (contractAddr, slot) → pool addresses.
+func (pm *PoolManager) DepSlots() map[common.Address]map[common.Hash][]common.Address {
+	return pm.depSlots
+}
+
+// Reader returns the storage reader function.
+func (pm *PoolManager) Reader() StorageReader { return pm.reader }
+
+// GetRegistry returns the formula registry.
+func (pm *PoolManager) GetRegistry() *Registry { return pm.registry }
+
+// EVMCallerFn returns the EVM caller function (may be nil).
+func (pm *PoolManager) EVMCallerFn() EVMCaller { return pm.evmCaller }
+
+// GetBlockTimestamp returns the current block timestamp.
+func (pm *PoolManager) GetBlockTimestamp() uint64 { return pm.blockTimestamp }
+
+// GetPoolTokens returns the registered tokens for a pool.
+func (pm *PoolManager) GetPoolTokens(pool common.Address) []common.Address {
+	return pm.poolTokens[pool]
+}
+
+// GetPoolTypeInfo returns (poolType, dex) for a pool.
+func (pm *PoolManager) GetPoolTypeInfo(pool common.Address) (int, string) {
+	return pm.poolTypes[pool], pm.poolDex[pool]
+}
+
+// IsNoQuoteCache returns true if the pool skips quote caching (e.g. LFJ V2).
+func (pm *PoolManager) IsNoQuoteCache(pool common.Address) bool {
+	return pm.noQuoteCache[pool]
 }
 

@@ -1065,9 +1065,9 @@ func main() {
 				if len(parts) == 3 {
 					addr := common.HexToAddress(parts[1])
 					slot := common.HexToHash(parts[2])
-					poolAddr := pm.InvalidateBySlot(addr, slot)
-					if poolAddr != (common.Address{}) {
-						dirtySet[poolAddr] = true
+					invalidated := pm.InvalidateBySlot(addr, slot)
+					for _, pa := range invalidated {
+						dirtySet[pa] = true
 					}
 				}
 			}

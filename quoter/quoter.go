@@ -182,6 +182,17 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 	return resp, nil
 }
 
+// ── Getters for split routing ────────────────────────────────────────
+
+func (q *Quoter) PM() *formulas.PoolManager                   { return q.pm }
+func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge       { return q.adj }
+func (q *Quoter) Pools() []pf.Pool                            { return q.pools }
+func (q *Quoter) StateWithOverrides() *statedb.StateDB         { return q.stateWithOverrides }
+func (q *Quoter) RouterAddr() common.Address                   { return q.routerAddr }
+func (q *Quoter) Sender() common.Address                      { return q.sender }
+func (q *Quoter) MaxHops() int                                 { return q.maxHops }
+func (q *Quoter) LiveState() *statedb.LiveState                { return q.ls }
+
 func (q *Quoter) routeToResult(route *pf.Route, tokenIn, tokenOut common.Address, amountIn *uint256.Int) *QuoteResult {
 	if route == nil {
 		return &QuoteResult{

@@ -425,6 +425,12 @@ func (s *CallState) AddLog(log *types.Log) {
 
 func (s *CallState) AddPreimage(hash common.Hash, data []byte) {}
 
+// StorageOverrides returns the dirty storage slots from EVM execution.
+// The returned map is the internal reference — do not modify.
+func (s *CallState) StorageOverrides() map[common.Address]map[common.Hash]common.Hash {
+	return s.storageOverrides
+}
+
 // ─── Block hash — delegate to base ─────────────────────────────────
 
 func (s *CallState) GetBlockHash(num uint64) common.Hash {

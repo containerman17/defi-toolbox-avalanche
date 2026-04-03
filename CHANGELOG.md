@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-04-03 — Split routing overlay + depSlots fix
+
+### Bug fix: depSlots shared slot invalidation
+
+- `depSlots` mapped `(contract, slot) → single pool address`. When multiple pools read the same
+  storage slot (e.g. Balancer vault), only the last-registered pool was invalidated on block updates.
+- Changed to `(contract, slot) → []pool addresses`. `InvalidateBySlot` now returns `[]common.Address`
+  and invalidates all dependent pools. Callers updated (quoter, arbitrage, experiments).
+
+### Split routing: PoolManagerOverlay
+
+- **`formulas/overlay.go`**: `PoolManagerOverlay` wraps a base `PoolManager` with dirty storage slots.
+  Scans dirty slots against `depSlots` at construction to identify affected pools. Unaffected pools
+  delegate to base (zero cost). Affected pools rebuild lazily on a scratch `PoolManager` with an
+  overlay `StorageReader` that intercepts dirty slots.
+- **`formulas/pool_quoter.go`**: Added `PoolQuoterSource` interface (single method: `Quote`).
+  Added getter methods for overlay construction (`DepSlots`, `Reader`, `GetRegistry`, etc.).
+- **`pathfinder/bfs.go`**: `FindBestRoute` now accepts `PoolQuoterSource` interface instead of
+  concrete `*PoolManager`. Enables passing overlays to BFS without changing pathfinding logic.
+- **`statedb/callstate.go`**: Added `StorageOverrides()` getter — exposes dirty slots from EVM
+  execution. The EVM already tracks these for snapshot/revert; now accessible for split routing.
+- **`quoter/quoter.go`**: Added getter methods (`PM`, `Adj`, `Pools`, `StateWithOverrides`, etc.)
+  so external code can access quoter internals for split routing.
+- **`examples/go/split-routing/`**: Example demonstrating greedy chunked split routing.
+  Quotes WAVAX → USDT at full volume (single path) then splits into N chunks. Each chunk:
+  BFS with formula overlay → EVM-execute → capture dirty slots → overlay for next chunk.
+  Prints per-leg details and total comparison.
+
+### Design: greedy chunked execution
+
+1. Formula BFS at chunk volume → best path
+2. EVM-execute full path (one `swap()` call) → dirty slots captured from `CallState` for free
+3. Create `PoolManagerOverlay` with accumulated dirty slots → affected formulas rebuild lazily
+4. BFS again on overlay → finds best path given depleted pools
+5. Repeat. Each EVM execution sees all previous legs' state changes via `StateDB` overlay.
+
+Pool-to-slot mapping uses actual dependency data from formula construction (via `depSlots`),
+not assumptions about pool addresses. A Balancer pool reading from the vault contract is
+correctly identified when vault slots are dirtied.
+
 ## 2026-04-03 — Restructure: products vs examples
 
 - **`cmd/wasm-sdk/`**: renamed from `cmd/quoter-example/wasm/` — this is a product, not an example.

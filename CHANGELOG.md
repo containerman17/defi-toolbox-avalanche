@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-04-04 — Graceful fallback + all-explicit tails
+
+### Router contract: min(amountsIn, balanceOf) fallback
+
+Changed `_executeSwapInner` to cap explicit amounts at actual balance instead of reverting.
+When the market moves against us (pool produces less than formula predicted), the step uses
+whatever is available. When it moves in our favor, the surplus stays on the router (recoverable
+via `withdraw()`). The `minOutput` check at the end of `swap()` still catches unacceptable
+slippage. Cost: one extra `balanceOf` SLOAD per explicit step (~100 gas warm).
+
+Deployed: `0x0c1d788bfbe6728971234e05c505a12665776ad9` (block 82063154).
+
+### First-hop merge: all tails explicit
+
+All tails from first-hop merge now get explicit intermediate amounts (not just N-1). This
+enables collapseDuplicates to merge identical pool calls across different first-hop groups that
+were previously blocked by intervening balance sweeps. The graceful fallback makes this safe —
+if a formula quote is slightly off, the step uses available balance instead of reverting.
+
+### Analysis results (5 tokens × 5 tokens, 20 chunks)
+
+- v2 saves 77k–328k gas per swap on 6 of 20 pairs
+- 1 remaining duplicate across 20 pairs: `dodo(USDC→WAVAX)` in USDC→WETH.e, caused by
+  intervening balance sweep from shared suffix (known limitation of suffix trie architecture)
+- No reverts observed from the graceful fallback
+
 ## 2026-04-04 — Phase 3: collapse duplicate pool calls + analysis script
 
 - **`collapseDuplicates`**: post-merge pass that finds steps with the same (pool, tokenIn,

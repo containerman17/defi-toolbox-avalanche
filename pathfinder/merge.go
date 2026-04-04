@@ -253,18 +253,19 @@ func mergeFirstHops(steps []RouteStep, amounts []*uint256.Int, quoter func(Route
 		outAmounts = append(outAmounts, totalVolume)
 
 		// Emit each branch's tail (steps after the first hop).
-		// All tails get explicit intermediate amounts from the quoter,
-		// EXCEPT the last tail's first step keeps balance(0) to sweep any
-		// remaining tokens. Formula quotes aren't exact — the last consumer
-		// must grab whatever is left so nothing stays on the router.
-		for idx, bi := range g.indices {
+		// ALL tails get explicit intermediate amounts from the quoter.
+		// If the formula overestimates (market moved against us), the tx
+		// reverts — we'd retry with fresh quotes anyway.
+		// If the formula underestimates (market moved in our favor), the
+		// extra tokens stay on the router — acceptable surplus, not loss.
+		// Making all amounts explicit (no balance sweeps) enables
+		// collapseDuplicates to merge identical pool calls across groups.
+		for _, bi := range g.indices {
 			b := branches[bi]
-			isLast := idx == len(g.indices)-1
 
 			for j := b.startIdx + 1; j < b.endIdx; j++ {
 				outSteps = append(outSteps, steps[j])
-				if j == b.startIdx+1 && !isLast {
-					// First step of tail — set explicit intermediate amount.
+				if j == b.startIdx+1 {
 					branchVolume := amounts[b.startIdx]
 					intermediateOut := quoter(g.step, branchVolume)
 					outAmounts = append(outAmounts, new(uint256.Int).Set(&intermediateOut))

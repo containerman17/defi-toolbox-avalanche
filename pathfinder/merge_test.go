@@ -410,7 +410,7 @@ func TestMergeWithQuoter_SharedFirstHop(t *testing.T) {
 	assertEq(t, "pool[2]", poolC, steps[2].Pool)    // last consumer (balance)
 	assertEq(t, "amount[0]", uint64(800), amounts[0].Uint64())  // 500+300
 	assertEq(t, "amount[1]", uint64(1000), amounts[1].Uint64()) // fakeQuoter(500) = 1000
-	assertEq(t, "amount[2]", uint64(0), amounts[2].Uint64())    // balance sweep (last tail)
+	assertEq(t, "amount[2]", uint64(600), amounts[2].Uint64())  // fakeQuoter(300) — all explicit
 }
 
 func TestMergeWithQuoter_ThreeWaySharedFirstHop(t *testing.T) {
@@ -454,7 +454,7 @@ func TestMergeWithQuoter_ThreeWaySharedFirstHop(t *testing.T) {
 	assertEq(t, "amount[0]", uint64(600), amounts[0].Uint64())  // total
 	assertEq(t, "amount[1]", uint64(200), amounts[1].Uint64())  // fakeQuoter(100)
 	assertEq(t, "amount[2]", uint64(400), amounts[2].Uint64())  // fakeQuoter(200)
-	assertEq(t, "amount[3]", uint64(0), amounts[3].Uint64())    // balance sweep (last tail)
+	assertEq(t, "amount[3]", uint64(600), amounts[3].Uint64())  // fakeQuoter(300) — all explicit
 }
 
 func TestMergeWithQuoter_SharedFirstAndLastHop(t *testing.T) {
@@ -493,7 +493,7 @@ func TestMergeWithQuoter_SharedFirstAndLastHop(t *testing.T) {
 	assertEq(t, "pool[3]", poolE, steps[3].Pool)    // shared suffix
 	assertEq(t, "amount[0]", uint64(1000), amounts[0].Uint64()) // 400+600
 	assertEq(t, "amount[1]", uint64(800), amounts[1].Uint64())  // fakeQuoter(400)
-	assertEq(t, "amount[2]", uint64(0), amounts[2].Uint64())    // balance sweep (last tail)
+	assertEq(t, "amount[2]", uint64(1200), amounts[2].Uint64()) // fakeQuoter(600) — all explicit
 	assertEq(t, "amount[3]", uint64(0), amounts[3].Uint64())    // shared suffix
 }
 
@@ -557,7 +557,7 @@ func TestMergeWithQuoter_RealisticSplitter(t *testing.T) {
 	assertEq(t, "pool[3]", directPool, steps[3].Pool)
 	assertEq(t, "amount[0]", uint64(15000), amounts[0].Uint64()) // 7500+7500
 	assertEq(t, "amount[1]", uint64(15000), amounts[1].Uint64()) // fakeQuoter(7500)
-	assertEq(t, "amount[2]", uint64(0), amounts[2].Uint64())     // balance sweep (last tail)
+	assertEq(t, "amount[2]", uint64(15000), amounts[2].Uint64()) // fakeQuoter(7500) — all explicit
 	assertEq(t, "amount[3]", uint64(5000), amounts[3].Uint64())  // unrelated
 }
 

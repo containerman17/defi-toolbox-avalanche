@@ -410,7 +410,30 @@ contract HayabusaRouter {
         for (uint256 i = 0; i < pools.length;) {
             uint256 j = i * 2;
             uint256 amt = amountsIn[i];
-            if (amt == 0) amt = IERC20(tokens[j]).balanceOf(address(this));
+            if (amt == 0) {
+                // Balance mode: consume all of this token the router holds.
+                // Used for sequential hops (output of step N feeds step N+1)
+                // and for shared suffix steps that consume from multiple feeders.
+                amt = IERC20(tokens[j]).balanceOf(address(this));
+            } else {
+                // Explicit mode with graceful fallback: use the requested amount,
+                // but cap at actual balance if the market moved against us.
+                //
+                // This enables split routing with merged first hops: one pool call
+                // produces intermediate tokens, then multiple consumers each request
+                // a specific share via explicit amounts. If the producing pool's
+                // output shifted slightly (price moved between quote and execution),
+                // we use whatever is available rather than reverting.
+                //
+                // The minOutput check at the end of swap() still catches any
+                // execution that slipped beyond the caller's tolerance.
+                //
+                // When output exceeds the formula estimate (favorable move), the
+                // surplus stays on the router — recoverable via withdraw().
+                // Cost: one extra balanceOf SLOAD (~100 gas warm) per explicit step.
+                uint256 bal = IERC20(tokens[j]).balanceOf(address(this));
+                if (bal < amt) amt = bal;
+            }
             _swapLeg(pools[i], poolTypes[i], tokens[j], tokens[j + 1], amt, extraDatas[i]);
             unchecked { ++i; }
         }

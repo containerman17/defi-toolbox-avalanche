@@ -122,6 +122,9 @@ func mergeRoutesInner(routes []SquishRoute, quoter func(RouteStep, *uint256.Int)
 		steps, amounts = mergeFirstHops(steps, amounts, quoter)
 	}
 
+	// Phase 3: Collapse duplicate pool calls (same pool+tokenIn+tokenOut).
+	steps, amounts = collapseDuplicates(steps, amounts)
+
 	return steps, amounts
 }
 
@@ -311,4 +314,77 @@ func extractMixed(node *mergeNode, out *[]SquishRoute) {
 
 func rebuildPath(node *mergeNode) []RouteStep {
 	return []RouteStep{node.step}
+}
+
+// collapseDuplicates merges steps with the same (pool, tokenIn, tokenOut) key
+// when both have explicit (non-zero) amounts and no intervening balance step
+// would be affected by the merge.
+//
+// Safe to merge steps[i] and steps[j] (i < j, both explicit, same key) when
+// no step k in (i+1..j-1) has amount=0 AND (tokenIn == steps[i].tokenIn OR
+// tokenIn == steps[i].tokenOut). A balance step consuming the merged step's
+// input or output token would see a different balance after the merge.
+//
+// Explicit+balance pairs are NOT merged — the balance step has sweep semantics
+// that depend on its position relative to other consumers.
+func collapseDuplicates(steps []RouteStep, amounts []*uint256.Int) ([]RouteStep, []*uint256.Int) {
+	if len(steps) < 2 {
+		return steps, amounts
+	}
+
+	// Work on copies to allow in-place removal.
+	out := make([]RouteStep, len(steps))
+	copy(out, steps)
+	outAmt := make([]*uint256.Int, len(amounts))
+	for i, a := range amounts {
+		outAmt[i] = new(uint256.Int).Set(a)
+	}
+
+	changed := true
+	for changed {
+		changed = false
+		for i := 0; i < len(out); i++ {
+			if outAmt[i].IsZero() {
+				continue // skip balance steps as merge source
+			}
+			keyI := stepMergeKey(out[i])
+
+			for j := i + 1; j < len(out); j++ {
+				if outAmt[j].IsZero() {
+					continue // don't merge explicit with balance
+				}
+				if stepMergeKey(out[j]) != keyI {
+					continue
+				}
+
+				// Check safety: no balance step between i and j
+				// consuming our tokenIn or tokenOut.
+				safe := true
+				for k := i + 1; k < j; k++ {
+					if !outAmt[k].IsZero() {
+						continue // explicit steps don't affect balance semantics
+					}
+					if out[k].TokenIn == out[i].TokenIn || out[k].TokenIn == out[i].TokenOut {
+						safe = false
+						break
+					}
+				}
+				if !safe {
+					continue
+				}
+
+				// Merge: sum amounts, remove j.
+				outAmt[i].Add(outAmt[i], outAmt[j])
+				out = append(out[:j], out[j+1:]...)
+				outAmt = append(outAmt[:j], outAmt[j+1:]...)
+				changed = true
+				break // restart inner loop from i
+			}
+			if changed {
+				break // restart outer loop
+			}
+		}
+	}
+
+	return out, outAmt
 }

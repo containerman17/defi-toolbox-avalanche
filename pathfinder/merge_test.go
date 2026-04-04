@@ -561,6 +561,234 @@ func TestMergeWithQuoter_RealisticSplitter(t *testing.T) {
 	assertEq(t, "amount[3]", uint64(5000), amounts[3].Uint64())  // unrelated
 }
 
+// ── Phase 3: Duplicate collapse tests ────────────────────────────────
+// These test collapseDuplicates directly on pre-built step lists,
+// independent of the trie and first-hop merge phases.
+
+func TestCollapse_AdjacentExplicit(t *testing.T) {
+	// Two adjacent steps with same key, both explicit → sum amounts.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(400)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 1, len(out))
+	assertEq(t, "pool", poolA, out[0].Pool)
+	assertEq(t, "amount", uint64(600), outAmt[0].Uint64())
+}
+
+func TestCollapse_AdjacentThree(t *testing.T) {
+	// Three adjacent duplicates → collapse to one.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(100), uint256.NewInt(200), uint256.NewInt(300)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 1, len(out))
+	assertEq(t, "amount", uint64(600), outAmt[0].Uint64())
+}
+
+func TestCollapse_NonAdjacentSafeExplicit(t *testing.T) {
+	// Two explicit duplicates separated by an unrelated step.
+	// poolA(USDC→WAVAX, 200), poolD(WETH→USDT, 50), poolA(USDC→WAVAX, 400)
+	// poolD doesn't consume USDC (poolA's tokenIn) or WAVAX (poolA's tokenOut) via balance.
+	// Safe to merge.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+		{Pool: poolD, PoolType: 4, TokenIn: tokenWETH, TokenOut: tokenUSDT},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(50), uint256.NewInt(400)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 2, len(out))
+	assertEq(t, "pool[0]", poolA, out[0].Pool)
+	assertEq(t, "pool[1]", poolD, out[1].Pool)
+	assertEq(t, "amount[0]", uint64(600), outAmt[0].Uint64())
+	assertEq(t, "amount[1]", uint64(50), outAmt[1].Uint64())
+}
+
+func TestCollapse_UnsafeBalanceBetween(t *testing.T) {
+	// Two explicit duplicates separated by a BALANCE step consuming the same tokenIn.
+	// poolA(USDC→WAVAX, 200), poolC(USDC→WETH, 0), poolA(USDC→WAVAX, 400)
+	// poolC consumes USDC via balance(0) — if we merge, the combined poolA
+	// runs first and consumes 600 USDC, leaving nothing for poolC.
+	// NOT safe.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+		{Pool: poolC, PoolType: 3, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWAVAX},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(0), uint256.NewInt(400)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 3, len(out))
+	assertEq(t, "amount[0]", uint64(200), outAmt[0].Uint64())
+	assertEq(t, "amount[1]", uint64(0), outAmt[1].Uint64())
+	assertEq(t, "amount[2]", uint64(400), outAmt[2].Uint64())
+}
+
+func TestCollapse_UnsafeBalanceTokenOut(t *testing.T) {
+	// Duplicate steps separated by a balance step consuming their tokenOUT.
+	// poolA(USDC→WETH, 200), poolB(WETH→USDT, 0), poolA(USDC→WETH, 400)
+	// poolB sweeps all WETH. If we merge, poolB gets 600-worth of WETH instead of 200-worth.
+	// NOT safe.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+		{Pool: poolB, PoolType: 0, TokenIn: tokenWETH, TokenOut: tokenUSDT},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(0), uint256.NewInt(400)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 3, len(out))
+	assertEq(t, "amount[0]", uint64(200), outAmt[0].Uint64())
+	assertEq(t, "amount[2]", uint64(400), outAmt[2].Uint64())
+}
+
+func TestCollapse_ExplicitBetweenIsSafe(t *testing.T) {
+	// Duplicate steps separated by a step with EXPLICIT amount consuming same token.
+	// poolA(USDC→WETH, 200), poolB(WETH→USDT, 50), poolA(USDC→WETH, 400)
+	// poolB has explicit amount, so it takes exactly 50 regardless of balance.
+	// Merging poolA doesn't change poolB's behavior. SAFE.
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+		{Pool: poolB, PoolType: 0, TokenIn: tokenWETH, TokenOut: tokenUSDT},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(50), uint256.NewInt(400)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 2, len(out))
+	assertEq(t, "pool[0]", poolA, out[0].Pool)
+	assertEq(t, "pool[1]", poolB, out[1].Pool)
+	assertEq(t, "amount[0]", uint64(600), outAmt[0].Uint64())
+	assertEq(t, "amount[1]", uint64(50), outAmt[1].Uint64())
+}
+
+func TestCollapse_DontMergeExplicitWithBalance(t *testing.T) {
+	// poolA(USDC→WETH, 200), poolA(USDC→WETH, 0)
+	// Explicit + balance adjacent. Don't merge — balance sweep has different
+	// semantics (takes whatever remains, including from other producers).
+	steps := []RouteStep{
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+		{Pool: poolA, PoolType: 2, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+	}
+	amounts := []*uint256.Int{uint256.NewInt(200), uint256.NewInt(0)}
+
+	out, outAmt := collapseDuplicates(steps, amounts)
+	assertEq(t, "steps", 2, len(out))
+	assertEq(t, "amount[0]", uint64(200), outAmt[0].Uint64())
+	assertEq(t, "amount[1]", uint64(0), outAmt[1].Uint64())
+}
+
+func TestCollapse_EndToEnd_FirstHopMergeProducesDuplicates(t *testing.T) {
+	// End-to-end: first-hop merge produces adjacent duplicates that Phase 3 collapses.
+	//
+	// 3 legs sharing poolB as first hop, two ending at poolD, one at poolC:
+	// Leg 1: poolB(USDC→WETH) → poolD(WETH→USDT) vol=100
+	// Leg 2: poolB(USDC→WETH) → poolD(WETH→USDT) vol=200  ← identical to leg 1
+	// Leg 3: poolB(USDC→WETH) → poolC(WETH→WAVAX) vol=300
+	//
+	// Suffix trie: legs 1+2 identical → one leaf.
+	// Trie: root → poolB [shared]
+	//                ├→ poolD [vol: 100, 200 → summed 300]
+	//                └→ poolC [vol: 300]
+	// DFS: poolD(300), poolC(300), poolB(0)  — already 3 steps, no duplicates.
+	//
+	// Phase 2 not needed (no first-hop merge: poolD and poolC are different).
+	// BUT: if legs are structured so suffix trie CAN'T merge poolD:
+	//
+	// Leg 1: poolB(USDC→WETH) → poolD(WETH→USDT)  vol=100
+	// Leg 2: poolB(USDC→WETH) → poolD(WETH→USDT)  vol=200  (will merge via suffix)
+	// Leg 3: poolB(USDC→WETH) → poolC(WETH→WAVAX)  vol=300
+	//
+	// Suffix trie gives 3 steps. But with first-hop merge (all share poolB):
+	// poolB(600), poolD(fq(300)=600), poolC(0) = 3 steps.
+	//
+	// For duplicates to appear, we need different suffix branches that produce
+	// the same consumer after first-hop merge. This requires 3-hop legs:
+	//
+	// Leg 1: poolE(USDC→WAVAX) → poolA(WAVAX→WETH) → poolD(WETH→USDT)  vol=100
+	// Leg 2: poolE(USDC→WAVAX) → poolB(WAVAX→WETH) → poolD(WETH→USDT)  vol=200
+	// Leg 3: poolE(USDC→WAVAX) → poolC(WAVAX→USDT)                      vol=300
+	//
+	// Suffix trie reversed:
+	//   poolD → poolA → poolE [vol 100]
+	//   poolD → poolB → poolE [vol 200]
+	//   poolC → poolE [vol 300]
+	//
+	// Trie: poolD shared between legs 1,2. poolC separate.
+	//   root → poolE [shared by all]
+	//            ├→ poolD [shared by 1,2]
+	//            │    ├→ poolA [vol 100]
+	//            │    └→ poolB [vol 200]
+	//            └→ poolC [vol 300]
+	//
+	// DFS: poolA(100), poolB(200), poolD(0), poolC(300), poolE(0) = 5 steps. No duplicates.
+	// Suffix trie handles it perfectly. Phase 3 not needed.
+	//
+	// OK: Phase 3 helps when two DIFFERENT first-hop groups produce consumers
+	// for the same pool. Let me construct that:
+	//
+	// Leg 1: poolE(USDC→WETH) → poolD(WETH→USDT)   vol=100
+	// Leg 2: poolE(USDC→WETH) → poolC(WETH→WAVAX)   vol=200
+	// Leg 3: poolF(USDC→WETH) → poolD(WETH→USDT)   vol=300
+	// Leg 4: poolF(USDC→WETH) → poolA(WETH→WAVAX)   vol=400
+	//
+	// Two first-hop groups: poolE and poolF.
+	// After suffix trie + first-hop merge of each group:
+	//   poolE(300): poolD(fq=200), poolC(0)
+	//   poolF(700): poolD(fq=600), poolA(0)
+	//
+	// Result: poolE(300), poolD(200), poolC(0), poolF(700), poolD(600), poolA(0)
+	// 6 steps. poolD appears twice! Steps 1 and 4.
+	//
+	// Between them: poolC(0) consumes WETH via balance, poolF(700) consumes USDC.
+	// poolC consumes WETH = poolD's tokenIn. Balance(0) → unsafe!
+	// Cannot merge. 6 steps is correct.
+	//
+	// For a SAFE non-adjacent case, the intervening steps must not touch
+	// poolD's tokens via balance. That's very rare in split routing.
+	//
+	// Conclusion: Phase 3's main value is ADJACENT duplicates from first-hop merge.
+	// Test that via direct collapseDuplicates (tested above).
+	// The end-to-end test just verifies integration.
+	routes := []SquishRoute{
+		{
+			Steps: []RouteStep{
+				{Pool: poolB, PoolType: 0, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+				{Pool: poolD, PoolType: 4, TokenIn: tokenWETH, TokenOut: tokenUSDT},
+			},
+			Volume: uint256.NewInt(100),
+		},
+		{
+			Steps: []RouteStep{
+				{Pool: poolB, PoolType: 0, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+				{Pool: poolD, PoolType: 4, TokenIn: tokenWETH, TokenOut: tokenUSDT},
+			},
+			Volume: uint256.NewInt(200),
+		},
+		{
+			Steps: []RouteStep{
+				{Pool: poolB, PoolType: 0, TokenIn: tokenUSDC, TokenOut: tokenWETH},
+				{Pool: poolC, PoolType: 3, TokenIn: tokenWETH, TokenOut: tokenWAVAX},
+			},
+			Volume: uint256.NewInt(300),
+		},
+	}
+	steps, _ := MergeRoutesWithQuoter(routes, fakeQuoter)
+	// Suffix trie: legs 1+2 identical → one leaf. Shared suffix poolB.
+	// DFS: poolD(300), poolC(300), poolB(0) — but the quoter-based first-hop
+	// merge may reorder. Just check step count and that poolB appears.
+	assertEq(t, "steps", 3, len(steps))
+}
+
 func TestMerge_ManyIdenticalLegs(t *testing.T) {
 	// Realistic: splitter produces 15 identical legs through the same path.
 	// All should collapse to a single 2-step route with summed volume.

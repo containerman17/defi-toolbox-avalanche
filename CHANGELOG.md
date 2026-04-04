@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-04 — Phase 3: collapse duplicate pool calls
+
+- **`collapseDuplicates`**: post-merge pass that finds steps with the same (pool, tokenIn,
+  tokenOut) key and merges them when safe. Adjacent explicit duplicates are always merged (sum
+  amounts). Non-adjacent duplicates are merged only when no intervening balance(0) step
+  consumes the same input or output token.
+- Explicit+balance pairs are never merged — balance sweep semantics depend on position.
+- 7 unit tests covering: adjacent (2, 3 duplicates), non-adjacent safe, unsafe (tokenIn,
+  tokenOut balance between), explicit-between-safe, explicit+balance no-merge.
+
 ## 2026-04-04 — Route merging: suffix trie + first-hop merge + contract redesign
 
 ### Route merge algorithm (`pathfinder/merge.go`)

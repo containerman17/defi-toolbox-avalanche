@@ -194,7 +194,7 @@ async function quoteLoop() {
     for (const tok of TOKENS) {
       // Buy: 100 USDC → token
       const t0 = performance.now();
-      const buy = await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC);
+      const buy = await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC, true);
       const buyMs = performance.now() - t0;
       if (buy.error || !buy.forward) continue;
       const buyAmount = buy.forward.amountOut;
@@ -209,7 +209,7 @@ async function quoteLoop() {
 
       // Sell: token → USDC
       const t1 = performance.now();
-      const sell = await globalThis.quote(tok.addr, USDC, buyAmount);
+      const sell = await globalThis.quote(tok.addr, USDC, buyAmount, true);
       const sellMs = performance.now() - t1;
       if (sell.error || !sell.forward) continue;
 

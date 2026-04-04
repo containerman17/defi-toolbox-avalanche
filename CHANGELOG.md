@@ -160,6 +160,8 @@ Integrated `splitter.Split()` into both HTTP and WASM entry points via `split` p
 - Added `QuoteRequest.Split` field and `SplitResult`/`SplitLeg` response types.
 - Split result included alongside the normal forward/reverse quotes.
 - WASM tested via Node.js: single 934ms, split 1612ms (+$2,636). ~4x slower than native.
+- Browser demo (`examples/browser/02_live_quotes`) now passes `split=true` to show split
+  routing in action. At $100 volume the split matches single path; visible at larger amounts.
 
 ## 2026-04-04 — Proxy upgrade fixes
 

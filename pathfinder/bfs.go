@@ -10,10 +10,11 @@ import (
 
 // RouteStep represents one hop in a route.
 type RouteStep struct {
-	Pool     common.Address `json:"pool"`
-	PoolType int            `json:"poolType"`
-	TokenIn  common.Address `json:"tokenIn"`
-	TokenOut common.Address `json:"tokenOut"`
+	Pool      common.Address `json:"pool"`
+	PoolType  int            `json:"poolType"`
+	TokenIn   common.Address `json:"tokenIn"`
+	TokenOut  common.Address `json:"tokenOut"`
+	ExtraData string         `json:"extraData,omitempty"`
 }
 
 // Route is the result of a pathfinding search.
@@ -80,16 +81,7 @@ const topK = 3
 
 // ── FindBestRoute ────────────────────────────────────────────────────
 
-// FindBestRoute finds the best swap route from tokenIn to tokenOut using
-// formula BFS (same algorithm as arb3) with EVM verification.
-//
-// BFS expands layer by layer (up to maxHops), keeping top-3 amounts per
-// token per layer with real cascading amounts. Paths reaching tokenOut are
-// candidates. Top 5 are EVM-verified via full swap(); best is returned.
-//
-// stateWithOverrides should be a pre-built overlay with token balance and
-// approval overrides already applied. The caller creates this once and reuses
-// it across calls so that code hash caches persist.
+// FindBestRoute returns the single best route. Wrapper around FindTopRoutes.
 func FindBestRoute(
 	pm formulas.PoolQuoterSource,
 	adj map[common.Address][]PoolEdge,
@@ -102,8 +94,42 @@ func FindBestRoute(
 	amountIn *uint256.Int,
 	maxHops int,
 ) *Route {
+	routes := FindTopRoutes(pm, adj, pools, stateWithOverrides, cfg, routerAddr, sender,
+		tokenIn, tokenOut, amountIn, maxHops, 1)
+	if len(routes) == 0 {
+		return nil
+	}
+	return routes[0]
+}
+
+// FindTopRoutes finds the top N swap routes from tokenIn to tokenOut using
+// formula BFS with EVM verification.
+//
+// BFS expands layer by layer (up to maxHops), keeping top-3 amounts per
+// token per layer with real cascading amounts. Paths reaching tokenOut are
+// candidates. Up to 5 are EVM-verified; the best `limit` verified routes
+// are returned sorted by output descending.
+//
+// stateWithOverrides should be a pre-built overlay with token balance and
+// approval overrides already applied.
+func FindTopRoutes(
+	pm formulas.PoolQuoterSource,
+	adj map[common.Address][]PoolEdge,
+	pools []Pool,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr common.Address,
+	sender common.Address,
+	tokenIn, tokenOut common.Address,
+	amountIn *uint256.Int,
+	maxHops int,
+	limit int,
+) []*Route {
 	if amountIn.IsZero() {
 		return nil
+	}
+	if limit <= 0 {
+		limit = 1
 	}
 	cyclic := tokenIn == tokenOut
 	if maxHops <= 0 || maxHops > 4 {
@@ -266,10 +292,11 @@ func FindBestRoute(
 			parent := &allNodes[node.parentID]
 			p := &pools[node.poolIdx]
 			revSteps = append(revSteps, RouteStep{
-				Pool:     p.Address,
-				PoolType: p.PoolType,
-				TokenIn:  parent.token,
-				TokenOut: node.token,
+				Pool:      p.Address,
+				PoolType:  p.PoolType,
+				TokenIn:   parent.token,
+				TokenOut:  node.token,
+				ExtraData: p.ExtraData,
 			})
 			poolAddrs = append(poolAddrs, p.Address)
 			poolTypes = append(poolTypes, p.PoolType)
@@ -300,7 +327,7 @@ func FindBestRoute(
 		top = len(candidates)
 	}
 
-	var bestRoute *Route
+	var verified []*Route
 	evmQuotes := 0
 	for _, cand := range candidates[:top] {
 		steps, poolAddrs, poolTypes, extraDatas := backtrack(cand.nodeIdx)
@@ -321,13 +348,9 @@ func FindBestRoute(
 		}
 
 		// swap() returns int256: signed balance delta of tokenOut on the sender.
-		// With the current contract (outBefore after transferFrom):
-		//   A→B: positive = tokens received (absolute output)
-		//   Circular: positive = swap chain output (absolute, not profit)
-		// A negative return would mean the sender lost tokenOut (fee-on-transfer edge case).
+		// Positive = output received. Negative = fee-on-transfer edge case (skip).
 		var evmAmount uint256.Int
 		evmAmount.SetBytes(ret[:32])
-		// Check sign bit — negative means swap failed to produce output
 		if evmAmount.Bytes32()[0]&0x80 != 0 {
 			continue
 		}
@@ -335,25 +358,23 @@ func FindBestRoute(
 			continue
 		}
 
-		if bestRoute == nil || evmAmount.Gt(bestRoute.AmountOut) {
-			bestRoute = &Route{
-				Steps:     steps,
-				AmountOut: new(uint256.Int).Set(&evmAmount),
-				GasUsed:   gasUsed,
-				Calldata:  calldata,
-				Stats: RouteStats{
-					FormulaQuotes: formulaQuotes,
-					EVMQuotes:     evmQuotes,
-					TotalQuotes:   formulaQuotes + evmQuotes,
-				},
-			}
+		verified = append(verified, &Route{
+			Steps:     steps,
+			AmountOut: new(uint256.Int).Set(&evmAmount),
+			GasUsed:   gasUsed,
+			Calldata:  calldata,
+			Stats: RouteStats{
+				FormulaQuotes: formulaQuotes,
+				EVMQuotes:     evmQuotes,
+				TotalQuotes:   formulaQuotes + evmQuotes,
+			},
+		})
+		if len(verified) >= limit {
+			break
 		}
 	}
 
-	if bestRoute == nil {
-		return nil
-	}
-	return bestRoute
+	return verified
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -385,6 +406,20 @@ func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.
 		}
 	}
 	return overlay
+}
+
+// QuotePath formula-quotes a specific multi-hop path at a given volume.
+// Chains pm.Quote calls along the steps. Returns zero if any hop fails.
+func QuotePath(pm formulas.PoolQuoterSource, steps []RouteStep, amountIn *uint256.Int) uint256.Int {
+	current := *amountIn
+	for _, s := range steps {
+		out := pm.Quote(s.Pool, &current, s.TokenIn, s.TokenOut)
+		if out.IsZero() {
+			return out
+		}
+		current = out
+	}
+	return current
 }
 
 // ApplyOverridesFlat creates an overlay of base with overrides baked in.

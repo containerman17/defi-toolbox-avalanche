@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-04 — Split routing: splitter package + optimized strategy
+
+- **`pathfinder/splitter/`**: new package with two split strategies and a common `Params`/`Result` interface.
+- **Greedy** (`splitter.Greedy`): extracted from the old split-routing example. N sequential BFS calls with PoolManagerOverlay. Best output, slowest.
+- **Optimized** (`splitter.Optimized`): discovers candidate paths via BFS once (at 5% + 100% volume), then greedily allocates chunks across those paths using formula quotes + EVM per chunk. ~6x faster than greedy, ~91% of the improvement over single path.
+- **`FindTopRoutes`**: new function in `pathfinder/bfs.go` — returns up to N EVM-verified routes instead of just the best. `FindBestRoute` is now a thin wrapper.
+- **`QuotePath`**: new function — formula-quotes a specific multi-hop path at a given volume. Used by the optimized splitter for per-chunk path selection.
+- **`RouteStep.ExtraData`**: added so routes carry everything needed to rebuild calldata at different volumes.
+- **Comparison example** (`examples/go/split-routing/`): rewritten as a harness that runs single path, greedy, and optimized side by side. Results on 50k WAVAX→USDT: single $439k, greedy $443k (463ms), optimized $442k (69ms).
+
 ## 2026-04-04 — swap() returns int256 (signed balance delta)
 
 ### Router contract: swap() return type uint256 → int256

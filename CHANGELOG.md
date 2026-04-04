@@ -9,6 +9,12 @@
 - **`QuotePath`**: new function — formula-quotes a specific multi-hop path at a given volume. Used by the optimized splitter for per-chunk path selection.
 - **`RouteStep.ExtraData`**: added so routes carry everything needed to rebuild calldata at different volumes.
 - **Comparison example** (`examples/go/split-routing/`): rewritten as a harness that runs single path, greedy, and optimized side by side. Results on 50k WAVAX→USDT: single $439k, greedy $443k (463ms), optimized $442k (69ms).
+- **`EncodeSquished`**: new function in `pathfinder/encode.go` — encodes multiple independent
+  route legs into a single `swap()` calldata. Each leg gets explicit `amountsIn`, multi-hop
+  legs chain via contract balance (amountsIn=0). Tests cover: two single-hop, single+multi-hop,
+  shared first hop, shared last hop, three mixed legs, extraData passthrough.
+- **Squished gas savings**: 44.5% on 20-leg split (8.1M → 4.5M gas). Same output, fewer
+  transferFrom calls. Comparison added to split-routing example.
 
 ## 2026-04-04 — swap() returns int256 (signed balance delta)
 

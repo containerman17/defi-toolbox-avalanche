@@ -170,6 +170,42 @@ func main() {
 		fmt.Printf("  (no result)\n")
 	}
 
+	// ── 4. Squished execution ────────────────────────────────────────
+	// Take the optimized legs and execute them as a single swap() call
+	// instead of separate calls, then compare gas.
+
+	var squishedGas uint64
+	var squishedOut uint256.Int
+	if optimized != nil && len(optimized.Legs) > 1 {
+		fmt.Printf("\n--- Squished (single tx) ---\n")
+		squishedRoutes := make([]pf.SquishRoute, len(optimized.Legs))
+		for i, leg := range optimized.Legs {
+			squishedRoutes[i] = pf.SquishRoute{
+				Steps:  leg.Steps,
+				Volume: new(uint256.Int).Set(&leg.Volume),
+			}
+		}
+		calldata := pf.EncodeSquished(squishedRoutes, uint256.NewInt(0))
+		evmCtx := statedb.GetCachedContext(cfg)
+		cs := statedb.NewCallState(params.State)
+		ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, params.Sender, params.RouterAddr, calldata)
+		if err != nil || len(ret) < 32 {
+			fmt.Printf("  EVM error: %v\n", err)
+		} else {
+			squishedOut.SetBytes(ret[:32])
+			squishedGas = gasUsed
+			if squishedOut.Bytes32()[0]&0x80 != 0 {
+				fmt.Printf("  negative output (reverted)\n")
+			} else {
+				fmt.Printf("  output:  %s  gas=%d\n", fmtOut(&squishedOut), squishedGas)
+				fmt.Printf("  separate legs gas: %d  →  squished gas: %d  (saved %d, %.1f%%)\n",
+					optimized.TotalGas, squishedGas,
+					optimized.TotalGas-squishedGas,
+					float64(optimized.TotalGas-squishedGas)/float64(optimized.TotalGas)*100)
+			}
+		}
+	}
+
 	// ── Comparison ───────────────────────────────────────────────────
 
 	fmt.Printf("\n=== COMPARISON ===\n")
@@ -184,6 +220,11 @@ func main() {
 		diff := diffStr(&optimized.Total, singleRoute.AmountOut, decimalsOut)
 		fmt.Printf("  optimized:  %s  gas=%-8d  time=%dμs  %s\n",
 			fmtOut(&optimized.Total), optimized.TotalGas, optimized.ElapsedUs, diff)
+	}
+	if squishedGas > 0 {
+		diff := diffStr(&squishedOut, singleRoute.AmountOut, decimalsOut)
+		fmt.Printf("  squished:   %s  gas=%-8d  %s\n",
+			fmtOut(&squishedOut), squishedGas, diff)
 	}
 }
 

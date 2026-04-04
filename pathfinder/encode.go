@@ -264,6 +264,162 @@ func encodeSwapMultiInner(
 	return buf[:pos]
 }
 
+// SquishRoute is one leg of a multi-route swap: a path + volume.
+type SquishRoute struct {
+	Steps  []RouteStep
+	Volume *uint256.Int
+}
+
+// EncodeSquished encodes multiple independent routes into a single swap() call.
+// Each route gets its own explicit amountsIn[firstStep], with subsequent steps
+// in the same route using 0 (contract balance). The router executes them
+// sequentially, and the final output is the balance delta of the last token.
+func EncodeSquished(routes []SquishRoute, minOutput *uint256.Int) []byte {
+	// Count total steps
+	totalSteps := 0
+	for _, r := range routes {
+		totalSteps += len(r.Steps)
+	}
+
+	poolAddrs := make([]common.Address, 0, totalSteps)
+	poolTypes := make([]int, 0, totalSteps)
+	tokenPairs := make([]common.Address, 0, totalSteps*2)
+	amounts := make([]*uint256.Int, 0, totalSteps)
+	extraDatas := make([]string, 0, totalSteps)
+
+	for _, r := range routes {
+		for i, s := range r.Steps {
+			poolAddrs = append(poolAddrs, s.Pool)
+			poolTypes = append(poolTypes, s.PoolType)
+			tokenPairs = append(tokenPairs, s.TokenIn, s.TokenOut)
+			extraDatas = append(extraDatas, s.ExtraData)
+			if i == 0 {
+				amounts = append(amounts, new(uint256.Int).Set(r.Volume))
+			} else {
+				amounts = append(amounts, uint256.NewInt(0))
+			}
+		}
+	}
+
+	return encodeSwapRaw(swapSelector, poolAddrs, poolTypes, tokenPairs, amounts, extraDatas, minOutput)
+}
+
+// encodeSwapRaw is like encodeSwapMultiInner but takes explicit per-step amounts
+// instead of deriving them from a single amountIn.
+func encodeSwapRaw(
+	selector [4]byte,
+	poolAddrs []common.Address,
+	poolTypes []int,
+	tokenPairs []common.Address,
+	amounts []*uint256.Int,
+	extraDatas []string,
+	minOutput *uint256.Int,
+) []byte {
+	n := len(poolAddrs)
+	hasMinOutput := minOutput != nil
+
+	addrs := make([]common.Address, n)
+	copy(addrs, poolAddrs)
+	encodedExtras := make([][]byte, n)
+	for i := range extraDatas {
+		if poolTypes[i] == 9 && extraDatas[i] != "" {
+			encodedExtras[i] = encodeV4ExtraData(extraDatas[i])
+			addrs[i] = V4PoolManager
+		}
+	}
+
+	nTokenPairs := len(tokenPairs)
+	poolsSize := 32 + n*32
+	typesSize := 32 + n*32
+	tokensSize := 32 + nTokenPairs*32
+	amountsSize := 32 + n*32
+
+	extraOffsetSize := 32 + n*32
+	extraDataSize := 0
+	for _, ed := range encodedExtras {
+		if len(ed) > 0 {
+			padded := ((len(ed) + 31) / 32) * 32
+			extraDataSize += 32 + padded
+		} else {
+			extraDataSize += 32
+		}
+	}
+
+	headWords := 5
+	if hasMinOutput {
+		headWords = 6
+	}
+	headSize := headWords * 32
+	totalPayload := headSize + poolsSize + typesSize + tokensSize + amountsSize + extraOffsetSize + extraDataSize
+	buf := make([]byte, 4+totalPayload)
+
+	copy(buf[0:4], selector[:])
+	base := 4
+
+	dataStart := headSize
+	poolsOff := dataStart
+	typesOff := poolsOff + poolsSize
+	tokensOff := typesOff + typesSize
+	amountsOff := tokensOff + tokensSize
+	extrasOff := amountsOff + amountsSize
+
+	writeWordU64(buf, base, uint64(poolsOff))
+	writeWordU64(buf, base+32, uint64(typesOff))
+	writeWordU64(buf, base+64, uint64(tokensOff))
+	writeWordU64(buf, base+96, uint64(amountsOff))
+	writeWordU64(buf, base+128, uint64(extrasOff))
+	if hasMinOutput {
+		writeUint256(buf, base+160, minOutput)
+	}
+
+	// pools
+	off := base + poolsOff
+	writeWordU64(buf, off, uint64(n))
+	for i, a := range addrs {
+		writeAddress(buf, off+32+i*32, a)
+	}
+
+	// poolTypes
+	off = base + typesOff
+	writeWordU64(buf, off, uint64(n))
+	for i, pt := range poolTypes {
+		writeWordU64(buf, off+32+i*32, uint64(pt))
+	}
+
+	// tokens
+	off = base + tokensOff
+	writeWordU64(buf, off, uint64(nTokenPairs))
+	for i, t := range tokenPairs {
+		writeAddress(buf, off+32+i*32, t)
+	}
+
+	// amounts
+	off = base + amountsOff
+	writeWordU64(buf, off, uint64(n))
+	for i, a := range amounts {
+		writeUint256(buf, off+32+i*32, a)
+	}
+
+	// extraDatas
+	off = base + extrasOff
+	writeWordU64(buf, off, uint64(n))
+	edCursor := n * 32
+	for i, ed := range encodedExtras {
+		writeWordU64(buf, off+32+i*32, uint64(edCursor))
+		edOff := off + 32 + edCursor
+		writeWordU64(buf, edOff, uint64(len(ed)))
+		if len(ed) > 0 {
+			copy(buf[edOff+32:], ed)
+			padded := ((len(ed) + 31) / 32) * 32
+			edCursor += 32 + padded
+		} else {
+			edCursor += 32
+		}
+	}
+
+	return buf
+}
+
 func writeWordU64(buf []byte, offset int, val uint64) {
 	for i := 0; i < 8; i++ {
 		buf[offset+31-i] = byte(val >> (i * 8))

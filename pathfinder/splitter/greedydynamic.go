@@ -20,7 +20,20 @@ import (
 //
 // This naturally adapts: early chunks (pools shifting fast) get large
 // discovery; later chunks (stable paths) get fine-tuning.
+//
+// Optional: forceEvery > 0 means force a large chunk every N small chunks,
+// even if the path didn't change. This catches cases where a different path
+// would be better at large volume but the small-volume BFS can't see it.
 func GreedyDynamic(p *Params, amountIn *uint256.Int, largePct, smallPct uint64) *Result {
+	return greedyDynamicInner(p, amountIn, largePct, smallPct, 0)
+}
+
+// GreedyDynamicForced is GreedyDynamic with periodic forced re-discovery.
+func GreedyDynamicForced(p *Params, amountIn *uint256.Int, largePct, smallPct uint64, forceEvery int) *Result {
+	return greedyDynamicInner(p, amountIn, largePct, smallPct, forceEvery)
+}
+
+func greedyDynamicInner(p *Params, amountIn *uint256.Int, largePct, smallPct uint64, forceEvery int) *Result {
 	t0 := time.Now()
 
 	onePercent := new(uint256.Int).Div(amountIn, uint256.NewInt(100))
@@ -37,6 +50,7 @@ func GreedyDynamic(p *Params, amountIn *uint256.Int, largePct, smallPct uint64) 
 	var result Result
 	var routed uint256.Int
 	var prevPath string
+	smallsSinceDiscovery := 0
 
 	maxLegs := 200
 
@@ -46,9 +60,10 @@ func GreedyDynamic(p *Params, amountIn *uint256.Int, largePct, smallPct uint64) 
 			break
 		}
 
-		// Decide chunk size: large if first chunk or path changed, small otherwise.
+		// Decide chunk size: large if first chunk, path changed, or forced.
 		vol := new(uint256.Int).Set(smallVol)
-		if i == 0 || prevPath == "" {
+		forcedDiscovery := forceEvery > 0 && smallsSinceDiscovery >= forceEvery
+		if i == 0 || prevPath == "" || forcedDiscovery {
 			vol.Set(largeVol)
 		}
 		if vol.Gt(remaining) {
@@ -92,6 +107,11 @@ func GreedyDynamic(p *Params, amountIn *uint256.Int, largePct, smallPct uint64) 
 			currentPath = pathKey(route.Steps)
 		}
 
+		if vol.Eq(smallVol) {
+			smallsSinceDiscovery++
+		} else {
+			smallsSinceDiscovery = 0
+		}
 		prevPath = currentPath
 
 		calldata := buildCalldata(route.Steps, vol)

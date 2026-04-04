@@ -76,11 +76,8 @@ func main() {
 		{"gfast40", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, ch*4) }},
 		{"grad", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedGradual) }},
 		{"shuf2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle2) }},
-		{"d8_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 8, 2) }},
-		{"d6_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 6, 2) }},
 		{"d8_1", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 8, 1) }},
-		{"d6_1", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 6, 1) }},
-		{"d5_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 5, 2) }},
+		{"d8_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 8, 2) }},
 	}
 
 	dividers := []struct {

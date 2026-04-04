@@ -133,8 +133,19 @@ Benchmark across 57 test cases (17 pairs × 3 volumes):
 
 Key insight: **all dynamic variants have zero losses.** The path-change signal naturally
 prevents over-chunking at small volumes (where splitting hurts) and enables discovery at
-large volumes (where it helps). `d8_1` (8% discovery, 1% fine-tune) is the sweet spot:
-36 wins, 0 losses, 261ms — 40% faster than gfast40 with same safety.
+large volumes (where it helps).
+
+Tested forced periodic re-discovery (`GreedyDynamicForced`) — no improvement. The path-change
+signal is already sufficient.
+
+Second benchmark run (different block, more volatile state) confirms robustness:
+- d8_2: W=45 L=0, 210ms — **best zero-loss strategy, fastest**
+- d8_1: W=44 L=0, 321ms
+- grad: W=48 L=2 — more wins but not zero-loss
+- gfast40: W=47 L=2 — also picked up losses in volatile conditions
+
+**`d8_2` (8% discovery, 2% fine-tune) is the recommended production strategy:**
+zero losses across all tested conditions, 210ms median, competitive win count.
 
 ## 2026-04-04 — Proxy upgrade fixes
 

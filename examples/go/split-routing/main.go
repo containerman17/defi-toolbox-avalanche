@@ -1,10 +1,12 @@
 // Split routing example: compares single-path vs N-way split quoting.
 //
 // Connects to a state server, waits for first block, then:
-// 1. Quotes WAVAX → USDT at full volume (single best path)
+// 1. Quotes a swap at full volume (single best path)
 // 2. Splits the same volume into N chunks, re-running BFS after each chunk
 //    with an overlay that reflects depleted pool state from previous chunks
 // 3. Prints per-leg details and total comparison
+//
+// Supports both A→B and circular (A→A) routes.
 package main
 
 import (
@@ -14,6 +16,10 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"os/signal"
+	"runtime/pprof"
+	"syscall"
 
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
@@ -37,7 +43,26 @@ func main() {
 	amountStr := flag.String("amount", "50000", "amount in whole tokens")
 	tokenInStr := flag.String("token-in", WAVAX.Hex(), "input token address")
 	tokenOutStr := flag.String("token-out", USDT.Hex(), "output token address")
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cpuprofile: %v\n", err)
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			pprof.StopCPUProfile()
+			f.Close()
+			os.Exit(0)
+		}()
+		defer func() { pprof.StopCPUProfile(); f.Close() }()
+	}
 
 	tokenIn := common.HexToAddress(*tokenInStr)
 	tokenOut := common.HexToAddress(*tokenOutStr)
@@ -55,14 +80,12 @@ func main() {
 	decimalsOut := queryDecimals(ls.State(), tokenOut)
 	fmt.Fprintf(os.Stderr, "tokenIn decimals=%d, tokenOut decimals=%d\n", decimalsIn, decimalsOut)
 
-	// Parse amount
-	amountWhole, ok := new(big.Int).SetString(*amountStr, 10)
-	if !ok || amountWhole.Sign() <= 0 {
+	// Parse amount (supports decimals like "0.1")
+	fullAmountBig := parseDecimalAmount(*amountStr, decimalsIn)
+	if fullAmountBig == nil || fullAmountBig.Sign() <= 0 {
 		fmt.Fprintf(os.Stderr, "invalid amount: %s\n", *amountStr)
 		os.Exit(1)
 	}
-	expDec := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimalsIn)), nil)
-	fullAmountBig := new(big.Int).Mul(amountWhole, expDec)
 	fullAmount := new(uint256.Int)
 	fullAmount.SetFromBig(fullAmountBig)
 
@@ -71,11 +94,9 @@ func main() {
 	chunkAmount.SetFromBig(chunkAmountBig)
 
 	// Quoter setup
-
 	q := quoter.NewQuoter(ls, *poolLimit, *maxHops)
 	q.StartBlockLoop()
 
-	// Wait for a block
 	ready := make(chan struct{})
 	q.SetOnBlock(func(block, timestamp uint64) {
 		select {
@@ -125,7 +146,12 @@ func main() {
 	}
 
 	singleOut := singleRoute.AmountOut
-	fmt.Printf("  output:  %s (%s raw)\n", fmtOut(singleOut), singleOut.Dec())
+	if cyclic {
+		fmt.Printf("  output:  %s (%s raw)  loss: %s\n", fmtIn(singleOut), singleOut.Dec(),
+			fmtIn(new(uint256.Int).Sub(fullAmount, singleOut)))
+	} else {
+		fmt.Printf("  output:  %s (%s raw)\n", fmtOut(singleOut), singleOut.Dec())
+	}
 	fmt.Printf("  gas:     %d\n", singleRoute.GasUsed)
 	fmt.Printf("  path:    %s\n", formatPath(singleRoute, pools))
 	fmt.Printf("  time:    %dms\n", singleMs)
@@ -142,13 +168,14 @@ func main() {
 	var totalFormulaQuotes, totalEVMQuotes int
 	t0 = time.Now()
 
-	// Current state overlay for EVM verification — accumulates across legs
 	currentState := baseState
 
+	var totalOverlayUs, totalBfsUs, totalEvmUs, totalMergeUs, totalStateUs int64
+
 	for i := 0; i < *chunks; i++ {
-		// Choose PoolQuoterSource: base PM for first chunk, overlay for subsequent
 		var pqs formulas.PoolQuoterSource
 		var affectedCount int
+		tPhase := time.Now()
 		if i == 0 {
 			pqs = pm
 		} else {
@@ -156,10 +183,12 @@ func main() {
 			affectedCount = overlay.AffectedCount()
 			pqs = overlay
 		}
+		totalOverlayUs += time.Since(tPhase).Microseconds()
 
-		// BFS with formula overlay
+		tPhase = time.Now()
 		route := pf.FindBestRoute(pqs, adj, pools, currentState, cfg, routerAddr, sender,
 			tokenIn, tokenOut, chunkAmount, mh)
+		totalBfsUs += time.Since(tPhase).Microseconds()
 
 		if route == nil {
 			fmt.Printf("  leg %d: no route found (liquidity exhausted?)\n", i+1)
@@ -175,14 +204,17 @@ func main() {
 			i+1, fmtOut(route.AmountOut), route.GasUsed, affectedCount, formatPath(route, pools))
 
 		// EVM-execute this leg on a CallState to capture dirty slots
+		tPhase = time.Now()
 		cs := statedb.NewCallState(currentState)
 		ret, _, execErr := evmCtx.ExecuteWithCallState(cs, sender, routerAddr, route.Calldata)
+		totalEvmUs += time.Since(tPhase).Microseconds()
 		if execErr != nil || len(ret) < 32 {
 			fmt.Printf("         EVM execution failed: %v\n", execErr)
 			break
 		}
 
 		// Merge dirty slots from this execution
+		tPhase = time.Now()
 		for addr, slots := range cs.StorageOverrides() {
 			if accDirtySlots[addr] == nil {
 				accDirtySlots[addr] = make(map[common.Hash]common.Hash)
@@ -191,19 +223,21 @@ func main() {
 				accDirtySlots[addr][slot] = val
 			}
 		}
+		totalMergeUs += time.Since(tPhase).Microseconds()
 
 		// Build new state overlay with accumulated dirty slots for next EVM verification
+		tPhase = time.Now()
 		currentState = baseState.NewOverlay()
 		for addr, slots := range accDirtySlots {
 			for slot, val := range slots {
 				currentState.SetStorageSlot(addr, slot, val)
 			}
 		}
+		totalStateUs += time.Since(tPhase).Microseconds()
 	}
 
 	splitMs := time.Since(t0).Milliseconds()
 
-	// Count unique dirty slots
 	dirtySlotCount := 0
 	for _, slots := range accDirtySlots {
 		dirtySlotCount += len(slots)
@@ -212,17 +246,41 @@ func main() {
 	// ── Comparison ────────────────────────────────────────────────────
 
 	fmt.Printf("\n=== COMPARISON ===\n")
-	fmt.Printf("  single path:  %s  gas=%d\n", fmtOut(singleOut), singleRoute.GasUsed)
-	fmt.Printf("  split (%dx):  %s  gas=%d\n", *chunks, fmtOut(&totalOut), totalGas)
+	if cyclic {
+		// For circular routes, show output and loss (input - output)
+		splitInput := new(uint256.Int).Mul(chunkAmount, uint256.NewInt(uint64(*chunks)))
+		singleLoss := new(uint256.Int).Sub(fullAmount, singleOut)
+		splitLoss := new(uint256.Int)
+		if splitInput.Gt(&totalOut) {
+			splitLoss.Sub(splitInput, &totalOut)
+		}
+		fmt.Printf("  single path:  %s out  loss %s  gas=%d\n",
+			fmtIn(singleOut), fmtIn(singleLoss), singleRoute.GasUsed)
+		fmt.Printf("  split (%dx):  %s out  loss %s  gas=%d\n",
+			*chunks, fmtIn(&totalOut), fmtIn(splitLoss), totalGas)
 
-	if totalOut.Gt(singleOut) {
-		diff := new(uint256.Int).Sub(&totalOut, singleOut)
-		fmt.Printf("  improvement:  +%s\n", fmtOut(diff))
-	} else if singleOut.Gt(&totalOut) {
-		diff := new(uint256.Int).Sub(singleOut, &totalOut)
-		fmt.Printf("  worse by:     -%s\n", fmtOut(diff))
+		if totalOut.Gt(singleOut) {
+			diff := new(uint256.Int).Sub(&totalOut, singleOut)
+			fmt.Printf("  improvement:  +%s (less loss)\n", fmtIn(diff))
+		} else if singleOut.Gt(&totalOut) {
+			diff := new(uint256.Int).Sub(singleOut, &totalOut)
+			fmt.Printf("  worse by:     -%s\n", fmtIn(diff))
+		} else {
+			fmt.Printf("  improvement:  none (identical)\n")
+		}
 	} else {
-		fmt.Printf("  improvement:  none (identical)\n")
+		fmt.Printf("  single path:  %s  gas=%d\n", fmtOut(singleOut), singleRoute.GasUsed)
+		fmt.Printf("  split (%dx):  %s  gas=%d\n", *chunks, fmtOut(&totalOut), totalGas)
+
+		if totalOut.Gt(singleOut) {
+			diff := new(uint256.Int).Sub(&totalOut, singleOut)
+			fmt.Printf("  improvement:  +%s\n", fmtOut(diff))
+		} else if singleOut.Gt(&totalOut) {
+			diff := new(uint256.Int).Sub(singleOut, &totalOut)
+			fmt.Printf("  worse by:     -%s\n", fmtOut(diff))
+		} else {
+			fmt.Printf("  improvement:  none (identical)\n")
+		}
 	}
 
 	fmt.Printf("  extra gas:    %d\n", int64(totalGas)-int64(singleRoute.GasUsed))
@@ -230,6 +288,13 @@ func main() {
 	fmt.Printf("  time:         %dms single, %dms split\n", singleMs, splitMs)
 	fmt.Printf("  quotes:       %d formula + %d evm = %d total\n",
 		totalFormulaQuotes, totalEVMQuotes, totalFormulaQuotes+totalEVMQuotes)
+	fmt.Printf("\n=== PROFILE (split) ===\n")
+	fmt.Printf("  overlay:  %5dμs  (create PoolManagerOverlay, scan depSlots)\n", totalOverlayUs)
+	fmt.Printf("  bfs:      %5dμs  (FindBestRoute: formula BFS + EVM verify)\n", totalBfsUs)
+	fmt.Printf("  evm:      %5dμs  (EVM execute leg for dirty slots)\n", totalEvmUs)
+	fmt.Printf("  merge:    %5dμs  (merge dirty slots)\n", totalMergeUs)
+	fmt.Printf("  state:    %5dμs  (build StateDB overlay)\n", totalStateUs)
+	fmt.Printf("  total:    %5dμs\n", totalOverlayUs+totalBfsUs+totalEvmUs+totalMergeUs+totalStateUs)
 }
 
 // ── Formatting helpers ──────────────────────────────────────────────
@@ -255,7 +320,6 @@ func formatPath(route *pf.Route, pools []pf.Pool) string {
 	if route == nil || len(route.Steps) == 0 {
 		return "(none)"
 	}
-	// Build a lookup for pool dex names
 	dexMap := make(map[common.Address]string, len(pools))
 	for _, p := range pools {
 		dexMap[p.Address] = p.Dex
@@ -272,14 +336,34 @@ func formatPath(route *pf.Route, pools []pf.Pool) string {
 	return strings.Join(parts, " → ")
 }
 
+// parseDecimalAmount parses a decimal string like "0.1" or "50000" into wei.
+func parseDecimalAmount(s string, decimals int) *big.Int {
+	parts := strings.SplitN(s, ".", 2)
+	wholePart := parts[0]
+	fracPart := ""
+	if len(parts) == 2 {
+		fracPart = parts[1]
+	}
+	if len(fracPart) > decimals {
+		fracPart = fracPart[:decimals]
+	} else {
+		fracPart += strings.Repeat("0", decimals-len(fracPart))
+	}
+	combined := wholePart + fracPart
+	result, ok := new(big.Int).SetString(combined, 10)
+	if !ok {
+		return nil
+	}
+	return result
+}
+
 // queryDecimals reads the decimals() value for an ERC-20 token from state.
 func queryDecimals(state *statedb.StateDB, token common.Address) int {
-	// decimals() selector = 0x313ce567
 	calldata := []byte{0x31, 0x3c, 0xe5, 0x67}
 	cfg := statedb.EVMConfig{BlockNumber: 1, Timestamp: 1, ChainID: 43114}
 	ret, _, err := statedb.ExecuteCall(state, cfg, common.Address{}, token, calldata)
 	if err != nil || len(ret) < 32 {
-		return 18 // default
+		return 18
 	}
 	var dec uint256.Int
 	dec.SetBytes(ret[:32])

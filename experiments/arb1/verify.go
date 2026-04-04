@@ -16,7 +16,7 @@ var executeSwapSelector = [4]byte{0x32, 0x39, 0x33, 0x4d}
 
 // swap selector — for on-chain tx: swap(address[],uint8[],address[],uint256[],bytes[],uint256)
 // The 6th param is minOutput (reverts if output < minOutput).
-var swapSelector = [4]byte{0x9c, 0x03, 0x60, 0x14}
+var swapSelector = [4]byte{0xf3, 0xb1, 0xb2, 0x3a}
 
 // Verifier handles EVM verification of cycle candidates.
 type Verifier struct {

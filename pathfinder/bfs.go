@@ -319,8 +319,18 @@ func FindBestRoute(
 		if err != nil || len(ret) < 32 {
 			continue
 		}
-		evmAmount := new(uint256.Int)
+
+		// swap() returns int256: signed balance delta of tokenOut on the sender.
+		// With the current contract (outBefore after transferFrom):
+		//   A→B: positive = tokens received (absolute output)
+		//   Circular: positive = swap chain output (absolute, not profit)
+		// A negative return would mean the sender lost tokenOut (fee-on-transfer edge case).
+		var evmAmount uint256.Int
 		evmAmount.SetBytes(ret[:32])
+		// Check sign bit — negative means swap failed to produce output
+		if evmAmount.Bytes32()[0]&0x80 != 0 {
+			continue
+		}
 		if evmAmount.IsZero() {
 			continue
 		}
@@ -328,7 +338,7 @@ func FindBestRoute(
 		if bestRoute == nil || evmAmount.Gt(bestRoute.AmountOut) {
 			bestRoute = &Route{
 				Steps:     steps,
-				AmountOut: new(uint256.Int).Set(evmAmount),
+				AmountOut: new(uint256.Int).Set(&evmAmount),
 				GasUsed:   gasUsed,
 				Calldata:  calldata,
 				Stats: RouteStats{

@@ -27,6 +27,10 @@ When investigating formula coverage gaps (blacklisted pools, EVM fallbacks), rea
 - `benchmarks/` — performance and accuracy benchmarks
 - `experiments/` — archived or in-progress prototypes
 
+## Refactoring Policy
+
+Full refactors and API changes are welcome — prioritize keeping the codebase clean over backwards compatibility. There are no external dependents; any downstream consumers will update when they pull. Spend the extra time to do it right rather than adding workarounds or parallel code paths.
+
 ## Go Build Rules
 
 **Never use `go build`** unless you need a binary for external use (e.g. WASM for JS integration). Only two commands:

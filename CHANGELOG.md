@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-04-04 — swap() returns int256 (signed balance delta)
+
+### Router contract: swap() return type uint256 → int256
+
+- `swap()` now returns `int256` — the signed balance delta of tokenOut on the caller.
+  Positive = gain (A→B routes), negative = loss (circular route round-trip fees).
+- Previously, the return was clamped to 0 when `outAfter < outBefore`, making it impossible
+  to quote circular routes that aren't profitable arbs. The EVM verification in `FindBestRoute`
+  saw 0 and filtered them out → "no route found" for all circular queries.
+- `minOutput` parameter changed from `uint256` to `int256` to allow negative thresholds
+  for circular routes. New selector: `0xf3b1b23a`.
+- `debugSwapSingle()` unchanged — still returns `uint256` (router balance delta, always ≥ 0).
+
+### Go side: signed return decoding
+
+- **`pathfinder/bfs.go`**: For circular routes, decodes return as signed int256 and computes
+  absolute swap output (`amountIn + delta`). Passes `int256.min` as minOutput so the router
+  doesn't revert on negative deltas. Non-circular routes unchanged.
+- **`pathfinder/encode.go`**: Updated swap selector for new signature.
+- **`experiments/arb1/verify.go`**: Updated local swap selector copy.
+- Arb examples (arb1/arb2/arb3, examples/go/arbitrage): no logic changes needed — they pass
+  positive `minOutput` (≥1) so negative results revert, and positive int256 decodes identically
+  as uint256.
+
+### Split routing example cleanup
+
+- Removed debug/investigation code from `examples/go/split-routing/main.go`.
+- Added decimal amount parsing (e.g. `--amount 0.1`).
+- Circular route comparison now shows output and loss instead of raw amounts.
+
+**Requires contract redeployment** — new selector means old calldata won't match.
+
 ## 2026-04-03 — Split routing overlay + depSlots fix
 
 ### Bug fix: depSlots shared slot invalidation

@@ -331,16 +331,19 @@ contract HayabusaRouter {
     // === PUBLIC SWAP ===
 
     /// @notice Pull tokenIn from msg.sender, execute the swap, send tokenOut back.
-    ///         Reverts if amountOut < minOutput (slippage protection).
-    /// @return amountOut The amount of tokenOut sent to msg.sender
+    ///         Returns signed balance delta: positive for gains, negative for losses.
+    ///         For A→B routes this is always positive (= tokens received).
+    ///         For circular routes (tokenIn == tokenOut) it can be negative (round-trip loss).
+    ///         Reverts if delta < minOutput (slippage protection).
+    /// @return amountOut Signed balance delta of tokenOut on msg.sender
     function swap(
         address[] calldata pools,
         uint8[] calldata poolTypes,
         address[] calldata tokens,
         uint256[] calldata amountsIn,
         bytes[] calldata extraDatas,
-        uint256 minOutput
-    ) external payable returns (uint256) {
+        int256 minOutput
+    ) external payable returns (int256) {
         address tokenIn = tokens[0];
         address tokenOut = tokens[pools.length * 2 - 1];
         if (amountsIn[0] == 0) revert("swap: amountsIn[0] must be nonzero");
@@ -379,9 +382,9 @@ contract HayabusaRouter {
             IERC20(tokenOut).transfer(msg.sender, routerBal);
         }
 
-        // amountOut = how much tokenOut the caller gained
+        // Signed delta: positive = gain, negative = loss (e.g. circular route fees)
         uint256 outAfter = IERC20(tokenOut).balanceOf(msg.sender);
-        uint256 amountOut = outAfter > outBefore ? outAfter - outBefore : 0;
+        int256 amountOut = int256(outAfter) - int256(outBefore);
         if (amountOut < minOutput) revert("swap: insufficient output");
         return amountOut;
     }

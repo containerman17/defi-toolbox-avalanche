@@ -114,8 +114,8 @@ func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut 
 	return data
 }
 
-// swapSelector: keccak256("swap(address[],uint8[],address[],uint256[],bytes[],uint256)")[:4]
-var swapSelector = [4]byte{0x9c, 0x03, 0x60, 0x14}
+// swapSelector: keccak256("swap(address[],uint8[],address[],uint256[],bytes[],int256)")[:4]
+var swapSelector = [4]byte{0xf3, 0xb1, 0xb2, 0x3a}
 
 // EncodeSwapMulti builds swap() calldata for on-chain execution.
 // swap() takes 5 array params + uint256 minOutput.

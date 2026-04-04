@@ -176,15 +176,26 @@ func main() {
 
 	var squishedGas uint64
 	var squishedOut uint256.Int
+	var squishedV2Gas uint64
+	var squishedV2Out uint256.Int
 	if optimized != nil && len(optimized.Legs) > 1 {
-		fmt.Printf("\n--- Squished (single tx) ---\n")
 		squishedRoutes := make([]pf.SquishRoute, len(optimized.Legs))
+		naiveSteps := 0
 		for i, leg := range optimized.Legs {
 			squishedRoutes[i] = pf.SquishRoute{
 				Steps:  leg.Steps,
 				Volume: new(uint256.Int).Set(&leg.Volume),
 			}
+			naiveSteps += len(leg.Steps)
 		}
+
+		// ── 4a. Suffix-only merge ────────────────────────────────────
+		fmt.Printf("\n--- Squished v1 (suffix merge) ---\n")
+		mergedSteps, _ := pf.MergeRoutes(squishedRoutes)
+		fmt.Printf("  legs: %d  naive steps: %d  merged steps: %d  (%.0f%% reduction)\n",
+			len(optimized.Legs), naiveSteps, len(mergedSteps),
+			float64(naiveSteps-len(mergedSteps))/float64(naiveSteps)*100)
+
 		calldata := pf.EncodeSquished(squishedRoutes, uint256.NewInt(0))
 		evmCtx := statedb.GetCachedContext(cfg)
 		cs := statedb.NewCallState(params.State)
@@ -197,11 +208,53 @@ func main() {
 			if squishedOut.Bytes32()[0]&0x80 != 0 {
 				fmt.Printf("  negative output (reverted)\n")
 			} else {
-				fmt.Printf("  output:  %s  gas=%d\n", fmtOut(&squishedOut), squishedGas)
-				fmt.Printf("  separate legs gas: %d  →  squished gas: %d  (saved %d, %.1f%%)\n",
-					optimized.TotalGas, squishedGas,
-					optimized.TotalGas-squishedGas,
-					float64(optimized.TotalGas-squishedGas)/float64(optimized.TotalGas)*100)
+				fmt.Printf("  output:  %s  gas=%d  steps=%d\n", fmtOut(&squishedOut), squishedGas, len(mergedSteps))
+			}
+		}
+
+		// ── 4b. Full merge (suffix + first-hop) ──────────────────────
+		fmt.Printf("\n--- Squished v2 (suffix + first-hop merge) ---\n")
+		quoterFn := func(step pf.RouteStep, amountIn *uint256.Int) uint256.Int {
+			return pf.QuotePath(params.PM, []pf.RouteStep{step}, amountIn)
+		}
+		mergedStepsV2, mergedAmountsV2 := pf.MergeRoutesWithQuoter(squishedRoutes, quoterFn)
+		fmt.Printf("  legs: %d  naive steps: %d  merged steps: %d  (%.0f%% reduction)\n",
+			len(optimized.Legs), naiveSteps, len(mergedStepsV2),
+			float64(naiveSteps-len(mergedStepsV2))/float64(naiveSteps)*100)
+		for i, s := range mergedStepsV2 {
+			dex := s.Pool.Hex()[:10]
+			for _, p := range params.Pools {
+				if p.Address == s.Pool {
+					dex = p.Dex
+					break
+				}
+			}
+			amt := "balance"
+			if !mergedAmountsV2[i].IsZero() {
+				amt = formatTokenAmount(mergedAmountsV2[i], decimalsIn)
+			}
+			fmt.Printf("    step %d: %s(%s→%s)  amt=%s\n",
+				i+1, dex, s.TokenIn.Hex()[:8], s.TokenOut.Hex()[:8], amt)
+		}
+
+		calldataV2 := pf.EncodeSquishedWithQuoter(squishedRoutes, uint256.NewInt(0), quoterFn)
+		csV2 := statedb.NewCallState(params.State)
+		retV2, gasUsedV2, errV2 := evmCtx.ExecuteWithCallState(csV2, params.Sender, params.RouterAddr, calldataV2)
+		if errV2 != nil || len(retV2) < 32 {
+			fmt.Printf("  EVM error: %v\n", errV2)
+		} else {
+			squishedV2Out.SetBytes(retV2[:32])
+			squishedV2Gas = gasUsedV2
+			if squishedV2Out.Bytes32()[0]&0x80 != 0 {
+				fmt.Printf("  negative output (reverted)\n")
+			} else {
+				fmt.Printf("  output:  %s  gas=%d  steps=%d\n", fmtOut(&squishedV2Out), squishedV2Gas, len(mergedStepsV2))
+				if squishedGas > 0 {
+					fmt.Printf("  v1→v2: %d → %d gas  (saved %d more, %.1f%%)\n",
+						squishedGas, squishedV2Gas,
+						squishedGas-squishedV2Gas,
+						float64(squishedGas-squishedV2Gas)/float64(squishedGas)*100)
+				}
 			}
 		}
 	}
@@ -223,8 +276,13 @@ func main() {
 	}
 	if squishedGas > 0 {
 		diff := diffStr(&squishedOut, singleRoute.AmountOut, decimalsOut)
-		fmt.Printf("  squished:   %s  gas=%-8d  %s\n",
+		fmt.Printf("  squished v1:%s  gas=%-8d  %s\n",
 			fmtOut(&squishedOut), squishedGas, diff)
+	}
+	if squishedV2Gas > 0 {
+		diff := diffStr(&squishedV2Out, singleRoute.AmountOut, decimalsOut)
+		fmt.Printf("  squished v2:%s  gas=%-8d  %s\n",
+			fmtOut(&squishedV2Out), squishedV2Gas, diff)
 	}
 }
 

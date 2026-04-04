@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-04-04 — Route merging: suffix trie + first-hop merge + contract redesign
+
+### Route merge algorithm (`pathfinder/merge.go`)
+
+Two-phase merge that minimizes pool calls in multi-leg split swaps:
+
+- **Phase 1 — Suffix trie**: builds a trie from reversed paths. Identical paths collapse
+  (volumes summed). Shared suffixes become shared steps with `amount=0` (consumes accumulated
+  balance). DFS post-order emission ensures feeders run before shared consumers.
+- **Phase 2 — First-hop merge**: groups branches sharing the same first step (same pool +
+  token pair). The shared first step is called once with combined volume. Intermediate output
+  is distributed via explicit amounts (formula-quoted), last consumer sweeps with `amount=0`.
+
+`MergeRoutes` does suffix-only. `MergeRoutesWithQuoter` adds first-hop merging using a formula
+quoter for intermediate amounts. `EncodeSquished` uses suffix-only; `EncodeSquishedWithQuoter`
+uses both phases.
+
+28 unit tests covering: identical paths, shared suffix (1-step, 2-step, 4-way, nested),
+shared first hop (2-way, 3-way), shared first+last hop, mixed identical+shared, different
+tokens (no false merge), ExtraData/PoolType preservation, realistic 20-chunk scenarios.
+
+### Router contract: remove second-pass token pull
+
+Removed the second pass in `swap()` that pulled non-tokenIn tokens from sender via
+`transferFrom`. This was originally needed for multi-input swaps but caused problems with
+first-hop merging — it injected extra intermediate tokens from the sender, inflating output.
+
+New semantics: `swap()` only pulls `tokenIn` from sender. For intermediate tokens, explicit
+`amountsIn > 0` means "use exactly this much from router's existing balance" (produced by prior
+steps). `amountsIn = 0` means "use all balance" (sweep). This enables the "rolling strategy":
+explicit amounts for N-1 consumers, last consumer sweeps leftovers for rounding resilience.
+
+Deployed: `0x838065f5ac42ffdc17886ff2efa5e503c6987e0f` (block 82059957).
+
+### Results on 50k WAVAX → USDT (20 chunks)
+
+| Strategy | Output | Gas | Steps |
+|----------|--------|-----|-------|
+| Single path | $441,689 | 1.05M | 2 |
+| Optimized (separate) | $444,358 | 7.82M | 46 naive |
+| Squished v1 (suffix) | $444,357 | 1.74M | 11 |
+| **Squished v2 (full)** | **$444,357** | **1.52M** | **8** |
+
+46 → 8 steps (83% reduction). v1→v2 saved 13.2% more gas. Output identical across v1/v2.
+
 ## 2026-04-04 — Split routing: splitter package + optimized strategy
 
 - **`pathfinder/splitter/`**: new package with two split strategies and a common `Params`/`Result` interface.

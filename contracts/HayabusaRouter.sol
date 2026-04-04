@@ -348,11 +348,13 @@ contract HayabusaRouter {
         address tokenOut = tokens[pools.length * 2 - 1];
         if (amountsIn[0] == 0) revert("swap: amountsIn[0] must be nonzero");
 
-        // Pull tokens from sender for ALL steps that need fresh input.
-        // Sum amountsIn per unique input token and do one transferFrom each.
+        // Pull tokenIn from sender. Only the input token is pulled — intermediate
+        // tokens are produced by prior steps and consumed via explicit amountsIn
+        // (use exactly N from router balance) or amountsIn=0 (use all balance).
+        // This enables split routing with shared first hops: one pool call produces
+        // intermediate tokens, then multiple consumers each take their share via
+        // explicit amounts, with the last consumer sweeping the remainder (amount=0).
         {
-            // First pass: always pull tokenIn (tokens[0]) for the total of all
-            // amountsIn entries that match tokenIn.
             uint256 totalIn = 0;
             for (uint256 i = 0; i < pools.length;) {
                 if (amountsIn[i] > 0 && tokens[i * 2] == tokenIn) {
@@ -361,14 +363,6 @@ contract HayabusaRouter {
                 unchecked { ++i; }
             }
             IERC20(tokenIn).transferFrom(msg.sender, address(this), totalIn);
-
-            // Second pass: pull any non-tokenIn tokens that steps need.
-            for (uint256 i = 1; i < pools.length;) {
-                if (amountsIn[i] > 0 && tokens[i * 2] != tokenIn) {
-                    IERC20(tokens[i * 2]).transferFrom(msg.sender, address(this), amountsIn[i]);
-                }
-                unchecked { ++i; }
-            }
         }
 
         // Snapshot tokenOut balance before any swaps

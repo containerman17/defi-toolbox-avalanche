@@ -270,35 +270,31 @@ type SquishRoute struct {
 	Volume *uint256.Int
 }
 
-// EncodeSquished encodes multiple independent routes into a single swap() call.
-// Each route gets its own explicit amountsIn[firstStep], with subsequent steps
-// in the same route using 0 (contract balance). The router executes them
-// sequentially, and the final output is the balance delta of the last token.
+// EncodeSquished encodes multiple independent routes into a single swap() call
+// with automatic route merging (suffix merging only, no first-hop merging).
 func EncodeSquished(routes []SquishRoute, minOutput *uint256.Int) []byte {
-	// Count total steps
-	totalSteps := 0
-	for _, r := range routes {
-		totalSteps += len(r.Steps)
-	}
+	steps, amounts := MergeRoutes(routes)
+	return encodeMergedSteps(steps, amounts, minOutput)
+}
 
-	poolAddrs := make([]common.Address, 0, totalSteps)
-	poolTypes := make([]int, 0, totalSteps)
-	tokenPairs := make([]common.Address, 0, totalSteps*2)
-	amounts := make([]*uint256.Int, 0, totalSteps)
-	extraDatas := make([]string, 0, totalSteps)
+// EncodeSquishedWithQuoter is like EncodeSquished but also merges shared first
+// hops across branches. The quoter computes intermediate output amounts.
+func EncodeSquishedWithQuoter(routes []SquishRoute, minOutput *uint256.Int, quoter func(RouteStep, *uint256.Int) uint256.Int) []byte {
+	steps, amounts := MergeRoutesWithQuoter(routes, quoter)
+	return encodeMergedSteps(steps, amounts, minOutput)
+}
 
-	for _, r := range routes {
-		for i, s := range r.Steps {
-			poolAddrs = append(poolAddrs, s.Pool)
-			poolTypes = append(poolTypes, s.PoolType)
-			tokenPairs = append(tokenPairs, s.TokenIn, s.TokenOut)
-			extraDatas = append(extraDatas, s.ExtraData)
-			if i == 0 {
-				amounts = append(amounts, new(uint256.Int).Set(r.Volume))
-			} else {
-				amounts = append(amounts, uint256.NewInt(0))
-			}
-		}
+func encodeMergedSteps(steps []RouteStep, amounts []*uint256.Int, minOutput *uint256.Int) []byte {
+	poolAddrs := make([]common.Address, len(steps))
+	poolTypes := make([]int, len(steps))
+	tokenPairs := make([]common.Address, 0, len(steps)*2)
+	extraDatas := make([]string, len(steps))
+
+	for i, s := range steps {
+		poolAddrs[i] = s.Pool
+		poolTypes[i] = s.PoolType
+		tokenPairs = append(tokenPairs, s.TokenIn, s.TokenOut)
+		extraDatas[i] = s.ExtraData
 	}
 
 	return encodeSwapRaw(swapSelector, poolAddrs, poolTypes, tokenPairs, amounts, extraDatas, minOutput)

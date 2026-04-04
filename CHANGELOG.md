@@ -1,10 +1,12 @@
 # Changelog
 
-## 2026-04-04 — Fix: update block on proxy upgrade
+## 2026-04-04 — Proxy upgrade fixes
 
-`compile.ts --deploy` now writes the implementation deployment block to `address.json` instead
-of keeping the old one. Benchmarks and state queries use this block as a reference — stale
-block means running new contract logic against pre-deployment state.
+- Block number in `address.json` now updates to implementation deployment block on every
+  `--deploy`, not just `--new-proxy`.
+- Admin key auto-funded from deployer if balance is too low for the `upgradeTo` call.
+- Tested full upgrade cycle: proxy address unchanged, block updated (82066174→82067033),
+  implementation swapped, owner correct through proxy.
 
 ## 2026-04-04 — EIP-1967 transparent proxy
 

@@ -81,6 +81,22 @@ console.log(`Salt: "${ADMIN_SALT}"`)
 
 const baseFee = await publicClient.getGasPrice()
 
+// Fund admin if needed (upgradeTo costs ~30k gas, send enough for a few upgrades)
+const adminBalance = await publicClient.getBalance({ address: adminAccount.address })
+const minAdminBalance = baseFee * 500_000n // enough for several upgrades
+if (adminBalance < minAdminBalance) {
+    const fundAmount = minAdminBalance * 5n // 5x buffer
+    console.log(`\nFunding admin (balance ${adminBalance}, need ${minAdminBalance})...`)
+    const fundHash = await deployerWallet.sendTransaction({
+        to: adminAccount.address,
+        value: fundAmount,
+        maxFeePerGas: baseFee * 2n,
+        maxPriorityFeePerGas: 0n,
+    })
+    await publicClient.waitForTransactionReceipt({ hash: fundHash, pollingInterval: 500, timeout: 60_000 })
+    console.log(`Funded admin with ${fundAmount} wei`)
+}
+
 // Step 1: Deploy new implementation
 const implNonce = await publicClient.getTransactionCount({ address: deployerAccount.address, blockTag: 'pending' })
 console.log(`\nDeploying implementation... (nonce ${implNonce})`)

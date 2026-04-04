@@ -159,6 +159,7 @@ Integrated `splitter.Split()` into both HTTP and WASM entry points via `split` p
 - **WASM** (`cmd/wasm-sdk`): 4th arg `quote(tokenIn, tokenOut, amountIn, true)`.
 - Added `QuoteRequest.Split` field and `SplitResult`/`SplitLeg` response types.
 - Split result included alongside the normal forward/reverse quotes.
+- WASM tested via Node.js: single 934ms, split 1612ms (+$2,636). ~4x slower than native.
 
 ## 2026-04-04 — Proxy upgrade fixes
 

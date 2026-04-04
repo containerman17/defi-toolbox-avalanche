@@ -82,7 +82,11 @@ func main() {
 		{"shuf2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle2) }},
 		{"shuf3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle3) }},
 		{"shuf4", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle4) }},
-		{"bulk", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedBulk) }},
+		{"p10e2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedySplit(p, a, 10, 2) }},
+		{"p20e2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedySplit(p, a, 20, 2) }},
+		{"p50e2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedySplit(p, a, 50, 2) }},
+		{"p10e1", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedySplit(p, a, 10, 1) }},
+		{"p20e3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedySplit(p, a, 20, 3) }},
 	}
 
 	dividers := []struct {

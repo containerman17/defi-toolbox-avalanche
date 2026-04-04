@@ -103,8 +103,15 @@ Key findings:
 - The 4 universal losses are at ÷100 volume on sAVAX pairs — too small for any splitting
 - Shuffled patterns (interleaving large + small) match or beat monotone schedules
 
-Next: investigate dynamic schedule — decide 2% or 10% at each step based on how much
-the previous chunk improved output.
+### GreedySplit: decoupled discovery/execution volume
+
+Also tested `GreedySplit` — BFS at large probe volume (e.g., 50% of remaining) but execute
+at small volume (2% of total). Concept validated: `p50e2` won 42/57, the most of any single
+strategy. But 1343ms — 3x slower than mixed schedules for only marginal gain.
+
+The mixed schedules already achieve the same effect: large chunks (10%, 8%) are the
+discovery, small chunks (2%) are the fine-tuning. The schedule shape naturally interleaves
+discovery and execution without the overhead of running BFS at a different volume.
 
 ## 2026-04-04 — Proxy upgrade fixes
 

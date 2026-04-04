@@ -113,6 +113,29 @@ The mixed schedules already achieve the same effect: large chunks (10%, 8%) are 
 discovery, small chunks (2%) are the fine-tuning. The schedule shape naturally interleaves
 discovery and execution without the overhead of running BFS at a different volume.
 
+## 2026-04-04 — GreedyDynamic: adaptive chunk sizing (zero-loss strategy)
+
+Added `GreedyDynamic` (`pathfinder/splitter/greedydynamic.go`) — adapts chunk sizes based
+on whether BFS finds a different path vs the previous chunk. Same path → small chunk (2% or
+1%, stable pool). Different path → large discovery chunk (8%, pools shifted). Re-BFS at
+large volume when path changes to ensure we're not missing better routes.
+
+Benchmark across 57 test cases (17 pairs × 3 volumes):
+
+| Strategy | Wins | Losses | Ties | Min loss | Time | Notes |
+|---|---|---|---|---|---|---|
+| grad (mixed) | 41 | 5 | 11 | -0.11% | 463ms | most wins but risky |
+| shuf2 (mixed) | 41 | 5 | 11 | -0.04% | 321ms | safer mixed |
+| gfast40 | 39 | 0 | 18 | +0.00% | 407ms | zero-loss baseline |
+| **d8_1** | **36** | **0** | **21** | **+0.00%** | **261ms** | **fastest zero-loss** |
+| d8_2 | 35 | 0 | 22 | +0.00% | 300ms | |
+| d5_2 | 36 | 0 | 21 | +0.00% | 382ms | |
+
+Key insight: **all dynamic variants have zero losses.** The path-change signal naturally
+prevents over-chunking at small volumes (where splitting hurts) and enables discovery at
+large volumes (where it helps). `d8_1` (8% discovery, 1% fine-tune) is the sweet spot:
+36 wins, 0 losses, 261ms — 40% faster than gfast40 with same safety.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

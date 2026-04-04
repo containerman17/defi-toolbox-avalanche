@@ -1,91 +1,59 @@
 # Changelog
 
-## 2026-04-04 — Graceful fallback + all-explicit tails
+## 2026-04-04 — Route merging algorithm + router contract redesign
 
-### Router contract: min(amountsIn, balanceOf) fallback
+Three-phase merge algorithm (`pathfinder/merge.go`) that minimizes pool calls in multi-leg
+split swaps, plus two router contract changes to support it.
 
-Changed `_executeSwapInner` to cap explicit amounts at actual balance instead of reverting.
-When the market moves against us (pool produces less than formula predicted), the step uses
-whatever is available. When it moves in our favor, the surplus stays on the router (recoverable
-via `withdraw()`). The `minOutput` check at the end of `swap()` still catches unacceptable
-slippage. Cost: one extra `balanceOf` SLOAD per explicit step (~100 gas warm).
-
-Deployed: `0x0c1d788bfbe6728971234e05c505a12665776ad9` (block 82063154).
-
-### First-hop merge: all tails explicit
-
-All tails from first-hop merge now get explicit intermediate amounts (not just N-1). This
-enables collapseDuplicates to merge identical pool calls across different first-hop groups that
-were previously blocked by intervening balance sweeps. The graceful fallback makes this safe —
-if a formula quote is slightly off, the step uses available balance instead of reverting.
-
-### Analysis results (5 tokens × 5 tokens, 20 chunks)
-
-- v2 saves 77k–328k gas per swap on 6 of 20 pairs
-- 1 remaining duplicate across 20 pairs: `dodo(USDC→WAVAX)` in USDC→WETH.e, caused by
-  intervening balance sweep from shared suffix (known limitation of suffix trie architecture)
-- No reverts observed from the graceful fallback
-
-## 2026-04-04 — Phase 3: collapse duplicate pool calls + analysis script
-
-- **`collapseDuplicates`**: post-merge pass that finds steps with the same (pool, tokenIn,
-  tokenOut) key and merges them when safe. Adjacent explicit duplicates are always merged (sum
-  amounts). Non-adjacent duplicates are merged only when no intervening balance(0) step
-  consumes the same input or output token.
-- Explicit+balance pairs are never merged — balance sweep semantics depend on position.
-- 7 unit tests covering: adjacent (2, 3 duplicates), non-adjacent safe, unsafe (tokenIn,
-  tokenOut balance between), explicit-between-safe, explicit+balance no-merge.
-- First-hop merge: last tail ALWAYS uses balance(0) to sweep remaining tokens. Formula quotes
-  are approximate — explicit amounts on the last tail risk leaving dust on the router.
-- **`experiments/merge-analysis/`**: temporary script testing 5 tokens × 5 tokens (both
-  directions, 20 chunks) to find duplicate pool calls. Across 20 pairs: 0-1 duplicates found,
-  always from rare non-adjacent cases with intervening balance sweeps. Confirms the algorithm
-  covers the vast majority of merge opportunities.
-
-## 2026-04-04 — Route merging: suffix trie + first-hop merge + contract redesign
-
-### Route merge algorithm (`pathfinder/merge.go`)
-
-Two-phase merge that minimizes pool calls in multi-leg split swaps:
+### Merge algorithm
 
 - **Phase 1 — Suffix trie**: builds a trie from reversed paths. Identical paths collapse
   (volumes summed). Shared suffixes become shared steps with `amount=0` (consumes accumulated
-  balance). DFS post-order emission ensures feeders run before shared consumers.
-- **Phase 2 — First-hop merge**: groups branches sharing the same first step (same pool +
-  token pair). The shared first step is called once with combined volume. Intermediate output
-  is distributed via explicit amounts (formula-quoted), last consumer sweeps with `amount=0`.
+  balance). DFS post-order ensures feeders run before shared consumers.
+- **Phase 2 — First-hop merge** (`MergeRoutesWithQuoter`): groups branches sharing the same
+  first step. The shared step is called once with combined volume. All consumers get explicit
+  intermediate amounts from formula quotes. Enables Phase 3 by eliminating balance sweeps
+  between duplicate steps.
+- **Phase 3 — Collapse duplicates** (`collapseDuplicates`): finds same-key steps (pool +
+  tokenIn + tokenOut) and merges them when safe. Adjacent explicit duplicates always merge (sum
+  amounts). Non-adjacent merge only when no intervening balance(0) step consumes the same
+  tokenIn or tokenOut. Explicit+balance pairs never merge.
 
-`MergeRoutes` does suffix-only. `MergeRoutesWithQuoter` adds first-hop merging using a formula
-quoter for intermediate amounts. `EncodeSquished` uses suffix-only; `EncodeSquishedWithQuoter`
-uses both phases.
+`MergeRoutes` does Phase 1+3. `MergeRoutesWithQuoter` does all three phases.
+`EncodeSquished` / `EncodeSquishedWithQuoter` wrap these into swap() calldata.
 
-28 unit tests covering: identical paths, shared suffix (1-step, 2-step, 4-way, nested),
+37 unit tests covering: identical paths, shared suffix (1-step, 2-step, 4-way, nested),
 shared first hop (2-way, 3-way), shared first+last hop, mixed identical+shared, different
-tokens (no false merge), ExtraData/PoolType preservation, realistic 20-chunk scenarios.
+tokens (no false merge), adjacent/non-adjacent collapse (safe/unsafe), ExtraData preservation,
+realistic 20-chunk scenarios.
 
-### Router contract: remove second-pass token pull
+### Router contract changes
 
-Removed the second pass in `swap()` that pulled non-tokenIn tokens from sender via
-`transferFrom`. This was originally needed for multi-input swaps but caused problems with
-first-hop merging — it injected extra intermediate tokens from the sender, inflating output.
+1. **Removed second-pass token pull**: `swap()` only pulls `tokenIn` from sender. Intermediate
+   tokens come from prior step outputs. Explicit `amountsIn > 0` on non-tokenIn steps means
+   "use this much from router balance", not "pull from sender".
 
-New semantics: `swap()` only pulls `tokenIn` from sender. For intermediate tokens, explicit
-`amountsIn > 0` means "use exactly this much from router's existing balance" (produced by prior
-steps). `amountsIn = 0` means "use all balance" (sweep). This enables the "rolling strategy":
-explicit amounts for N-1 consumers, last consumer sweeps leftovers for rounding resilience.
+2. **Graceful fallback** (`min(amt, balance)`): explicit steps cap at actual balance instead of
+   using the full requested amount. If market moved against us, step uses whatever is available
+   (minOutput catches bad slippage). If market moved in our favor, surplus stays on router
+   (recoverable via `withdraw()`). Cost: ~100 gas per explicit step.
 
-Deployed: `0x838065f5ac42ffdc17886ff2efa5e503c6987e0f` (block 82059957).
+Deployed: `0x0c1d788bfbe6728971234e05c505a12665776ad9` (block 82063154).
 
-### Results on 50k WAVAX → USDT (20 chunks)
+### Results
+
+50k WAVAX → USDT, 20 chunks:
 
 | Strategy | Output | Gas | Steps |
 |----------|--------|-----|-------|
 | Single path | $441,689 | 1.05M | 2 |
 | Optimized (separate) | $444,358 | 7.82M | 46 naive |
-| Squished v1 (suffix) | $444,357 | 1.74M | 11 |
-| **Squished v2 (full)** | **$444,357** | **1.52M** | **8** |
+| Squished v1 (suffix only) | $444,357 | 1.74M | 11 |
+| **Squished v2 (full merge)** | **$444,357** | **1.40M** | **8** |
 
-46 → 8 steps (83% reduction). v1→v2 saved 13.2% more gas. Output identical across v1/v2.
+5×5 token matrix analysis (`experiments/merge-analysis/`): v2 saves 77k–328k gas on 6 of 20
+pairs. 1 remaining duplicate across 20 pairs (intervening balance sweep from shared suffix —
+known limitation). No reverts from graceful fallback.
 
 ## 2026-04-04 — Split routing: splitter package + optimized strategy
 

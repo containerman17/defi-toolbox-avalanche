@@ -42,6 +42,22 @@ and Greedy 8x, returns the highest output. For use when compute time is not a co
 Also tried Frank-Wolfe (convex optimization) and GreedyPlus (hybrid BFS+formula) —
 both underperformed Greedy due to the shared-pool problem on Avalanche.
 
+## 2026-04-04 — GreedyFast: incremental overlay + forced quote cache
+
+Added `GreedyFast` (`pathfinder/splitter/greedyfast.go`) — same output as GreedyFine but
+**~46% faster** through two optimizations:
+
+1. **Incremental PoolManagerOverlay** (`formulas/overlay.go: UpdateDirtySlots`): instead of
+   creating a new overlay per chunk, updates the existing one. Only pools whose storage
+   slots actually changed are invalidated — all others keep their cached quoters.
+2. **Force quote cache** (`formulas/overlay.go: EnableQuoteCache`): within a single routing
+   call the block timestamp is constant, so LFJ V2 pools (normally uncacheable due to
+   time-dependence) can safely use the quote cache. LFJ V2 was 28% of total formula time.
+
+Results (17 pairs, ~$1M volumes):
+- gfast40: 520ms, same output as greedyfine (963ms) — **46% faster**
+- gfast100: 1239ms, beats greedy on 16/17 pairs — 100 chunks was previously ~2500ms
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

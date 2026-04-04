@@ -75,8 +75,8 @@ func main() {
 		{"greedy", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Greedy(p, a, ch) }},
 		{"optimized", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Optimized(p, a, ch) }},
 		{"greedyfine", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFine(p, a, ch) }},
-		{"greedy8x", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Greedy(p, a, ch*8) }},
-		{"best", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Best(p, a, ch) }},
+		{"gfast40", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, ch*4) }},
+		{"gfast100", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, 100) }},
 	}
 
 	pcts := make([][]float64, len(strategies))

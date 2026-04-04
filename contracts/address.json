@@ -1,1 +1,6 @@
-{"address":"0x0c1d788bfbe6728971234e05c505a12665776ad9","block":82063154}
+{
+  "proxy": "0x51a9554f7a30ede6bddb6e4e129842829057f3fc",
+  "implementation": "0x83f7094e414f547134a4b9e64ea1c180a238fc87",
+  "block": 82066174,
+  "address": "0x51a9554f7a30ede6bddb6e4e129842829057f3fc"
+}

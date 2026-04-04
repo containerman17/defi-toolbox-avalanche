@@ -321,11 +321,18 @@ contract HayabusaRouter {
     uint256 private _v4AmountIn;
     bytes private _v4ExtraData;
 
-    // Owner — only for recovering stuck tokens
+    // Owner — only for recovering stuck tokens (surplus from favorable market moves).
+    // Set once via initialize(), called by the proxy constructor during deployment.
     address public owner;
+    bool private initialized;
 
-    constructor() {
-        owner = msg.sender;
+    /// @notice One-time initialization, called by the proxy constructor.
+    ///         Sets the owner who can withdraw() accumulated surplus tokens.
+    ///         Cannot be called again after first use.
+    function initialize(address _owner) external {
+        require(!initialized, "already initialized");
+        initialized = true;
+        owner = _owner;
     }
 
     // === PUBLIC SWAP ===

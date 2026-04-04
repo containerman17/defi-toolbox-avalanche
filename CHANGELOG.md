@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-04-04 — EIP-1967 transparent proxy
+
+Deployed a minimal transparent proxy so the router address is permanent. No more updating
+`address.json` on every contract change — just upgrade the implementation behind the proxy.
+
+- **`contracts/HayabusaProxy.sol`**: ~500 bytes deployed. Admin (derived key) can only call
+  `upgradeTo()`. All other callers are delegated to the implementation. Standard EIP-1967
+  storage slots for block explorer detection.
+- **Router**: replaced `constructor()` with `initialize(address _owner)` + `initialized` flag
+  for proxy compatibility. Owner set once during proxy deployment.
+- **Admin key derivation**: `keccak256(deployerKey || "hayabusa-proxy-admin")`. Salt is public
+  (in `compile.ts`). Security comes from the private key, not the salt.
+- **`compile.ts`**: default `--deploy` upgrades existing proxy. `--new-proxy` deploys a fresh
+  proxy (one-time operation).
+- **Proxy**: `0x51a9554f7a30ede6bddb6e4e129842829057f3fc` (permanent address)
+- **Deployer** (router owner, can `withdraw()`): original key
+- **Admin** (proxy upgrades only): derived key
+
 ## 2026-04-04 — Route merging algorithm + router contract redesign
 
 Three-phase merge algorithm (`pathfinder/merge.go`) that minimizes pool calls in multi-leg

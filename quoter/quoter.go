@@ -8,6 +8,7 @@ import (
 	router "defi-toolbox/contracts"
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/pathfinder/splitter"
 	"defi-toolbox/statedb"
 	poolcollector "defi-toolbox/tools/pool-collector"
 
@@ -179,6 +180,27 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 		resp.Reverse = q.routeToResult(revRoute, tokenOut, tokenIn, amountIn)
 	}
 
+	// Split routing (forward only)
+	if req.Split {
+		params := &splitter.Params{
+			PM:         q.pm,
+			BasePM:     q.pm,
+			Adj:        q.adj,
+			Pools:      q.pools,
+			State:      q.stateWithOverrides,
+			EVMConfig:  cfg,
+			RouterAddr: q.routerAddr,
+			Sender:     q.sender,
+			TokenIn:    tokenIn,
+			TokenOut:   tokenOut,
+			MaxHops:    q.maxHops,
+		}
+		splitResult := splitter.Split(params, amountIn)
+		if splitResult != nil {
+			resp.Split = q.splitToResult(splitResult)
+		}
+	}
+
 	return resp, nil
 }
 
@@ -220,5 +242,32 @@ func (q *Quoter) routeToResult(route *pf.Route, tokenIn, tokenOut common.Address
 		AmountOut: route.AmountOut.Dec(),
 		Path:      steps,
 		GasUsed:   route.GasUsed,
+	}
+}
+
+func (q *Quoter) splitToResult(r *splitter.Result) *SplitResult {
+	legs := make([]SplitLeg, len(r.Legs))
+	for i, leg := range r.Legs {
+		path := make([]PathStep, len(leg.Steps))
+		for j, s := range leg.Steps {
+			path[j] = PathStep{
+				Pool:     s.Pool.Hex(),
+				TokenIn:  s.TokenIn.Hex(),
+				TokenOut: s.TokenOut.Hex(),
+				Dex:      q.dexMap[s.Pool],
+			}
+		}
+		legs[i] = SplitLeg{
+			AmountIn:  leg.Volume.Dec(),
+			AmountOut: leg.Output.Dec(),
+			Path:      path,
+			GasUsed:   leg.GasUsed,
+		}
+	}
+	return &SplitResult{
+		AmountOut: r.Total.Dec(),
+		Legs:      legs,
+		TotalGas:  r.TotalGas,
+		ElapsedUs: r.ElapsedUs,
 	}
 }

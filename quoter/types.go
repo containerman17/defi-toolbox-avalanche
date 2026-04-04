@@ -7,6 +7,7 @@ type QuoteRequest struct {
 	TokenIn  string `json:"tokenIn"`
 	TokenOut string `json:"tokenOut"`
 	AmountIn string `json:"amountIn"`
+	Split    bool   `json:"split,omitempty"` // if true, run split routing via splitter.Split()
 }
 
 // QuoteResponse contains forward and (optionally) reverse quotes.
@@ -15,7 +16,24 @@ type QuoteResponse struct {
 	ID      int          `json:"id,omitempty"`
 	Forward *QuoteResult `json:"forward"`
 	Reverse *QuoteResult `json:"reverse,omitempty"`
+	Split   *SplitResult `json:"split,omitempty"` // present when Split=true
 	Error   string       `json:"error,omitempty"`
+}
+
+// SplitResult is the output of split routing.
+type SplitResult struct {
+	AmountOut string     `json:"amountOut"`
+	Legs      []SplitLeg `json:"legs"`
+	TotalGas  uint64     `json:"totalGas"`
+	ElapsedUs int64      `json:"elapsedUs"`
+}
+
+// SplitLeg is one piece of a split route.
+type SplitLeg struct {
+	AmountIn  string     `json:"amountIn"`
+	AmountOut string     `json:"amountOut"`
+	Path      []PathStep `json:"path"`
+	GasUsed   uint64     `json:"gasUsed"`
 }
 
 // QuoteResult is one direction of a quote.

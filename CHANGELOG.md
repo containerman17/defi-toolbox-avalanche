@@ -150,6 +150,16 @@ zero losses across all tested conditions, 210ms median, competitive win count.
 Added `splitter.Split()` as the default entry point (calls `GreedyDynamic(8, 2)`).
 Added `pathfinder/splitter/README.md` documenting all strategies with benchmarks.
 
+## 2026-04-04 — Split routing in HTTP quoter and WASM SDK
+
+Integrated `splitter.Split()` into both HTTP and WASM entry points via `split` parameter.
+
+- **HTTP** (`examples/go/http-quoter`): `?split=true` query param.
+  Single: 445k USDT in 27ms. Split: 448k USDT (+$2,681) in 395ms.
+- **WASM** (`cmd/wasm-sdk`): 4th arg `quote(tokenIn, tokenOut, amountIn, true)`.
+- Added `QuoteRequest.Split` field and `SplitResult`/`SplitLeg` response types.
+- Split result included alongside the normal forward/reverse quotes.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

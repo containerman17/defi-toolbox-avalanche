@@ -38,6 +38,7 @@ func main() {
 			TokenIn:  r.URL.Query().Get("tokenIn"),
 			TokenOut: r.URL.Query().Get("tokenOut"),
 			AmountIn: r.URL.Query().Get("amountIn"),
+			Split:    r.URL.Query().Get("split") == "true",
 		}
 		if req.TokenIn == "" || req.TokenOut == "" || req.AmountIn == "" {
 			w.WriteHeader(400)

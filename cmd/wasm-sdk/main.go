@@ -94,6 +94,9 @@ func quoteFn(this js.Value, args []js.Value) interface{} {
 		TokenOut: args[1].String(),
 		AmountIn: args[2].String(),
 	}
+	if len(args) >= 4 && args[3].Type() == js.TypeBoolean {
+		req.Split = args[3].Bool()
+	}
 
 	// Return a Promise.
 	handler := js.FuncOf(func(this js.Value, promiseArgs []js.Value) interface{} {

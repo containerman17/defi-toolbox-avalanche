@@ -147,6 +147,9 @@ Second benchmark run (different block, more volatile state) confirms robustness:
 **`d8_2` (8% discovery, 2% fine-tune) is the recommended production strategy:**
 zero losses across all tested conditions, 210ms median, competitive win count.
 
+Added `splitter.Split()` as the default entry point (calls `GreedyDynamic(8, 2)`).
+Added `pathfinder/splitter/README.md` documenting all strategies with benchmarks.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

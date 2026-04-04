@@ -36,6 +36,12 @@ Tested ~10 strategy variants before arriving at GreedyFine:
 The winning insight: **more chunks always helps, nothing else does.** Smaller chunks = less
 price impact per chunk = better total output. Diminishing returns beyond 4x.
 
+Added `Best` strategy (`pathfinder/splitter/best.go`) — runs Greedy, Optimized, GreedyFine,
+and Greedy 8x, returns the highest output. For use when compute time is not a constraint.
+
+Also tried Frank-Wolfe (convex optimization) and GreedyPlus (hybrid BFS+formula) —
+both underperformed Greedy due to the shared-pool problem on Avalanche.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

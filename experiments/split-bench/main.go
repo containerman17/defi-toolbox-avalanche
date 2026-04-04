@@ -1,4 +1,4 @@
-// Cross-benchmark: Greedy vs Optimized vs GreedyFine across 17 token pairs.
+// Cross-benchmark: tests split routing strategies across token pairs at multiple volumes.
 package main
 
 import (
@@ -23,7 +23,7 @@ var tokens = []struct {
 	Name     string
 	Address  common.Address
 	Decimals int
-	Amount   string
+	Amount   string // base amount (~$1M worth)
 }{
 	{"WAVAX", common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"), 18, "50000"},
 	{"USDC", common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"), 6, "1000000"},
@@ -73,98 +73,105 @@ func main() {
 
 	strategies := []strategy{
 		{"greedy", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Greedy(p, a, ch) }},
-		{"optimized", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Optimized(p, a, ch) }},
-		{"greedyfine", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFine(p, a, ch) }},
 		{"gfast40", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, ch*4) }},
-		{"gfast100", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, 100) }},
+		{"front", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedFrontLoaded) }},
+		{"grad", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedGradual) }},
+		{"plat", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedPlateau) }},
+		{"magic", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedMagic) }},
+		{"shuf1", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle1) }},
+		{"shuf2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle2) }},
+		{"shuf3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle3) }},
+		{"shuf4", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle4) }},
+		{"bulk", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedBulk) }},
 	}
 
+	dividers := []struct {
+		label string
+		div   uint64
+	}{
+		{"1x", 1},
+		{"÷10", 10},
+		{"÷100", 100},
+	}
+
+	// Collect per-strategy stats across ALL (pair × volume) combinations.
 	pcts := make([][]float64, len(strategies))
 	times := make([][]float64, len(strategies))
 	for i := range strategies {
 		pcts[i] = []float64{}
 		times[i] = []float64{}
 	}
-	nPairs := 0
 
-	fmt.Printf("%-14s", "PAIR")
+	// Header
+	fmt.Printf("%-20s", "PAIR")
 	for _, s := range strategies {
-		fmt.Printf("  %12s", s.name)
-	}
-	for _, s := range strategies {
-		fmt.Printf("  %6s", s.name[:3]+"ms")
+		fmt.Printf(" %8s", s.name)
 	}
 	fmt.Println()
-	fmt.Println(strings.Repeat("─", 14+len(strategies)*14+len(strategies)*8))
+	fmt.Println(strings.Repeat("─", 20+len(strategies)*9))
 
-	for i, tIn := range tokens {
-		for j, tOut := range tokens {
-			if i == j {
-				continue
-			}
+	for _, div := range dividers {
+		fmt.Printf("\n=== Volume %s ===\n\n", div.label)
 
-			amount := parseDecimalAmount(tIn.Amount, tIn.Decimals)
-			if amount == nil || amount.Sign() <= 0 {
-				continue
-			}
-			fullAmount := new(uint256.Int)
-			fullAmount.SetFromBig(amount)
-
-			params := &splitter.Params{
-				PM:         q.PM(),
-				BasePM:     q.PM(),
-				Adj:        q.Adj(),
-				Pools:      q.Pools(),
-				State:      q.StateWithOverrides(),
-				EVMConfig:  cfg,
-				RouterAddr: q.RouterAddr(),
-				Sender:     q.Sender(),
-				TokenIn:    tIn.Address,
-				TokenOut:   tOut.Address,
-				MaxHops:    q.MaxHops(),
-			}
-
-			single := pf.FindBestRoute(params.PM, params.Adj, params.Pools, params.State,
-				cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
-			if single == nil {
-				continue
-			}
-			singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
-			nPairs++
-
-			pair := tIn.Name + "→" + tOut.Name
-			fmt.Printf("%-14s", pair)
-
-			for si, s := range strategies {
-				result := s.run(params, fullAmount)
-				pct := 0.0
-				ms := 0.0
-				if result != nil {
-					outF := u256ToFloat(&result.Total, tOut.Decimals)
-					pct = pctImprovement(singleF, outF)
-					ms = float64(result.ElapsedUs) / 1000.0
+		for i, tIn := range tokens {
+			for j, tOut := range tokens {
+				if i == j {
+					continue
 				}
-				pcts[si] = append(pcts[si], pct)
-				times[si] = append(times[si], ms)
-				fmt.Printf("  %+11.4f%%", pct)
+
+				amount := parseDecimalAmount(tIn.Amount, tIn.Decimals)
+				if amount == nil || amount.Sign() <= 0 {
+					continue
+				}
+				amount.Div(amount, big.NewInt(int64(div.div)))
+				if amount.Sign() <= 0 {
+					continue
+				}
+				fullAmount := new(uint256.Int)
+				fullAmount.SetFromBig(amount)
+
+				params := &splitter.Params{
+					PM: q.PM(), BasePM: q.PM(), Adj: q.Adj(), Pools: q.Pools(),
+					State: q.StateWithOverrides(), EVMConfig: cfg,
+					RouterAddr: q.RouterAddr(), Sender: q.Sender(),
+					TokenIn: tIn.Address, TokenOut: tOut.Address, MaxHops: q.MaxHops(),
+				}
+
+				single := pf.FindBestRoute(params.PM, params.Adj, params.Pools, params.State,
+					cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
+				if single == nil {
+					continue
+				}
+				singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
+
+				pair := tIn.Name + "→" + tOut.Name
+				fmt.Printf("%-20s", pair)
+
+				for si, s := range strategies {
+					result := s.run(params, fullAmount)
+					pct := 0.0
+					ms := 0.0
+					if result != nil {
+						outF := u256ToFloat(&result.Total, tOut.Decimals)
+						pct = pctImprovement(singleF, outF)
+						ms = float64(result.ElapsedUs) / 1000.0
+					}
+					pcts[si] = append(pcts[si], pct)
+					times[si] = append(times[si], ms)
+					fmt.Printf(" %+7.3f%%", pct)
+				}
+				fmt.Println()
 			}
-			for si := range strategies {
-				fmt.Printf("  %5.0fms", times[si][len(times[si])-1])
-			}
-			fmt.Println()
 		}
 	}
 
-	if nPairs == 0 {
-		return
-	}
-
+	// ── Aggregates across ALL volumes ────────────────────────────────
 	fmt.Println()
-	fmt.Println(strings.Repeat("═", 14+len(strategies)*14+len(strategies)*8))
-	fmt.Println()
+	fmt.Println(strings.Repeat("═", 20+len(strategies)*9))
+	fmt.Printf("\nALL VOLUMES COMBINED (%d test cases):\n\n", len(pcts[0]))
 
 	for _, label := range []string{"MEDIAN", "AVG", "MIN", "MAX"} {
-		fmt.Printf("%-14s", label)
+		fmt.Printf("%-20s", label)
 		for si := range strategies {
 			sorted := make([]float64, len(pcts[si]))
 			copy(sorted, pcts[si])
@@ -180,32 +187,32 @@ func main() {
 			case "MAX":
 				v = sorted[len(sorted)-1]
 			}
-			fmt.Printf("  %+11.4f%%", v)
+			fmt.Printf(" %+7.3f%%", v)
 		}
 		fmt.Println()
 	}
 
 	fmt.Println()
-	fmt.Printf("%-14s", "AVG TIME")
+	fmt.Printf("%-20s", "AVG TIME")
 	for si := range strategies {
-		fmt.Printf("  %10.0fms", mean(times[si]))
+		fmt.Printf(" %6.0fms", mean(times[si]))
 	}
 	fmt.Println()
-	fmt.Printf("%-14s", "MED TIME")
+	fmt.Printf("%-20s", "MED TIME")
 	for si := range strategies {
 		sorted := make([]float64, len(times[si]))
 		copy(sorted, times[si])
 		sort.Float64s(sorted)
-		fmt.Printf("  %10.0fms", median(sorted))
+		fmt.Printf(" %6.0fms", median(sorted))
 	}
 	fmt.Println()
 
-	// Head-to-head
+	// Head-to-head vs greedy
 	fmt.Println()
-	fmt.Println("HEAD-TO-HEAD vs greedy:")
+	fmt.Println("vs greedy (W/L/T):")
 	for si := 1; si < len(strategies); si++ {
 		wins, losses, t := 0, 0, 0
-		for pi := 0; pi < nPairs; pi++ {
+		for pi := range pcts[0] {
 			if pcts[si][pi] > pcts[0][pi]+0.0001 {
 				wins++
 			} else if pcts[si][pi] < pcts[0][pi]-0.0001 {
@@ -214,7 +221,7 @@ func main() {
 				t++
 			}
 		}
-		fmt.Printf("  %-12s  W=%d  L=%d  T=%d\n", strategies[si].name, wins, losses, t)
+		fmt.Printf("  %-8s W=%-3d L=%-3d T=%-3d\n", strategies[si].name, wins, losses, t)
 	}
 }
 

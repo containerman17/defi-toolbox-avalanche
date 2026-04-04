@@ -80,6 +80,32 @@ instead of calling `QuoteBypassQuoteCache`. This was 48% of gfast100 profile tim
 - gfast40: 520ms → 226ms (median 200ms)
 - gfast100: 1227ms → 1008ms avg (median 846ms — **under 1 second**)
 
+## 2026-04-04 — GreedyMixed: parameterized chunk schedules
+
+Added `GreedyMixed` (`pathfinder/splitter/greedymixed.go`) — Greedy with configurable
+chunk size schedules instead of equal chunks. BFS discovers different paths at different
+volumes, so mixing large discovery chunks with small fine-tuning chunks gets the best of both.
+
+Benchmarked 10 schedules across 57 test cases (17 pairs × 3 volume levels: 1x/÷10/÷100):
+
+| Schedule | Wins | Losses | Ties | Min loss | Avg time | Shape |
+|---|---|---|---|---|---|---|
+| grad | 40 | 4 | 13 | -2.0% | 402ms | smooth 6%→2% taper |
+| shuf2 | 38 | 4 | 15 | -0.03% | 281ms | 10,5,2 repeating |
+| plat | 38 | 4 | 15 | -0.8% | 290ms | 8→4→2 step-down |
+| gfast40 | 38 | 4 | 15 | -14.1% | 393ms | equal 2.5% × 40 |
+
+Key findings:
+- **`shuf2` (10,5,2,10,5,2...) has the safest min loss (-0.03%)** — continuous re-discovery
+  at multiple volumes prevents catastrophic losses at small amounts
+- **`grad` wins the most (40/57)** but riskier min (-2%)
+- Equal chunks (`gfast40`) catastrophic at small volumes (-14% on sAVAX ÷100)
+- The 4 universal losses are at ÷100 volume on sAVAX pairs — too small for any splitting
+- Shuffled patterns (interleaving large + small) match or beat monotone schedules
+
+Next: investigate dynamic schedule — decide 2% or 10% at each step based on how much
+the previous chunk improved output.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

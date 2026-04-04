@@ -58,6 +58,22 @@ Results (17 pairs, ~$1M volumes):
 - gfast40: 520ms, same output as greedyfine (963ms) — **46% faster**
 - gfast100: 1239ms, beats greedy on 16/17 pairs — 100 chunks was previously ~2500ms
 
+## 2026-04-04 — LFJ V2 quote cache fix (global 47% speedup)
+
+LFJ V2 pools were never cached (`noQuoteCache = true`) because their output depends on
+`block.timestamp`. But `SetBlockTimestamp` updates pool structs in-place without flushing
+the quote cache — so the cache was disabled as a safety net.
+
+Fix: flush quote cache for LFJ V2 pools in `SetBlockTimestamp` when the timestamp changes.
+Now LFJ V2 uses the standard quote cache within a block (deterministic). Removed the
+`noQuoteCache` flag entirely.
+
+Impact across ALL strategies (17 pairs, ~$1M volumes):
+- Greedy: 295ms → 155ms (47% faster)
+- Optimized: 84ms → 57ms (32% faster)
+- GreedyFine: 963ms → 523ms (46% faster)
+- No output changes — pure cache efficiency.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

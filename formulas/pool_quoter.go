@@ -122,8 +122,11 @@ func (pm *PoolManager) SetEVMCaller(fn EVMCaller) {
 // updates. Updates both the PoolManager's default (for new pool construction) and
 // all cached LFJ V2 pool structs (no rebuild needed — just updates the field).
 func (pm *PoolManager) SetBlockTimestamp(ts uint64) {
+	if ts == pm.blockTimestamp {
+		return
+	}
 	pm.blockTimestamp = ts
-	for _, q := range pm.pools {
+	for addr, q := range pm.pools {
 		// Unwrap fotPoolQuoter if present
 		inner := q
 		if fot, ok := inner.(*fotPoolQuoter); ok {
@@ -131,6 +134,12 @@ func (pm *PoolManager) SetBlockTimestamp(ts uint64) {
 		}
 		if lfj, ok := inner.(*LFJV2Pool); ok {
 			lfj.SetBlockTimestamp(ts)
+			// Timestamp changed → flush quote cache for this pool.
+			// The pool struct is updated in-place (no rebuild needed),
+			// but cached quote results are stale at the new timestamp.
+			pm.cacheMu.Lock()
+			delete(pm.quoteCaches, addr)
+			pm.cacheMu.Unlock()
 		}
 	}
 }
@@ -396,7 +405,8 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 		}
 		if p := newDODOPool(pool, trackedReader, token0); p != nil { return wrapAndCache(p) }
 	case FormulaLFJV2:
-		pm.noQuoteCache[pool] = true // time-dependent: skip quote cache
+		// Quote cache is now safe: SetBlockTimestamp flushes LFJ V2 caches
+		// when the timestamp changes. Within a block, quotes are deterministic.
 		if hasTokens {
 			return wrapAndCache(newLFJV2Pool(pool, trackedReader, tokens[0], tokens[1], pm.blockTimestamp, pm.evmCaller))
 		}

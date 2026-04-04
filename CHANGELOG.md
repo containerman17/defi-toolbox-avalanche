@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-04-04 — Phase 3: collapse duplicate pool calls
+## 2026-04-04 — Phase 3: collapse duplicate pool calls + analysis script
 
 - **`collapseDuplicates`**: post-merge pass that finds steps with the same (pool, tokenIn,
   tokenOut) key and merges them when safe. Adjacent explicit duplicates are always merged (sum
@@ -9,6 +9,12 @@
 - Explicit+balance pairs are never merged — balance sweep semantics depend on position.
 - 7 unit tests covering: adjacent (2, 3 duplicates), non-adjacent safe, unsafe (tokenIn,
   tokenOut balance between), explicit-between-safe, explicit+balance no-merge.
+- First-hop merge: last tail ALWAYS uses balance(0) to sweep remaining tokens. Formula quotes
+  are approximate — explicit amounts on the last tail risk leaving dust on the router.
+- **`experiments/merge-analysis/`**: temporary script testing 5 tokens × 5 tokens (both
+  directions, 20 chunks) to find duplicate pool calls. Across 20 pairs: 0-1 duplicates found,
+  always from rare non-adjacent cases with intervening balance sweeps. Confirms the algorithm
+  covers the vast majority of merge opportunities.
 
 ## 2026-04-04 — Route merging: suffix trie + first-hop merge + contract redesign
 

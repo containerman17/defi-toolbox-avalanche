@@ -253,8 +253,10 @@ func mergeFirstHops(steps []RouteStep, amounts []*uint256.Int, quoter func(Route
 		outAmounts = append(outAmounts, totalVolume)
 
 		// Emit each branch's tail (steps after the first hop).
-		// All but the last get explicit intermediate amounts from the quoter.
-		// The last gets amount=0 (balance sweep).
+		// All tails get explicit intermediate amounts from the quoter,
+		// EXCEPT the last tail's first step keeps balance(0) to sweep any
+		// remaining tokens. Formula quotes aren't exact — the last consumer
+		// must grab whatever is left so nothing stays on the router.
 		for idx, bi := range g.indices {
 			b := branches[bi]
 			isLast := idx == len(g.indices)-1

@@ -170,6 +170,17 @@ func main() {
 		fmt.Printf("  (no result)\n")
 	}
 
+	// ── 3b. GreedyFine split ────────────────────────────────────────
+
+	fmt.Printf("\n--- GreedyFine Split (%d chunks) ---\n", *chunks*4)
+	greedyfine := splitter.GreedyFine(params, fullAmount, *chunks)
+	if greedyfine != nil {
+		fmt.Printf("  total:   %s  gas=%d  time=%dμs  legs=%d\n",
+			fmtOut(&greedyfine.Total), greedyfine.TotalGas, greedyfine.ElapsedUs, len(greedyfine.Legs))
+	} else {
+		fmt.Printf("  (no result)\n")
+	}
+
 	// ── 4. Squished execution ────────────────────────────────────────
 	// Take the optimized legs and execute them as a single swap() call
 	// instead of separate calls, then compare gas.
@@ -273,6 +284,11 @@ func main() {
 		diff := diffStr(&optimized.Total, singleRoute.AmountOut, decimalsOut)
 		fmt.Printf("  optimized:  %s  gas=%-8d  time=%dμs  %s\n",
 			fmtOut(&optimized.Total), optimized.TotalGas, optimized.ElapsedUs, diff)
+	}
+	if greedyfine != nil {
+		diff := diffStr(&greedyfine.Total, singleRoute.AmountOut, decimalsOut)
+		fmt.Printf("  greedyfine: %s  gas=%-8d  time=%dμs  %s\n",
+			fmtOut(&greedyfine.Total), greedyfine.TotalGas, greedyfine.ElapsedUs, diff)
 	}
 	if squishedGas > 0 {
 		diff := diffStr(&squishedOut, singleRoute.AmountOut, decimalsOut)

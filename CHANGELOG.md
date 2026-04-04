@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-04-04 — GreedyFine split routing strategy
+
+Added `GreedyFine` (`pathfinder/splitter/greedyfine.go`) — runs Greedy with 4x more chunks.
+**Beats Greedy on all 17 benchmarked pairs** (W=17 L=0). Cost: ~3x slower.
+
+Cross-benchmark results at ~$1M volumes, 17 directional pairs across WAVAX/USDC/USDT/sAVAX/WETH.e:
+
+| Strategy | Median improvement | Avg time |
+|---|---|---|
+| GreedyFine (40 chunks) | **+1.1723%** | 971ms |
+| Greedy (10 chunks) | +1.1328% | 298ms |
+| Optimized (10 chunks) | +1.0435% | 86ms |
+
+Highlight pairs where GreedyFine shines:
+- **USDC→sAVAX**: +100.7% vs Greedy's +69.5% (+45% more output)
+- **WETH.e→sAVAX**: +18.4% vs Greedy's +14.6%
+- **USDC→WETH.e**: +2.87% vs Greedy's +2.73%
+
+Also added `experiments/split-bench/` — cross-benchmark harness for comparing strategies.
+
+### Dead ends investigated
+
+Tested ~10 strategy variants before arriving at GreedyFine:
+- **Pure water-filling** (binary search on marginal equilibrium rate): doesn't work because
+  Avalanche paths share pools heavily. Allocating independently then executing sequentially
+  causes massive losses as earlier legs deplete shared pools.
+- **Multi-volume discovery + re-discovery**: matched Greedy output but was slower.
+  The path diversity didn't help because Greedy's per-chunk BFS already finds diverse paths.
+- **Top-5 BFS per chunk**: same output as top-1 (the BFS already picks the best).
+- **Reusing previous chunk's path**: no improvement — BFS already considers it.
+- **Half-volume discovery**: no improvement — paths optimal at half volume are the same.
+- **Adaptive chunk sizing** (rate-based): worse output — large chunks over-deplete pools.
+
+The winning insight: **more chunks always helps, nothing else does.** Smaller chunks = less
+price impact per chunk = better total output. Diminishing returns beyond 4x.
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

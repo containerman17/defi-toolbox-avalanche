@@ -74,6 +74,12 @@ Impact across ALL strategies (17 pairs, ~$1M volumes):
 - GreedyFine: 963ms → 523ms (46% faster)
 - No output changes — pure cache efficiency.
 
+Simplified overlay: removed redundant `forceQuoteCache` + `quoteCacheMap` from
+`PoolManagerOverlay`. Now delegates non-affected pools to `base.Quote()` (warm cache)
+instead of calling `QuoteBypassQuoteCache`. This was 48% of gfast100 profile time.
+- gfast40: 520ms → 226ms (median 200ms)
+- gfast100: 1227ms → 1008ms avg (median 846ms — **under 1 second**)
+
 ## 2026-04-04 — Proxy upgrade fixes
 
 - Block number in `address.json` now updates to implementation deployment block on every

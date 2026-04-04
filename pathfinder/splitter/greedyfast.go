@@ -46,9 +46,6 @@ func GreedyFast(p *Params, amountIn *uint256.Int, chunks int) *Result {
 		} else if formulaOverlay == nil {
 			// First chunk with dirty slots — create the overlay.
 			formulaOverlay = formulas.NewPoolManagerOverlay(p.BasePM, accDirtySlots)
-			// Enable quote caching for all pools (including LFJ V2) since
-			// block timestamp is constant within a single routing call.
-			formulaOverlay.EnableQuoteCache()
 			pqs = formulaOverlay
 		} else {
 			pqs = formulaOverlay

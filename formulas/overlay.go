@@ -13,9 +13,7 @@ type PoolManagerOverlay struct {
 	base            *PoolManager
 	dirtySlots      map[common.Address]map[common.Hash]common.Hash
 	affectedPools   map[common.Address]bool
-	scratchPM       *PoolManager                    // lazily created, only for affected pools
-	forceQuoteCache bool                            // if true, cache all quotes including time-dependent pools
-	quoteCacheMap   map[overlayQuoteKey]uint256.Int // overlay-level cache when forceQuoteCache is true
+	scratchPM *PoolManager // lazily created, only for affected pools
 }
 
 // NewPoolManagerOverlay creates an overlay that intercepts quotes for pools
@@ -82,19 +80,6 @@ func (o *PoolManagerOverlay) UpdateDirtySlots(newDirtySlots map[common.Address]m
 		}
 	}
 
-	// Invalidate overlay-level quote cache entries for affected pools.
-	if o.forceQuoteCache && len(newlyAffected) > 0 {
-		affectedSet := make(map[common.Address]bool, len(newlyAffected))
-		for _, pa := range newlyAffected {
-			affectedSet[pa] = true
-		}
-		for key := range o.quoteCacheMap {
-			if affectedSet[key.pool] {
-				delete(o.quoteCacheMap, key)
-			}
-		}
-	}
-
 	// Update the overlay reader on scratchPM if it exists.
 	if o.scratchPM != nil && len(newlyAffected) > 0 {
 		// Update the overlay reader to use the latest dirty slots.
@@ -126,46 +111,15 @@ func (o *PoolManagerOverlay) UpdateDirtySlots(newDirtySlots map[common.Address]m
 // When forceQuoteCache is enabled, all quotes (including time-dependent pools
 // like LFJ V2 that the base PM doesn't cache) are cached on the overlay.
 func (o *PoolManagerOverlay) Quote(pool common.Address, amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
-	if o.forceQuoteCache {
-		// Check overlay-level cache first.
-		if o.quoteCacheMap == nil {
-			o.quoteCacheMap = make(map[overlayQuoteKey]uint256.Int)
-		}
-		key := overlayQuoteKey{pool: pool, amountIn: *amountIn, tokenIn: tokenIn, tokenOut: tokenOut}
-		if cached, ok := o.quoteCacheMap[key]; ok {
-			return cached
-		}
-		var result uint256.Int
-		if !o.affectedPools[pool] {
-			result = o.base.QuoteBypassQuoteCache(pool, amountIn, tokenIn, tokenOut)
-		} else {
-			o.ensureScratch()
-			result = o.scratchPM.QuoteBypassQuoteCache(pool, amountIn, tokenIn, tokenOut)
-		}
-		o.quoteCacheMap[key] = result
-		return result
-	}
-
 	if !o.affectedPools[pool] {
+		// Unaffected pools: delegate to base PM (uses its warm quote cache).
 		return o.base.Quote(pool, amountIn, tokenIn, tokenOut)
 	}
+	// Affected pools: use scratch PM (has its own cache per pool).
 	o.ensureScratch()
 	return o.scratchPM.Quote(pool, amountIn, tokenIn, tokenOut)
 }
 
-type overlayQuoteKey struct {
-	pool     common.Address
-	amountIn uint256.Int
-	tokenIn  common.Address
-	tokenOut common.Address
-}
-
-// EnableQuoteCache forces the scratch PM to cache all quotes, including
-// time-dependent pools (LFJ V2). Safe when the overlay is used within a
-// single block — the block timestamp doesn't change between chunks.
-func (o *PoolManagerOverlay) EnableQuoteCache() {
-	o.forceQuoteCache = true
-}
 
 // ensureScratch creates the scratch PoolManager on first use.
 func (o *PoolManagerOverlay) ensureScratch() {

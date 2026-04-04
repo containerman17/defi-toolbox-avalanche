@@ -155,7 +155,7 @@ if (newProxy) {
     const updatedJson = JSON.stringify({
         proxy: proxyAddress,
         implementation: implAddress,
-        block: addressJson.block,
+        block: Number(implReceipt.blockNumber),
         address: proxyAddress,
     }, null, 2) + '\n'
     writeFileSync(path.join(import.meta.dirname!, 'address.json'), updatedJson)

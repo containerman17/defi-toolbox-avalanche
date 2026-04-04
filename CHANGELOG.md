@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-04 — Fix: update block on proxy upgrade
+
+`compile.ts --deploy` now writes the implementation deployment block to `address.json` instead
+of keeping the old one. Benchmarks and state queries use this block as a reference — stale
+block means running new contract logic against pre-deployment state.
+
 ## 2026-04-04 — EIP-1967 transparent proxy
 
 Deployed a minimal transparent proxy so the router address is permanent. No more updating

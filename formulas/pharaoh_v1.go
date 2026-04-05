@@ -436,5 +436,9 @@ func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
 		}
 	}
 
-	return new(uint256.Int).Set(&y)
+	// Newton-Raphson did not converge within 255 iterations.
+	// On-chain, non-convergence leads to unreliable output (the returned
+	// amount may exceed the reserve, causing swap() to revert). Return nil
+	// to signal the swap is not executable at this amount.
+	return nil
 }

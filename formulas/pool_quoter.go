@@ -509,16 +509,17 @@ var deadPoolDirs = map[common.Address]common.Address{
 	common.HexToAddress("0x70201236b99f79392b877e760898061917796aeb"): common.HexToAddress("0xf84be5e3f534e6d4b60d104b299e33ecb03ce7fd"), // SOCK/WAVAX lfj_v1: SOCK._transfer triggers attemptFeeSwap through same pair, stale reserves cause K failure
 }
 
-// deadDirQuoter wraps a PoolQuoter to block directions where a broken input token
-// causes on-chain reverts. Generic version of V2Pool's deadDir flags — works for all pool types.
+// deadDirQuoter wraps a PoolQuoter to block directions where a broken token
+// causes on-chain reverts. Checks both input and output: a token whose transfer()
+// always reverts will cause reverts whether it's being sent in or sent out.
 type deadDirQuoter struct {
 	inner      PoolQuoter
-	deadTokens map[common.Address]bool // tokens that revert when used as input
+	deadTokens map[common.Address]bool // tokens that revert when used as input or output
 }
 
 func (d *deadDirQuoter) Address() common.Address { return d.inner.Address() }
 func (d *deadDirQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
-	if d.deadTokens[tokenIn] {
+	if d.deadTokens[tokenIn] || d.deadTokens[tokenOut] {
 		return uint256.Int{}
 	}
 	return d.inner.Quote(amountIn, tokenIn, tokenOut)

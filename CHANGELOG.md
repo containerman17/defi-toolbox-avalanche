@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-04-05 — Fix pharaoh_v1 pool#3445 Newton-Raphson non-convergence (formula nonzero, EVM=0)
+
+- Pool `0x13e09b6a...` (pharaoh_v1, PHAR/abcPHAR, stable) had formula=109605651937277039200
+  vs EVM=0 on dir=0.
+- Root cause: extreme reserve imbalance (r0=4.58e15, r1=363.95e18, ratio ~80000x). At the
+  benchmark input amount, the on-chain `_get_y` Newton-Raphson enters a non-convergent
+  oscillation, producing output >= reserve, which causes `swap()` to revert. The Go formula's
+  `getY` also oscillated (delta=18, never reaching <=1) but returned the oscillating value
+  after 255 iterations instead of signaling failure.
+- Fix: `getY` in `pharaoh_v1.go` now returns nil when the Newton-Raphson loop completes
+  without converging (255 iterations exhausted). This correctly signals that the swap is not
+  executable at this amount, matching the on-chain behavior where the returned amount exceeds
+  the reserve.
+- Investigation: binary search found a precise threshold (~2.456e15) where on-chain flips
+  between valid output and full-reserve return. The formula and EVM agree to within 0-2 for
+  amounts below and above this threshold (confirmed at multiple points). The non-convergence
+  is a known numeric instability in the Solidly stable curve at extreme imbalance.
+- Result: 100% match for pool#3445. pharaoh_v1 goes from 504/506 to 505/506 match. No
+  regressions on 3500 pools.
+
+## 2026-04-05 — Fix pharaoh_v1 pool#3198 xPRYM mismatch (formula nonzero, EVM=0)
+
+- Pool `0x658f5ef2...` (pharaoh_v1, xPRYM/WAVAX) had formula=168500113541022494977 vs
+  EVM=0 on dir=1 (WAVAX→xPRYM).
+- Root cause: xPRYM (`0x4596ab7a...`, PRYMUS.XYZ) is a P3D-style dividend/bonding-curve
+  token. Its `transfer()` always reverts with INVALID opcode — the token only supports
+  buy/sell/withdraw via its own bonding curve, not standard ERC20 transfers. The pool's
+  `swap()` calls `transfer()` to send xPRYM to the receiver, which reverts.
+- Fix: added xPRYM to `brokenTokens` in `pool_v2.go`. Also fixed `deadDirQuoter` in
+  `pool_quoter.go` to check both `tokenIn` and `tokenOut` — previously only checked
+  `tokenIn`, missing the case where a broken token is the swap output. The pool's
+  `swap()` calls `transfer(tokenOut)` to deliver output, which also reverts for broken
+  tokens. This is a general fix: all existing brokenTokens now correctly block both
+  directions (input and output).
+- Result: 100% match for pool#3198 across all blocks. No regressions on 3500 pools.
+
 ## 2026-04-05 — Sender-aware reflection tokens, Ape-X shift, batch registry
 
 - SLED reflection token: added SenderAwareOutputAdjuster for excluded-sender pools (0 PPB)

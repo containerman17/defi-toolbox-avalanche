@@ -31,6 +31,7 @@ var brokenTokens = map[common.Address]bool{
 	common.HexToAddress("0x77146784315ba81904d654466968e3a7c196d1f3"): true, // transfer reverts in EVM simulation
 	common.HexToAddress("0xb57b25851fe2311cc3fe511c8f10e868932e0680"): true, // transfer reverts in EVM simulation
 	common.HexToAddress("0x0442ac2450dc0b2b56d7320afad0b63b1ff8b0d0"): true, // transfer reverts in EVM simulation
+	common.HexToAddress("0x4596ab7aab0362f743ae934792b827febfe3a3e3"): true, // xPRYM (PRYMUS.XYZ): P3D-style dividend token, transfer() always reverts (INVALID opcode)
 }
 
 // V2Pool is a pre-loaded V2 constant product pool.

@@ -33,6 +33,7 @@ type tokenOverrideEntry struct {
 	DisableSlots   []int  `json:"disableSlots,omitempty"`
 	WhitelistSlots     []int  `json:"whitelistSlots,omitempty"`     // mapping slots to set mapping[addr]=true for router (e.g., excludedFromLockPeriod)
 	RouterAddressSlots []int  `json:"routerAddressSlots,omitempty"` // plain slots to overwrite with the router address (e.g., registered uniswapV2Router)
+	CodeContracts  map[string]string `json:"codeContracts,omitempty"` // address → hex bytecode: deploy real code at these addresses (for proxy resolvers/implementations not in state dump)
 }
 
 var overrideMap map[common.Address]*tokenOverrideEntry
@@ -331,6 +332,24 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 				})
 			}
 		}
+
+		// CodeContracts: deploy real bytecode at specific addresses so proxy tokens
+		// whose resolver/implementation contracts are not in the state dump can
+		// execute transfers. Unlike hookContracts (which deploy a no-op), these
+		// deploy the actual code needed for the proxy chain to work.
+		for addr, hexCode := range entry.CodeContracts {
+			codeAddr := common.HexToAddress(addr)
+			if !hookSet[codeAddr] {
+				hookSet[codeAddr] = true
+				code, err := hex.DecodeString(strings.TrimPrefix(hexCode, "0x"))
+				if err == nil && len(code) > 0 {
+					overrides = append(overrides, pathfinder.ParsedOverride{
+						Addr: codeAddr,
+						Code: code,
+					})
+				}
+			}
+		}
 	}
 
 	return overrides
@@ -474,7 +493,7 @@ func BuildSenderOverrides(sender, routerAddr common.Address, pools []pathfinder.
 	hookSet := make(map[common.Address]bool)
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]
-		if !ok || len(entry.HookContracts) == 0 {
+		if !ok {
 			continue
 		}
 		for _, hc := range entry.HookContracts {
@@ -486,6 +505,19 @@ func BuildSenderOverrides(sender, routerAddr common.Address, pools []pathfinder.
 					Balance: uint256.NewInt(0),
 					Code:    []byte{0x60, 0x20, 0x5f, 0xf3},
 				})
+			}
+		}
+		for addr, hexCode := range entry.CodeContracts {
+			codeAddr := common.HexToAddress(addr)
+			if !hookSet[codeAddr] {
+				hookSet[codeAddr] = true
+				code, err := hex.DecodeString(strings.TrimPrefix(hexCode, "0x"))
+				if err == nil && len(code) > 0 {
+					overrides = append(overrides, pathfinder.ParsedOverride{
+						Addr: codeAddr,
+						Code: code,
+					})
+				}
 			}
 		}
 	}

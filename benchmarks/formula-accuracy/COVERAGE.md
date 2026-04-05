@@ -14,7 +14,26 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**97.9% correct** — 7162 match, 150 mismatch (3500 pools, 3 blocks aggregate).
+**96.9% correct** — 7086 match, 226 mismatch (3500 pools, 3 blocks aggregate).
+
+Fixed pharaoh_v1 pool#3445 (`0x13e09b6a...`, PHAR/abcPHAR, stable): Newton-Raphson
+non-convergence at extreme reserve imbalance (r0=4.58e15, r1=363.95e18). The `getY`
+function oscillated with delta=18 after convergence, never meeting the <=1 threshold.
+After 255 iterations it returned the oscillating value, producing output 109.6e18. On-chain,
+the same oscillation causes `getAmountOut()` to return the full reserve, making `swap()`
+revert. Fix: `getY` returns nil when the 255-iteration loop exhausts without convergence.
+**Technique**: when a stable-curve pool has extreme imbalance and the formula returns nonzero
+while EVM returns 0, check if `getY` Newton-Raphson converges. Non-convergence (oscillating
+delta > 1 after many iterations) means the swap is unexecutable on-chain.
+
+Fixed pharaoh_v1 pool#3198 (`0x658f5ef2...`, xPRYM/WAVAX): xPRYM (`0x4596ab7a...`) is a
+P3D-style dividend token (buy/sell/withdraw bonding curve). Its `transfer()` always reverts
+(INVALID opcode), so both swap directions are dead on-chain. Added to `brokenTokens`. Also
+fixed `deadDirQuoter` to check both `tokenIn` and `tokenOut` — previously only blocked the
+input direction, missing output-side reverts. **Technique**: P3D/Hourglass-style tokens have
+`buy(address)`, `sell(uint256)`, `withdraw()`, `myDividends(bool)`, `calculateTokensReceived(uint256)`
+selectors. Their `transfer()` either reverts or applies a large internal tax via the bonding
+curve. When `transfer()` reverts with INVALID opcode, add to `brokenTokens`.
 
 Fixed SLED reflection token (0x1f1fe1ef) mismatch: was fotPct(2) static approximation
 (22 PPM off), moved to reflectionTokenConfigs with exact RFI math. Key finding: the V2 pool

@@ -14,7 +14,16 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**96.4% correct** — 6888 match, 260 mismatch, 7148 tested quotes (3500 pools, 1 block).
+**99.1% correct** — 4181 match, 40 mismatch, 4221 tested quotes (2000 pools, 1 block).
+
+Batch registered 4 lfj_v1 pools missing from `registry.txt` — all returned formula=0 while
+EVM returned nonzero. All use FormulaV2_30bps (formula=0). Token overrides already existed.
+- Pool#1985 (`0x2915c754...`, WAVAX/0xcd59): 100% match both dirs.
+- Pool#1832 (`0x2FFEA1BE...`, USDt/0xd3ac): 100% match both dirs.
+- Pool#1850 (`0x82C39cc3...`, USDC/0xc3e8): 100% match both dirs.
+- Pool#1852 (`0xa1CA4E8C...`, 0xc0c5/0xc3e8): 100% match both dirs.
+**Technique**: when an lfj_v1 pool has formula=0/evm=nonzero in both directions and both
+token overrides exist, the pool is simply missing from `registry.txt`.
 
 Fixed uniswap_v2 pool#3413 (`0x7a8fe1F0...`, WETH.e/USDC): missing from `registry.txt`.
 Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).

@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-05 — Register 4 lfj_v1 pools missing from registry.txt
+
+- Pools 0x2915c754 (WAVAX/0xcd59), 0x2FFEA1BE (USDt/0xd3ac), 0x82C39cc3 (USDC/0xc3e8),
+  0xa1CA4E8C (0xc0c5/0xc3e8) all returned formula=0 but evm=nonzero
+- Added all with formula 0 (FormulaV2_30bps). Token overrides already existed.
+- 100% match all directions. Mismatches: 47 -> 40 (2000 pools, 1 block).
+
 ## 2026-04-05 — SOCK deadPoolDir, PumpKinsFarm whitelistSlots, more registry entries
 
 - SOCK (BulletCollection) triggers fee-swap reentrancy through same pair — added to deadPoolDirs

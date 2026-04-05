@@ -90,8 +90,8 @@ var fotCalculators = map[string]fotCalc{
 	// Good Bridging (GB): moved to reflectionTokenConfigs for exact RFI math.
 	// Was: 1% pure reflection, ~3.7 PPM residual with static fee.
 
-	// SLED: fee = amount * 2 / 100
-	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": fotPct(2),
+	// SLED: moved to reflectionTokenConfigs for exact RFI math (2% pure reflection).
+	// Was: fotPct(2), ~22 PPM residual from reflection redistribution drift.
 
 	// GIVE TR YOUR COQ (0xa12d): fee = amount * 6 / 100 (6% tax, subtract form)
 	// Pool: 0xd65328f9 (lfj_v1, token0/WAVAX)

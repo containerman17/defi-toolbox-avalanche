@@ -1897,7 +1897,8 @@
   },
   {
     "address": "0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60",
-    "slot": 9
+    "slot": 9,
+    "disableSlots": [5]
   },
   {
     "address": "0x26ba42602160acad691431fcc0860799df7b8b69",
@@ -6227,7 +6228,8 @@
   },
   {
     "address": "0x894aa2d0d3e63471c5ffbd22a8a95c8476826cf9",
-    "slot": 1
+    "slot": 1,
+    "whitelistSlots": [4]
   },
   {
     "address": "0x89534395c84e6333c9fc49fea3bca12cb5e66e79",

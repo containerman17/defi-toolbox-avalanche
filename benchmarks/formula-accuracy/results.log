@@ -679,3 +679,7 @@ time=2026-04-05_10:29 git=65df3a0 blocks=3 ms_per_pool=0.0014 total_ms=0.0 pools
 time=2026-04-05_10:29 git=65df3a0 blocks=3 ms_per_pool=0.0026 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
 time=2026-04-05_10:30 git=65df3a0 blocks=3 ms_per_pool=0.0025 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
 time=2026-04-05_10:30 git=65df3a0 blocks=3 ms_per_pool=0.0016 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0
+time=2026-04-05_10:31 git=f5ecdf9 blocks=3 ms_per_pool=0.0023 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0
+time=2026-04-05_10:31 git=f5ecdf9 blocks=3 ms_per_pool=0.0022 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0
+time=2026-04-05_10:31 git=f5ecdf9 blocks=3 ms_per_pool=0.0024 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
+time=2026-04-05_10:31 git=f5ecdf9 blocks=3 ms_per_pool=0.0021 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0

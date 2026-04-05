@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-05 — Fix vapordex pool#1536: was incorrectly blacklisted
+
+### Fixed
+- Pool `0xe8EF9CC2...` (vapordex, pool#1536, 0x7bddaf6d/0x88f89b) returned formula=0 but evm=nonzero
+- Was blacklisted (-1) in `registry.txt` — changed to formula 0 (FormulaV2_30bps)
+- 100% match both directions across 3 blocks after fix
+
 ## 2026-04-05 — Fix vapordex pool#1059: was incorrectly blacklisted
 
 ### Fixed

@@ -2,10 +2,11 @@ package splitter
 
 import "github.com/holiman/uint256"
 
-// Split runs the recommended production strategy: GreedyDynamic with 8% discovery
-// and 2% fine-tune chunks. Zero losses across all tested conditions, ~210ms median.
+// Split runs the recommended production strategy: GreedyCompete with 30% slabs
+// and 2% chunks. Provably never returns less than single-path (min = +0.000%).
+// 43 wins, 0 losses across 57 test cases. ~530ms median.
 //
 // See README.md in this package for strategy comparison and benchmarks.
 func Split(p *Params, amountIn *uint256.Int) *Result {
-	return GreedyDynamic(p, amountIn, 8, 2)
+	return GreedyCompete(p, amountIn, 30, 2)
 }

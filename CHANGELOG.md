@@ -186,6 +186,8 @@ Results (57 test cases):
 
 **c30_2 matches the best win count (43) with guaranteed non-negative output.**
 The compete mechanism is the first strategy that provably never loses.
+
+Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 - Added 5 more tokens: USDT, sAVAX, LINK.e, AAVE.e, JOE (10 total).
 - Fixed Dockerfile: `apk add make` so `make build-wasm` works in alpine.
 

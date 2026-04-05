@@ -506,6 +506,7 @@ var deadPoolDirs = map[common.Address]common.Address{
 	common.HexToAddress("0x54ba397425a60361c684aeae22f2c7c78b24cf90"): common.HexToAddress("0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"), // V4: USDt as input reverts in this pool
 	common.HexToAddress("0x5c2e48c07f27f6250e7a1709d12d01b6b92205ba"): common.HexToAddress("0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab"), // PharaohV1: WETH.e as input reverts (one-sided)
 	common.HexToAddress("0x04d479a32d5941f2329c307ee906e36753f0e9f0"): common.HexToAddress("0xd698aeab9286a38d14894b6ccf5129660fffc6f3"), // V4 ArenaHook: hook reverts for this token
+	common.HexToAddress("0x70201236b99f79392b877e760898061917796aeb"): common.HexToAddress("0xf84be5e3f534e6d4b60d104b299e33ecb03ce7fd"), // SOCK/WAVAX lfj_v1: SOCK._transfer triggers attemptFeeSwap through same pair, stale reserves cause K failure
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken input token

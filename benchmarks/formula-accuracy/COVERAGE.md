@@ -16,6 +16,10 @@ Living document for investigating and fixing formula coverage gaps.
 
 **96.4% correct** — 6888 match, 260 mismatch, 7148 tested quotes (3500 pools, 1 block).
 
+Fixed sushiswap_v2 pool#2236 (`0x4c2e615b...`, USDC.e/0xd3ac): missing from `registry.txt`.
+Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).
+100% match across 3 blocks.
+
 Batch registered 13 pools missing from `registry.txt` — these returned formula=0 while
 EVM returned nonzero. Breakdown: 3 V4, 2 pharaoh_v3, 3 DODO, 3 LFJ V1, 1 LFJ V2,
 1 WooFi. Also added LFJ V2 pool 0xb74f to `lfj_v2_registry.go` (binStep=100, decoded
@@ -78,6 +82,17 @@ timeout 300 go run ./tools/token-pricer/ 2>&1
 ```
 
 ## Recent Fixes
+
+- **Pool#1566** (`0x672E8a49...`): pangolin_v2 pool (PumpKinsFarm/WAVAX), formula=126061309518754914934
+  but evm=0 (dir=1). Token0 (`0x894aa2d0...`) is PumpKinsFarm — a FoT token (10% fee) with
+  `maxHolding` anti-whale check: `require(balanceOf(recipient) + sendAmount <= getMaxHolding())`.
+  MaxHolding = 5% of totalSupply = 1300 tokens. The router's 1e36 balance override already exceeds
+  maxHolding, so any transfer TO the router reverts. Fix: added `whitelistSlots: [4]` to the token
+  override — slot 4 is the `_isExcludedFromMaxHolding` mapping, which bypasses the holding cap.
+  100% match both directions across 3 blocks. Other pools with the same token (0x9637, 0xec5f,
+  0x2133) unaffected. **Technique**: when a FoT token has a maxHolding/maxWallet check and the
+  router's 1e36 override exceeds it, find the `_isExcludedFromMaxHolding` mapping by probing
+  known-excluded addresses (owner) across mapping slots 0-20, then add to `whitelistSlots`.
 
 - **All Hurricane pools** (including `0xb5A4E700...` pool#3870, `0x0C993764...` pool#6829):
   Hurricane DEX (HcSwapAvaxPair) has `onlyOwner` modifier on `swap()` — checks

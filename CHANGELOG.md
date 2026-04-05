@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-04-05 — Fix sushiswap_v2 pool#2236: missing from registry.txt
+
+### Fixed
+- Pool `0x4c2e615B...` (sushiswap_v2, USDC.e/0xd3ac, pool#2236) returned formula=0 but evm=nonzero in both directions
+- Root cause: pool was missing from `formulas/registry.txt`, so `GetFormulaID` returned `known=false` and the pool got a `zeroQuoter`
+- Added `0x4c2e615b68c077ac853500bba679414258aeb4c5:0` to registry.txt (formula 0 = V2 constant product, standard for sushiswap_v2)
+- 100% match both directions across 3 blocks
+
+## 2026-04-05 — Fix pangolin_v2 pool#1566: maxHolding anti-whale blocked EVM swap
+
+### Fixed
+- Pool `0x672E8a49...` (pangolin_v2, PumpKinsFarm/WAVAX) returned formula=126061309518754914934 but evm=0 (dir=1)
+- Token0 PumpKinsFarm (`0x894aa2d0...`) has `maxHolding` anti-whale: `balanceOf(recipient) + amount <= 5% of totalSupply`
+- Router's 1e36 balance override far exceeds maxHolding (1300 tokens), so any transfer TO router reverts
+- Added `whitelistSlots: [4]` to token override — slot 4 is `_isExcludedFromMaxHolding` mapping
+- 100% match both directions across 3 blocks; other pools with same token unaffected
+
 ## 2026-04-05 — Fix vapordex pool#1536: was incorrectly blacklisted
 
 ### Fixed

@@ -162,6 +162,9 @@ Integrated `splitter.Split()` into both HTTP and WASM entry points via `split` p
 - WASM tested via Node.js: single 934ms, split 1612ms (+$2,636). ~4x slower than native.
 - Browser demo (`examples/browser/02_live_quotes`) now passes `split=true` to show split
   routing in action. At $100 volume the split matches single path; visible at larger amounts.
+- Added Node.js server version (`server.mjs`) — same WASM quoter, prints spread table with
+  single vs split comparison. Usage: `node server.mjs [ws-url] [pool-limit]`.
+- Added 5 more tokens: USDT, sAVAX, LINK.e, AAVE.e, JOE (10 total).
 - Fixed Dockerfile: `apk add make` so `make build-wasm` works in alpine.
 
 ## 2026-04-04 — Proxy upgrade fixes

@@ -188,6 +188,15 @@ Results (57 test cases):
 The compete mechanism is the first strategy that provably never loses.
 
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
+
+### GreedyRecursive: binary split tournament
+
+Also tested recursive approach: start at 100%, try single. Split in half, recursively
+compete each half. If halves beat single, use them. Recurse until chunks < minPct%.
+
+`rec2` (min 2%): W=40 L=0, 933ms — zero losses but slower than c30_2 (543ms) and fewer
+wins (40 vs 42). The re-execution overhead for dirty slot tracking in the second half makes
+it ~2x slower. The fixed slab+chunk pattern of GreedyCompete is more efficient.
 - Added 5 more tokens: USDT, sAVAX, LINK.e, AAVE.e, JOE (10 total).
 - Fixed Dockerfile: `apk add make` so `make build-wasm` works in alpine.
 

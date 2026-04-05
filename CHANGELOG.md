@@ -213,6 +213,12 @@ Added Greedy(10) as a fourth contestant in SplitMax. Previously max had 5 losses
 because BFS at 10% volume finds paths that max's other strategies miss. Now max includes
 greedy itself — should have zero losses against any individual strategy.
 
+Key insight: **4 strategies run in 231ms** — less than a quarter second. Earlier we struggled
+to fit 100 chunks of a single strategy into 1 second. The formula quote cache on PoolManager
+is shared across all strategy calls: the first strategy (Greedy) warms the cache with ~2000
+pool quotes, then the remaining 3 strategies get near-free formula lookups and only pay for
+EVM verification. Cache sharing makes "run them all, pick the best" essentially free.
+
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 
 ### GreedyRecursive: binary split tournament

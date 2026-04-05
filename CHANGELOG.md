@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-04-05 — Fix lfj_v1 pool#2570 FoT mismatch (0xfb8a token)
+
+### Fixed
+- **lfj_v1 pool#2570** (`0x16f139fe...`, WAVAX/0xfb8a): token `0xfb8a29e6...` is a 5.01%
+  FoT token. Added to `fotCalculators` with subtract form `fee = amount * 501 / 10000`
+  (complement form 9499/10000 is 1 wei off). Also added to `inputDeadTokens` because the
+  token is missing from `token_overrides.json` (router can't send it as input).
+
+### Before/after
+- Pool#2570 dir=0: formula=64117050765122094050381 / evm=60904786521789477138457 (DIFF) -> MATCH
+- Pool#2570 dir=1: formula=94180588102750144 / evm=0 (MISMATCH) -> MATCH (0/0, input dead)
+
+## 2026-04-05 — Fix pharaoh_v3 pool#1563 formula mismatch
+
+### Fixed
+- **pharaoh_v3 pool#1563** (`0xe8f1e38f...`, evaUSDT/USDC): two missing pieces.
+  1. Pool was in `pharaoh_v3_registry.go` but missing from `v3_registry.go` (fee/tickSpacing).
+     Without the `v3PoolFees` entry, `newV3Pool()` returned nil. Added `{100, 1}` (fee=100, tickSpacing=1, confirmed on-chain).
+  2. **evaUSDT** (`0x501ebf66...`) missing from `token_overrides.json`. Token is a LayerZero OFT
+     compiled with Solidity >=0.8.20. Balance mapping at slot 5 (not standard slot 0, not ERC-7201).
+     Without the override, the router had zero balance, causing dir=0 (evaUSDT->USDC) EVM revert.
+     Added `{"address": "0x501ebf66...", "slot": 5}`.
+
+### Before/after
+- Pool#1563: dir=0 formula=892833/evm=0 (MISMATCH) -> 2/2 match (100%)
+- Full benchmark (3500 pools, 1 block): no new mismatches introduced
+
+### Technique
+- LayerZero OFT tokens may use non-standard balance slots despite being Solidity >=0.8.20.
+  Brute-force slots 0-255 with a known holder (e.g., the pool itself from balanceOf) to find
+  the mapping root. Slot 5 for evaUSDT.
+
+## 2026-04-05 — Fix 4 token overrides, enable output-direction swaps
+
+### Fixed
+- **APOW** (`0xbde79b2a`): added token override (slot 0). Enables 4 lfj_v1 pools.
+- **XPOW** (`0xeccb564c`): added token override (slot 0). Enables 4 lfj_v1 pools.
+- **MEMOries** (`0x136acd46`): added `shift: 128` to existing override. Reflection rate
+  ~1.75e40 made default 1e36 produce 0 effective balance. Enables 11 pools.
+- **TRACTOR JOE** (`0x542fa0b2`): fixed slot (2→1, the actual _rOwned mapping) and added
+  `shift: 128`. Reflection rate ~1.07e59. Enables 8 pools.
+- Removed all 4 tokens from `inputDeadTokens` in `pool_v2.go`.
+
+### Before/after
+- 3-block aggregate: 4257 match / 33 mismatch (99.2% correct, was ~74 mismatch before)
+- V2-type pools: 0 mismatches (was 13+ depending on block)
+
+### Dead-ends
+- Most remaining `inputDeadTokens` have zero pool liquidity (deUSD, weETH, tGBP, Unity,
+  etc.) — overrides pointless until liquidity returns.
+- SHIBAVAX (12 pools): reflection token, needs slot+shift investigation.
+- aAVAXb (3 pools): rebasing token (shares at slot 101), simple override won't work.
+- GB (30 pools), ROCO (22 pools): reflection tokens needing _rOwned-compatible overrides.
+
 ## 2026-04-05 — Fix JUNIOR token FoT mismatch (pool#2583)
 
 ### Bug

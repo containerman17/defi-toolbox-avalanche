@@ -1,13 +1,13 @@
 FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache make
 
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-# Build WASM SDK (inline make build-wasm since alpine lacks make)
-RUN GOOS=js GOARCH=wasm go build -tags nethttpomit,osusergo,netgo -o cmd/wasm-sdk/quoter.wasm ./cmd/wasm-sdk
-RUN cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" cmd/wasm-sdk/wasm_exec.js
+# Build WASM SDK
+RUN make build-wasm
 RUN cp cmd/wasm-sdk/quoter.wasm cmd/state-server/sdk/quoter.wasm
 RUN cp cmd/wasm-sdk/wasm_exec.js cmd/state-server/sdk/wasm_exec.js
 

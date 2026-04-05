@@ -187,6 +187,9 @@ Results (57 test cases):
 **c30_2 matches the best win count (43) with guaranteed non-negative output.**
 The compete mechanism is the first strategy that provably never loses.
 
+Rewrote `pathfinder/splitter/README.md` with full strategy comparison, honest trade-offs,
+benchmark numbers, and dead ends documented.
+
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 
 ### GreedyRecursive: binary split tournament

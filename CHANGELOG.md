@@ -190,6 +190,10 @@ The compete mechanism is the first strategy that provably never loses.
 Rewrote `pathfinder/splitter/README.md` with full strategy comparison, honest trade-offs,
 benchmark numbers, and dead ends documented.
 
+Added `SplitMax` — runs GreedyCompete + GreedyMixed(grad) + GreedyMixed(shuf2), returns
+the best. Cache sharing makes it barely slower than one strategy (~229ms vs ~210ms).
+W=39 L=0 — takes the max of three complementary approaches.
+
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 
 ### GreedyRecursive: binary split tournament

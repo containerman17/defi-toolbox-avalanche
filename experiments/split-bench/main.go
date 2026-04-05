@@ -81,8 +81,7 @@ func main() {
 		{"c30_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 30, 2) }},
 		{"c20_3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 20, 3) }},
 		{"c50_5", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 50, 5) }},
-		{"rec2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyRecursive(p, a, 2) }},
-		{"rec5", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyRecursive(p, a, 5) }},
+		{"max", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.SplitMax(p, a) }},
 	}
 
 	dividers := []struct {

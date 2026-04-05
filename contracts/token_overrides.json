@@ -3155,12 +3155,12 @@
     "slot": 5
   },
   {
-    "address": "0x431d5dff03120afa4bdf332c61a6e1766ef37bdb",
-    "slot": 516
-  },
-  {
     "address": "0x431bdc9975d570da5ed69c4e97e27114bcd55a86",
     "slot": 0
+  },
+  {
+    "address": "0x431d5dff03120afa4bdf332c61a6e1766ef37bdb",
+    "slot": 516
   },
   {
     "address": "0x432d38f83a50ec77c409d086e97448794cf76dcf",
@@ -4173,6 +4173,10 @@
   },
   {
     "address": "0x5ac04b69bde6f67c0bd5d6ba6fd5d816548b066a",
+    "slot": 0
+  },
+  {
+    "address": "0x5ac3461061837925b2f4367619e6e528b40ffbf5",
     "slot": 0
   },
   {
@@ -6197,7 +6201,9 @@
   {
     "address": "0x88f89be3e9b1dc1c5f208696fb9cabfcc684bd5f",
     "slot": 0,
-    "hookContracts": ["0x17427af0f2e0ed27856c3288bb902115467e2540"]
+    "hookContracts": [
+      "0x17427af0f2e0ed27856c3288bb902115467e2540"
+    ]
   },
   {
     "address": "0x8901cb2e82cc95c01e42206f8d1f417fe53e7af0",
@@ -8978,7 +8984,10 @@
   {
     "address": "0xca3130f29e296f1966e5999889d0824a9032ee97",
     "slot": 0,
-    "hookContracts": ["0x6120fa4b79ab3672322ee5ba8ed59d4303d0ff06", "0x90ca629ca55a8e70b507557c228a3a054648847e"]
+    "hookContracts": [
+      "0x6120fa4b79ab3672322ee5ba8ed59d4303d0ff06",
+      "0x90ca629ca55a8e70b507557c228a3a054648847e"
+    ]
   },
   {
     "address": "0xca58b8ad4a83d9e456ca88dab228803714074e23",
@@ -10412,6 +10421,10 @@
   },
   {
     "address": "0xee8cc5c640968b164c5876b839def0de491a1095",
+    "slot": 0
+  },
+  {
+    "address": "0xee9797d472be54ceeab0df77f3c06dbe5625cdad",
     "slot": 0
   },
   {

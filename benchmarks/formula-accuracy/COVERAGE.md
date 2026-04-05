@@ -234,6 +234,23 @@ timeout 300 go run ./tools/token-pricer/ 2>&1
   imports OZ 5.x contracts, always check for ERC-7201 storage — the balance mapping is NOT
   at a sequential slot.
 
+- **Pool#1573** (`0xD18E7B65...`): arena_v2 pool (WAVAX/0xee9797), formula=99280035643344187 but evm=0
+  (dir=1). Token1 (`0xee9797d4...`) missing from `token_overrides.json`. Added with slot 0.
+  Standard OZ ERC20 (2710 bytes bytecode, non-proxy). Same pattern as pool#3028 and pool#3032.
+  100% match both directions across 3 blocks.
+
+- **Pool#1702** (`0x4D2042D4...`): arena_v2 pool (Devs/WAVAX), formula=99260304175448463 but evm=0.
+  Token0 (`0x5ac34610...`) missing from `token_overrides.json`. Standard OZ ERC20 (2710 bytes,
+  non-proxy), balance mapping at slot 0. Same pattern as pool#3028 and pool#3032. 100% match
+  both directions across 3 blocks after fix.
+
+- **Pool#526** (`0x0DBcB787...`): vapordex pool (0x88f89b/WAVAX), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Vapordex is a V2 fork; the EVM router's custom fee path (feeBps via extraData) is not
+  triggered by the benchmark (extraData is empty for pool type 8), so both EVM and formula
+  use standard 0.3% fee. Token0 override already existed (slot 0, hookContracts).
+  100% match both directions across 3 blocks.
+
 - **Pool#2967** (`0xd998abDE...`): Missing from registry entirely. lfj_v1 pool
   (TraderJoe V1, V2 fork) with formula ID 0. Token0 (`0x2f13f452...`) is an
   EIP-1967 proxy with balance mapping at slot 51. Added registry entry + token

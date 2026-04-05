@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-04-05 — Fix arena_v2 pool#1702: missing token override
+
+### Fixed
+- Pool `0x4D2042D4...` (arena_v2, Devs/WAVAX) returned formula=99260304175448463 but evm=0 in dir=0
+- Token0 (`0x5ac34610...`) missing from `token_overrides.json` — standard OZ ERC20 (2710 bytes, non-proxy), balance at slot 0
+- Router had no token0 balance from EVM's perspective, causing swap failure
+- 100% match both directions across 3 blocks after fix
+
+## 2026-04-05 — Fix arena_v2 pool#1573: missing token override
+
+### Fixed
+- Pool `0xD18E7B65...` (arena_v2, WAVAX/0xee9797) returned formula=99280035643344187 but evm=0 in dir=1
+- Token1 (`0xee9797d4...`) missing from `token_overrides.json` — standard OZ ERC20 (2710 bytes, non-proxy), balance at slot 0
+- Router had no token1 balance from EVM's perspective, causing swap failure
+- 100% match both directions across 3 blocks after fix
+
+## 2026-04-05 — Fix vapordex pool#526: was incorrectly blacklisted
+
+### Fixed
+- Pool `0x0DBcB787...` (vapordex, 0x88f89b/WAVAX) returned formula=0 but evm=nonzero
+- Was blacklisted (-1) in `registry.txt` — changed to formula 0 (FormulaV2_30bps)
+- Vapordex is a standard V2 fork; token override already existed
+- 100% match both directions across 3 blocks
+
 ## 2026-04-05 — Fix all Hurricane pools: swap() restricted by onlyOwner
 
 ### Fixed

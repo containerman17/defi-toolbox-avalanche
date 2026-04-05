@@ -1289,6 +1289,11 @@
     "slot": 0
   },
   {
+    "address": "0x198dd15f2624edf4a4cbcf0b3f1770a6bcfac54c",
+    "slot": 0,
+    "erc7201_base": "0x52c63247e1f47db19d5ce0460030c497f067ca4cebf71ba98eeadabe20bace00"
+  },
+  {
     "address": "0x19a7a0f33d39b0d8b47ae85be3e3ab041c7e1006",
     "slot": 0
   },

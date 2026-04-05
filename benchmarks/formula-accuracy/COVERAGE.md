@@ -16,6 +16,13 @@ Living document for investigating and fixing formula coverage gaps.
 
 **99.1% correct** — 4181 match, 40 mismatch, 4221 tested quotes (2000 pools, 1 block).
 
+Fixed uniswap_v2 pool#3194 (`0x84185907...`, 0x198dd15f/WAVAX): token0 (`0x198dd15f...`,
+UltimateTokenOwnable) missing from `token_overrides.json`. Token uses ERC-7201 namespaced
+storage (standard OZ `0x52c63247...bace00`). Without override, router had zero balance,
+causing dir=0 revert. Also fixes sibling uniswap_v3 pool#3193 (`0x221d170c...`). 100% match
+both directions across 3 blocks. **Technique**: "CreateMyToken" factory tokens use OZ
+ERC20Upgradeable with Initializable + ERC-7201; balance storage is the standard namespace.
+
 Batch registered 4 lfj_v1 pools missing from `registry.txt` — all returned formula=0 while
 EVM returned nonzero. All use FormulaV2_30bps (formula=0). Token overrides already existed.
 - Pool#1985 (`0x2915c754...`, WAVAX/0xcd59): 100% match both dirs.

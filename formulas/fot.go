@@ -770,4 +770,26 @@ var reflectionTokenConfigs = map[string]reflectionTokenConfig{
 		rOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
 		tOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
 	},
+
+	// SLED (sledfinance): 2% pure reflection tax (all goes to _reflectFee, no team fee, no burn).
+	// _getTValues: tFee = tAmount.mul(2).div(100) — unconditional.
+	// _reflectFee only reduces _rTotal by rFee. _tTotal is constant (no burn).
+	// Storage layout (standard RFI fork with Ownable):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_rTotal, slot 7=_tFeeTotal.
+	// _tTotal = 10 * 10**6 * 10**9 = 10_000_000_000_000_000 (constant, 9 decimals).
+	// Pools: 0x7e449382 (elkdex, SLED/ELK, pool#3076), 0x18c8e134 (pangolin_v2, SLED/WAVAX).
+	// Was fotPct(2) — ~22 PPM residual from reflection redistribution drift.
+	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		tTotal:       new(big.Int).Mul(big.NewInt(10_000_000), big.NewInt(1e9)),
+		reflectRate:  2,
+		reflectDenom: 100,
+		calcFee:      fotPct(2).calcFee,
+		// Excluded accounts: _getRate() uses _getCurrentSupply() which subtracts
+		// excluded accounts' rOwned/tOwned from supply.
+		excludedArraySlot: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000005"),
+		rOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+		tOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
+	},
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-05 — Fix token override for pool#3194 (0x198dd15f ERC-7201 token)
+
+- Pool `0x84185907...` (uniswap_v2, 0x198dd15f/WAVAX) had formula=18221199990452332 but evm=0 (dir=0)
+- Root cause: token0 (`0x198dd15f...`, UltimateTokenOwnable) missing from `token_overrides.json`
+- Token uses standard OZ ERC-7201 namespaced storage (`0x52c63247...bace00`)
+- Added override with `erc7201_base`. Also fixes sibling uniswap_v3 pool#3193 (`0x221d170c...`)
+- 100% match both directions across 3 blocks
+
 ## 2026-04-05 — Register 4 lfj_v1 pools missing from registry.txt
 
 - Pools 0x2915c754 (WAVAX/0xcd59), 0x2FFEA1BE (USDt/0xd3ac), 0x82C39cc3 (USDC/0xc3e8),

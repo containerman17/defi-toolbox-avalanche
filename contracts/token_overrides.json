@@ -960,8 +960,7 @@
   {
     "address": "0x136acd46c134e8269052c62a67042d6bdedde3c9",
     "slot": 15,
-    "rOwnedSlot": 15,
-    "rTotalSlot": 14
+    "shift": 128
   },
   {
     "address": "0x13a466998ce03db73abc2d4df3bbd845ed1f28e7",

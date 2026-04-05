@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-05 — Formula accuracy: 95.8% → 98.0% (308 → 140 mismatches)
+
+Systematic formula accuracy campaign on 3500 pools. Zeroed 11 of 15 ecosystems.
+See earlier entries for detailed per-fix breakdown.
+
 ## 2026-04-05 — evaUSDC override, more pharaoh_v3 fixes
 
 - evaUSDC token override (slot 5) for pharaoh_v3 0x612B81f

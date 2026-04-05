@@ -210,6 +210,9 @@ func runBlockBenchmark(
 			if evmErr == nil && len(ret) >= 32 {
 				var out uint256.Int
 				out.SetBytes(ret[:32])
+				if pool.Address == common.HexToAddress("0x70201236B99f79392B877e760898061917796AeB") {
+					fmt.Fprintf(os.Stderr, "\n[DEBUG-FWD] pool=%s dir=%d out=%s amountIn=%s\n", pool.Address.Hex(), j.fwdDir, out.Dec(), amountIn.Dec())
+				}
 				groundMu.Lock()
 				evmGround[quoteKey{pool.Address, j.fwdDir, j.revDir}] = out
 				// For 2-token pools: set the reverse direction's amount to this EVM output
@@ -252,6 +255,15 @@ func runBlockBenchmark(
 				groundMu.Lock()
 				evmGround[quoteKey{pool.Address, j.fwdDir, j.revDir}] = out
 				groundMu.Unlock()
+			}
+			if pool.Address == common.HexToAddress("0x70201236B99f79392B877e760898061917796AeB") {
+				if evmErr != nil {
+					fmt.Fprintf(os.Stderr, "\n[DEBUG-REV] pool=%s dir=%d evmErr=%v retLen=%d ret=%x amountIn=%s\n", pool.Address.Hex(), j.fwdDir, evmErr, len(ret), ret, amountIn.Dec())
+				} else {
+					var out uint256.Int
+					if len(ret) >= 32 { out.SetBytes(ret[:32]) }
+					fmt.Fprintf(os.Stderr, "\n[DEBUG-REV] pool=%s dir=%d OK out=%s amountIn=%s\n", pool.Address.Hex(), j.fwdDir, out.Dec(), amountIn.Dec())
+				}
 			}
 		}(job)
 	}

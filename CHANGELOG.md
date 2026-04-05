@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-05 — Fix all Hurricane pools: swap() restricted by onlyOwner
+
+### Fixed
+- All ~28 Hurricane DEX pools (e.g. `0xb5A4E700...`, `0x0C993764...`) returned formula=nonzero but evm=0
+- Root cause: Hurricane's `swap()` has an `onlyOwner` modifier checking `IUniswapV2Factory(factory).owner() == msg.sender` — the router is never the factory owner, so all swaps revert
+- `newHurricanePool` now returns nil (zeroQuoter), matching EVM's 0 output across all 3 blocks
+- Removed unused hurricane constants (hurricaneReservesSlot, hurricaneFeeSlot, hurricaneFactor30, hurricaneFactor50) from `formulas/v2.go`
+
+## 2026-04-05 — Fix lfj_v1 pool#664 (JPYC/USDC): missing token override
+
+### Fixed
+- Pool `0xee9BDb33...` (lfj_v1 JPYC/USDC) returned formula=878555 but evm=0 in dir=0
+- JPYC token (`0x431d5dff...`) missing from `token_overrides.json` — EIP-1967 proxy with FiatToken-style layout, balance mapping at slot 516
+- Router had no JPYC balance from EVM's perspective, causing TRANSFER_FAILED
+- 100% match both directions across 3 blocks after fix
+
 ## 2026-04-05 — Formula accuracy push: 95.8% → 96.7% (308 → 234 mismatches)
 
 Systematic campaign to fix formula accuracy across all pool types. 3500 pools, 1 block.

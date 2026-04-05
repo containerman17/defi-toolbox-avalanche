@@ -79,6 +79,16 @@ timeout 300 go run ./tools/token-pricer/ 2>&1
 
 ## Recent Fixes
 
+- **All Hurricane pools** (including `0xb5A4E700...` pool#3870, `0x0C993764...` pool#6829):
+  Hurricane DEX (HcSwapAvaxPair) has `onlyOwner` modifier on `swap()` — checks
+  `IUniswapV2Factory(factory).owner() == msg.sender`. The router is never the factory
+  owner (`0xd8aa70f7...`), so all Hurricane swaps revert with "HcSwap: NOT OWNER".
+  Fix: `newHurricanePool` now returns nil (zeroQuoter), matching EVM's 0 output.
+  Removed unused hurricane storage slot constants (hurricaneReservesSlot, hurricaneFeeSlot,
+  hurricaneFactor30, hurricaneFactor50). All ~28 hurricane pools now match at 0 across
+  3 blocks. **Technique**: when ALL pools from a DEX return evm=0, check the swap()
+  modifier — some V2 forks restrict swap() to the factory owner or a whitelisted router.
+
 - **Pool#3082** (`0x13329C79...`): platypus pool (YUSD/USDC), formula=0 but evm=nonzero.
   Missing from both `registry.txt` (added formula=11) and `platypusAssetMap` in platypus.go.
   Asset addresses queried on-chain via `assetOf(address)`: YUSD asset=0xc75b2b90 (18 dec),

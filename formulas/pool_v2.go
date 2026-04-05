@@ -102,22 +102,12 @@ func newV2PoolWithSlot(addr common.Address, reader StorageReader, slot common.Ha
 	}
 }
 
-// newHurricanePool constructs a V2Pool for Hurricane DEX pools.
-// Hurricane stores reserves at slot 11 (not 8) due to extra ERC20 storage (name, symbol, decimals).
-// Fee is 0.3% or 0.5% depending on crossPair flag at slot 10 (packed with token1).
+// newHurricanePool returns nil — Hurricane DEX pools have an onlyOwner modifier
+// on swap() that checks IUniswapV2Factory(factory).owner() == msg.sender.
+// The router is never the factory owner, so all Hurricane swaps revert on-chain.
+// Returning nil gives the pool a zeroQuoter, matching the EVM's 0 output.
 func newHurricanePool(addr common.Address, reader StorageReader) *V2Pool {
-	// Read crossPair from slot 10: token1 (20 bytes, left-padded to 32) + crossPair (1 byte)
-	// In Solidity, address occupies the low 20 bytes, bool occupies the next byte up.
-	// Layout: [0..11 padding][crossPair 1 byte][token1 20 bytes]
-	slot10 := reader(addr, hurricaneFeeSlot)
-	data10 := slot10.Bytes()
-	crossPair := data10[11] != 0 // byte just above the 20-byte address
-
-	f := hurricaneFactor30
-	if crossPair {
-		f = hurricaneFactor50
-	}
-	return newV2PoolWithSlot(addr, reader, hurricaneReservesSlot, f)
+	return nil
 }
 
 // newFraxswapPool constructs a V2Pool for Fraxswap TWAMM pools.

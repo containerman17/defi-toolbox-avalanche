@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-05 — SOCK deadPoolDir, PumpKinsFarm whitelistSlots, more registry entries
+
+- SOCK (BulletCollection) triggers fee-swap reentrancy through same pair — added to deadPoolDirs
+- PumpKinsFarm maxHolding bypass via whitelistSlots [4]
+- Added partyswap, uniswap_v2, elkdex, sushiswap pools to registry
+- More token overrides (slot 0, 516, shift:128, disableSlots)
+
 ## 2026-04-05 — Fix uniswap_v2 pool#1703: reflection token override underflow + reentrancy lock
 
 ### Fixed

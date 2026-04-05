@@ -73,7 +73,6 @@ func (p *V2Pool) SetTokenBalances(caller EVMCaller, token0, token1 common.Addres
 	if ret, ok := caller(token1, calldata); ok && len(ret) >= 32 {
 		p.balance1.SetBytes(ret[:32])
 	}
-
 }
 
 func newV2Pool(addr common.Address, reader StorageReader) *V2Pool {

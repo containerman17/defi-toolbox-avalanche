@@ -268,10 +268,15 @@ var platypusAssetMap = map[common.Address]map[common.Address]platAssetEntry{
 		common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): {common.HexToAddress("0x2469eb1f646f57c1987b65a1bf1cdc47856d05fc"), 6},  // USDC
 		common.HexToAddress("0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"): {common.HexToAddress("0xa6e3814743dffbcd3f561a26fecec6be25986b9a"), 6},  // USDt
 	},
-	// Pool 0x2779: USDC/USDbC
+	// Pool 0x2779…ff3af: USDC/USDbC
 	common.HexToAddress("0x27792000fca68acdc2a08c1eed32e7a2a66ff3af"): {
 		common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): {common.HexToAddress("0xba056cdb411603bbd69c69f1422d37e46d66538c"), 6}, // USDC
-		common.HexToAddress("0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64"): {common.HexToAddress("0xd60bb9b48cbaad0f6e573f3c95632d8effa7d0d6"), 6}, // USDbC
+		common.HexToAddress("0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64"): {common.HexToAddress("0xd60bb9b48cbaad0f6e573f3c95632d8effa7d0d6"), 18}, // USDbC (18 decimals)
+	},
+	// Pool 0x2779…f6deb: USDC/USDbC (pool#2266)
+	common.HexToAddress("0x2779ebcdb6c70d10174138f43892400e132f6deb"): {
+		common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): {common.HexToAddress("0xba05bf8e40c3ac8896f4c83b819c669c10975d22"), 6},  // USDC
+		common.HexToAddress("0xd24c2ad096400b6fbcd2ad8b24e7acbc21a1da64"): {common.HexToAddress("0xd60b7538ae0967015e821181d2f8c2c0ea007614"), 18}, // USDbC (18 decimals)
 	},
 	// Pool 0x1332: YUSD/USDC
 	common.HexToAddress("0x13320b3e1050b48776e6a019423effa7c5eba72e"): {
@@ -282,5 +287,10 @@ var platypusAssetMap = map[common.Address]map[common.Address]platAssetEntry{
 	common.HexToAddress("0xcee236fdae6efba6a7e3c2a2c3a792fa27f3e263"): {
 		common.HexToAddress("0x152b9d0fdc40c096757f570a51e494bd4b943e50"): {common.HexToAddress("0x00c0ff520db2fabd7abb6b4013bbc538c2e52360"), 8}, // BTC.b
 		common.HexToAddress("0x50b7545627a5162f82a992c33b87adc75187b218"): {common.HexToAddress("0xe461378dc0b9b3b69ee24e689f8ef4ce47e92251"), 8}, // WBTC.e
+	},
+	// Pool 0x1332…c207: YUSD/USDC (pool#3082)
+	common.HexToAddress("0x13329c7905f1ee55c3c7d7bfc26c1197c512c207"): {
+		common.HexToAddress("0x1c20e891bab6b1727d14da358fae2984ed9b59eb"): {common.HexToAddress("0xc75b2b90079492922af96ba53988d7b384158335"), 18}, // YUSD
+		common.HexToAddress("0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"): {common.HexToAddress("0xa551480dc5399921f8a73e02ec327f2fd7e5ddc0"), 6},  // USDC
 	},
 }

@@ -398,7 +398,7 @@ func ApplyOverrides(base *statedb.StateDB, overrides []ParsedOverride) *statedb.
 	}
 	overlay := base.NewOverlay()
 	for _, po := range overrides {
-		if po.Code != nil {
+		if po.Code != nil || po.Balance != nil {
 			overlay.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
 		}
 		for _, s := range po.Slots {
@@ -429,7 +429,7 @@ func ApplyOverridesFlat(base *statedb.StateDB, overrides []ParsedOverride) *stat
 	}
 	overlay := base.NewOverlay()
 	for _, po := range overrides {
-		if po.Code != nil {
+		if po.Code != nil || po.Balance != nil {
 			overlay.SetAccount(po.Addr, po.Balance, po.Nonce, po.Code)
 		}
 		for _, s := range po.Slots {

@@ -4,8 +4,24 @@ import (
 	"math/big"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
+
+// solKeccak256Slot returns keccak256(slot) as a 32-byte slice.
+// Used to compute the base storage location for Solidity dynamic arrays.
+func solKeccak256Slot(slot common.Hash) []byte {
+	return crypto.Keccak256(slot[:])
+}
+
+// solMappingSlot computes the storage slot for mapping[addr] at base slot:
+// keccak256(addr_padded_to_32 ++ slot).
+func solMappingSlot(addr common.Address, slot common.Hash) common.Hash {
+	var buf [64]byte
+	copy(buf[12:32], addr[:])
+	copy(buf[32:64], slot[:])
+	return crypto.Keccak256Hash(buf[:])
+}
 
 // TokenModel describes how a token adjusts transfer amounts.
 // Normal ERC20 tokens use the identity (no adjustment).
@@ -87,6 +103,13 @@ type reflectionTokenModel struct {
 	burnRate     int64        // numerator for burn fee (0 = no burn)
 	burnDenom    int64        // denominator for burn fee (0 = no burn)
 	calcFee      func(*big.Int) *big.Int // total fee calculator (same as fotCalculators entry)
+
+	// Excluded account support: RFI _getRate() subtracts excluded accounts from supply.
+	// If excludedArraySlot is non-zero, getCurrentSupply reads the _excluded array and
+	// subtracts each account's _rOwned/_tOwned from rTotal/tTotal.
+	excludedArraySlot common.Hash // storage slot for _excluded dynamic array (0 = no exclusions)
+	rOwnedSlot        common.Hash // storage slot for _rOwned mapping
+	tOwnedSlot        common.Hash // storage slot for _tOwned mapping
 }
 
 func (r *reflectionTokenModel) IsFoT() bool { return true }
@@ -97,6 +120,65 @@ func (r *reflectionTokenModel) AdjustInput(amount *uint256.Int) uint256.Int {
 
 func (r *reflectionTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int {
 	return r.adjustReflection(amount)
+}
+
+// getCurrentSupply mirrors Solidity's _getCurrentSupply(), which subtracts
+// excluded accounts' _rOwned and _tOwned from the raw totals.
+// Returns (rSupply, tSupply). If no excluded accounts are configured or the
+// array is empty, returns (rTotal, tTotal) unchanged.
+func (r *reflectionTokenModel) getCurrentSupply(rTotal, tTotal *big.Int) (rSupply, tSupply *big.Int) {
+	if (r.excludedArraySlot == common.Hash{}) {
+		return rTotal, tTotal
+	}
+
+	// Read _excluded.length from the array slot
+	lengthRaw := r.reader(r.tokenAddr, r.excludedArraySlot)
+	length := new(big.Int).SetBytes(lengthRaw[:])
+	if length.Sign() == 0 || length.BitLen() > 16 {
+		// No excluded accounts or absurdly large (safety cap)
+		return rTotal, tTotal
+	}
+	n := int(length.Int64())
+
+	// Array elements start at keccak256(slot)
+	arrayBase := new(big.Int).SetBytes(solKeccak256Slot(r.excludedArraySlot))
+
+	rSupply = new(big.Int).Set(rTotal)
+	tSupply = new(big.Int).Set(tTotal)
+
+	for i := 0; i < n; i++ {
+		// Read excluded address from array element
+		elemSlot := new(big.Int).Add(arrayBase, big.NewInt(int64(i)))
+		var elemSlotHash common.Hash
+		elemSlot.FillBytes(elemSlotHash[:])
+		addrRaw := r.reader(r.tokenAddr, elemSlotHash)
+		var excAddr common.Address
+		copy(excAddr[:], addrRaw[12:32]) // address is right-aligned in 32-byte slot
+
+		// Read _rOwned[excAddr]: keccak256(addr_padded ++ rOwnedSlot)
+		rOwnedHash := r.reader(r.tokenAddr, solMappingSlot(excAddr, r.rOwnedSlot))
+		rOwned := new(big.Int).SetBytes(rOwnedHash[:])
+
+		// Read _tOwned[excAddr]: keccak256(addr_padded ++ tOwnedSlot)
+		tOwnedHash := r.reader(r.tokenAddr, solMappingSlot(excAddr, r.tOwnedSlot))
+		tOwned := new(big.Int).SetBytes(tOwnedHash[:])
+
+		// Solidity safety: if any excluded account exceeds supply, return raw totals
+		if rOwned.Cmp(rSupply) > 0 || tOwned.Cmp(tSupply) > 0 {
+			return rTotal, tTotal
+		}
+
+		rSupply.Sub(rSupply, rOwned)
+		tSupply.Sub(tSupply, tOwned)
+	}
+
+	// Solidity safety: if rSupply < rTotal/tTotal, return raw totals
+	minR := new(big.Int).Div(rTotal, tTotal)
+	if rSupply.Cmp(minR) < 0 {
+		return rTotal, tTotal
+	}
+
+	return rSupply, tSupply
 }
 
 // adjustReflection computes the exact post-reflection received amount.
@@ -145,8 +227,11 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int
 		}
 	}
 
-	// rate = _rTotal / _tTotal (integer division, same as Solidity _getRate)
-	rate := new(big.Int).Div(rTotal, tTotal)
+	// Compute effective supply: _getCurrentSupply() subtracts excluded accounts
+	rSupply, tSupply := r.getCurrentSupply(rTotal, tTotal)
+
+	// rate = rSupply / tSupply (integer division, same as Solidity _getRate)
+	rate := new(big.Int).Div(rSupply, tSupply)
 
 	// rFee = tFee * rate (reflection fee in r-space)
 	rFee := new(big.Int).Mul(tFee, rate)
@@ -161,23 +246,24 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int
 	// (rAmount - rFee - rBurn - rTeam = tTransfer * rate)
 	rTransferAmount := new(big.Int).Mul(tTransfer, rate)
 
-	// After _reflectFeeBurn:
-	//   newRTotal = _rTotal - rFee - rBurn (both reduce _reflectSupply)
-	//   newTTotal = _tTotal - tBurn        (only burn reduces _totalSupply)
-	newRTotal := new(big.Int).Sub(rTotal, rFee)
-	newTTotal := new(big.Int).Set(tTotal)
+	// After _reflectFee: _rTotal -= rFee (and rBurn if applicable).
+	// This changes the effective supply for the new rate calculation.
+	// rSupply decreases by rFee + rBurn (excluded accounts' rOwned unchanged).
+	// tSupply decreases by tBurn only (excluded accounts' tOwned unchanged).
+	newRSupply := new(big.Int).Sub(rSupply, rFee)
+	newTSupply := new(big.Int).Set(tSupply)
 	if rBurn != nil {
-		newRTotal.Sub(newRTotal, rBurn)
-		newTTotal.Sub(newTTotal, tBurn)
+		newRSupply.Sub(newRSupply, rBurn)
+		newTSupply.Sub(newTSupply, tBurn)
 	}
-	if newRTotal.Sign() <= 0 || newTTotal.Sign() <= 0 {
+	if newRSupply.Sign() <= 0 || newTSupply.Sign() <= 0 {
 		result, _ := uint256.FromBig(tTransfer)
 		if result == nil { return uint256.Int{} }
 		return *result
 	}
 
-	// newRate = newRTotal / newTTotal
-	newRate := new(big.Int).Div(newRTotal, newTTotal)
+	// newRate = newRSupply / newTSupply
+	newRate := new(big.Int).Div(newRSupply, newTSupply)
 	if newRate.Sign() <= 0 {
 		result, _ := uint256.FromBig(tTransfer)
 		if result == nil { return uint256.Int{} }
@@ -216,16 +302,19 @@ func NewTokenModelRegistry(reader StorageReader) *TokenModelRegistry {
 	if reader != nil {
 		for addr, cfg := range reflectionTokenConfigs {
 			r.models[addr] = &reflectionTokenModel{
-				tokenAddr:    common.HexToAddress(addr),
-				reader:       reader,
-				rTotalSlot:   cfg.rTotalSlot,
-				tTotalSlot:   cfg.tTotalSlot,
-				tTotal:       cfg.tTotal,
-				reflectRate:  cfg.reflectRate,
-				reflectDenom: cfg.reflectDenom,
-				burnRate:     cfg.burnRate,
-				burnDenom:    cfg.burnDenom,
-				calcFee:      cfg.calcFee,
+				tokenAddr:         common.HexToAddress(addr),
+				reader:            reader,
+				rTotalSlot:        cfg.rTotalSlot,
+				tTotalSlot:        cfg.tTotalSlot,
+				tTotal:            cfg.tTotal,
+				reflectRate:       cfg.reflectRate,
+				reflectDenom:      cfg.reflectDenom,
+				burnRate:          cfg.burnRate,
+				burnDenom:         cfg.burnDenom,
+				calcFee:           cfg.calcFee,
+				excludedArraySlot: cfg.excludedArraySlot,
+				rOwnedSlot:        cfg.rOwnedSlot,
+				tOwnedSlot:        cfg.tOwnedSlot,
 			}
 		}
 	}

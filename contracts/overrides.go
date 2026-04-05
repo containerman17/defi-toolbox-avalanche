@@ -2,7 +2,9 @@ package contracts
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"defi-toolbox/pathfinder"
 
@@ -17,15 +19,20 @@ var deployedRouterJSON string
 //go:embed token_overrides.json
 var tokenOverridesJSON string
 
+//go:embed bytecode.hex
+var routerBytecodeHex string
+
 type tokenOverrideEntry struct {
-	Address       string `json:"address"`
-	Slot          int    `json:"slot"`
-	AllowanceSlot *int   `json:"allowance_slot,omitempty"` // nil = slot+1 (default)
-	ERC7201Base   string `json:"erc7201_base,omitempty"`
-	Shift         int    `json:"shift,omitempty"`
-	Vyper         bool   `json:"vyper,omitempty"` // Vyper uses keccak(slot, addr) instead of keccak(addr, slot)
-	HookContract  string `json:"hookContract,omitempty"`
-	DisableSlots  []int  `json:"disableSlots,omitempty"`
+	Address        string `json:"address"`
+	Slot           int    `json:"slot"`
+	AllowanceSlot  *int   `json:"allowance_slot,omitempty"` // nil = slot+1 (default)
+	ERC7201Base    string `json:"erc7201_base,omitempty"`
+	Shift          int    `json:"shift,omitempty"`
+	Vyper          bool   `json:"vyper,omitempty"` // Vyper uses keccak(slot, addr) instead of keccak(addr, slot)
+	HookContracts  []string `json:"hookContracts,omitempty"`
+	DisableSlots   []int  `json:"disableSlots,omitempty"`
+	WhitelistSlots     []int  `json:"whitelistSlots,omitempty"`     // mapping slots to set mapping[addr]=true for router (e.g., excludedFromLockPeriod)
+	RouterAddressSlots []int  `json:"routerAddressSlots,omitempty"` // plain slots to overwrite with the router address (e.g., registered uniswapV2Router)
 }
 
 var overrideMap map[common.Address]*tokenOverrideEntry
@@ -50,19 +57,22 @@ var DeployedRouter = config.Address
 var DeployedBlock = config.Block
 
 type deployConfig struct {
-	Address common.Address
-	Block   int
+	Address        common.Address
+	Implementation common.Address
+	Block          int
 }
 
 func parseConfig() deployConfig {
 	var raw struct {
-		Address string `json:"address"`
-		Block   int    `json:"block"`
+		Address        string `json:"address"`
+		Implementation string `json:"implementation"`
+		Block          int    `json:"block"`
 	}
 	json.Unmarshal([]byte(deployedRouterJSON), &raw)
 	return deployConfig{
-		Address: common.HexToAddress(raw.Address),
-		Block:   raw.Block,
+		Address:        common.HexToAddress(raw.Address),
+		Implementation: common.HexToAddress(raw.Implementation),
+		Block:          raw.Block,
 	}
 }
 
@@ -130,19 +140,47 @@ func BuildSingleTokenOverride(routerAddr, token common.Address, amount *uint256.
 		}{Slot: dsHash, Value: common.Hash{}})
 	}
 
-	if entry.HookContract != "" {
-		// Hook neutralization needs a separate override — caller handles this
+	// WhitelistSlots: set mapping[routerAddr] = true
+	trueVal := common.Hash(uint256.NewInt(1).Bytes32())
+	for _, ws := range entry.WhitelistSlots {
+		var key [64]byte
+		copy(key[12:32], routerAddr[:])
+		wsHash := common.BigToHash(uint256.NewInt(uint64(ws)).ToBig())
+		copy(key[32:64], wsHash[:])
+		wlSlot := crypto.Keccak256Hash(key[:])
+		po.Slots = append(po.Slots, struct {
+			Slot  common.Hash
+			Value common.Hash
+		}{Slot: wlSlot, Value: trueVal})
+	}
+
+	// RouterAddressSlots: overwrite plain slots with the router address
+	routerHash := common.BytesToHash(routerAddr[:])
+	for _, rs := range entry.RouterAddressSlots {
+		rsHash := common.BigToHash(uint256.NewInt(uint64(rs)).ToBig())
+		po.Slots = append(po.Slots, struct {
+			Slot  common.Hash
+			Value common.Hash
+		}{Slot: rsHash, Value: routerHash})
 	}
 
 	return &po
 }
 
 func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []pathfinder.ParsedOverride {
-	// Collect all unique tokens
+	// Collect all unique tokens and V4 tokens (for PoolManager balance overrides)
 	tokenSet := make(map[common.Address]bool)
+	v4TokenSet := make(map[common.Address]bool) // ERC20 tokens used by V4 pools
 	for i := range pools {
 		for _, t := range pools[i].Tokens {
 			tokenSet[t] = true
+		}
+		if pools[i].PoolType == 9 { // uniswap_v4
+			for _, t := range pools[i].Tokens {
+				if (t != common.Address{}) { // skip native AVAX
+					v4TokenSet[t] = true
+				}
+			}
 		}
 	}
 
@@ -151,6 +189,59 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 	largeBalance := new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(36)) // 1e36 — covers reverse swaps of low-value tokens
 
 	var overrides []pathfinder.ParsedOverride
+
+	// Native AVAX balance for the router: V4 pools with currency0=address(0) require
+	// the router to hold native AVAX for settle{value:...}() during swap execution.
+	if tokenSet[common.Address{}] {
+		overrides = append(overrides, pathfinder.ParsedOverride{
+			Addr:    routerAddr,
+			Balance: new(uint256.Int).Set(largeBalance),
+		})
+	}
+
+	// Override the router implementation bytecode so debugSwapSingle handles
+	// native AVAX output (address(0) as tokenOut). Without this, calling
+	// IERC20(address(0)).balanceOf() reverts because there's no contract at address(0).
+	if implCode, err := hex.DecodeString(strings.TrimSpace(routerBytecodeHex)); err == nil && len(implCode) > 0 {
+		overrides = append(overrides, pathfinder.ParsedOverride{
+			Addr: config.Implementation,
+			Code: implCode,
+		})
+	}
+
+	// Deploy a shim at address(0) so IERC20(address(0)).balanceOf(addr) returns
+	// the native AVAX balance of addr. Without code at address(0), Solidity 0.8+
+	// reverts on any external call to it (EXTCODESIZE check).
+	// This makes debugSwapSingle's balance delta measurement work for native AVAX.
+	if tokenSet[common.Address{}] {
+		// EVM bytecode: reads address from calldata[4..36], returns its BALANCE.
+		//   PUSH1 0x04       // [4]
+		//   CALLDATALOAD     // [calldata[4:36]] = left-padded address
+		//   PUSH1 0x60       // [96, addr_padded]
+		//   SHR              // [address] (shift right 96 bits to extract 160-bit address)
+		//   BALANCE          // [balance]
+		//   PUSH0            // [0, balance]
+		//   MSTORE           // [] (store balance at memory[0:32])
+		//   PUSH1 0x20       // [32]
+		//   PUSH0            // [0, 32]
+		//   RETURN           // return memory[0:32]
+		nativeShim := []byte{
+			0x60, 0x04, // PUSH1 4
+			0x35,       // CALLDATALOAD
+			0x60, 0x60, // PUSH1 96
+			0x1c,       // SHR
+			0x31,       // BALANCE
+			0x5f,       // PUSH0
+			0x52,       // MSTORE
+			0x60, 0x20, // PUSH1 32
+			0x5f,       // PUSH0
+			0xf3,       // RETURN
+		}
+		overrides = append(overrides, pathfinder.ParsedOverride{
+			Addr: common.Address{}, // address(0)
+			Code: nativeShim,
+		})
+	}
 	hookSet := make(map[common.Address]bool)
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]
@@ -185,19 +276,58 @@ func buildTokenOverrides(routerAddr common.Address, pools []pathfinder.Pool) []p
 			}{Slot: dsHash, Value: common.Hash{}})
 		}
 
+		// WhitelistSlots: set mapping[routerAddr] = true for each whitelist mapping slot.
+		// This bypasses transfer restrictions (e.g., excludedFromLockPeriod, isExcludedFromFee)
+		// so the router can send/receive tokens during swap simulation.
+		trueVal := common.Hash(uint256.NewInt(1).Bytes32())
+		for _, ws := range entry.WhitelistSlots {
+			var key [64]byte
+			copy(key[12:32], routerAddr[:])
+			wsHash := common.BigToHash(uint256.NewInt(uint64(ws)).ToBig())
+			copy(key[32:64], wsHash[:])
+			wlSlot := crypto.Keccak256Hash(key[:])
+			po.Slots = append(po.Slots, struct {
+				Slot  common.Hash
+				Value common.Hash
+			}{Slot: wlSlot, Value: trueVal})
+		}
+
+		// RouterAddressSlots: overwrite plain slots with the router address
+		routerHash := common.BytesToHash(routerAddr[:])
+		for _, rs := range entry.RouterAddressSlots {
+			rsHash := common.BigToHash(uint256.NewInt(uint64(rs)).ToBig())
+			po.Slots = append(po.Slots, struct {
+				Slot  common.Hash
+				Value common.Hash
+			}{Slot: rsHash, Value: routerHash})
+		}
+
+		// V4 PoolManager balance: V4 pools store tokens in the singleton PoolManager.
+		// The PM's take() transfers ERC20 tokens from PM to the router, so the PM
+		// needs a balance override for every ERC20 token used by V4 pools.
+		if v4TokenSet[token] {
+			pmSlot := computeBalanceSlot(pathfinder.V4PoolManager, entry)
+			po.Slots = append(po.Slots, struct {
+				Slot  common.Hash
+				Value common.Hash
+			}{Slot: pmSlot, Value: value})
+		}
+
 		overrides = append(overrides, po)
 
-		// HookContract: replace hook contract code with a no-op so staking hooks
-		// don't interfere with swap execution.
-		if entry.HookContract != "" {
-			hookAddr := common.HexToAddress(entry.HookContract)
+		// HookContracts: replace hook contract code with a no-op so external hooks
+		// (staking, antiBot, antiWhale) don't interfere with swap execution.
+		// Bytecode: PUSH1 0x20, PUSH0, RETURN — returns 32 zero bytes.
+		// This makes any high-level Solidity call succeed and decode the return as
+		// false/0, which is the safe default for guard functions like isBotDetected().
+		for _, hc := range entry.HookContracts {
+			hookAddr := common.HexToAddress(hc)
 			if !hookSet[hookAddr] {
 				hookSet[hookAddr] = true
-				// STOP opcode (0x00) — any call to this contract returns successfully with no data
 				overrides = append(overrides, pathfinder.ParsedOverride{
 					Addr:    hookAddr,
 					Balance: uint256.NewInt(0),
-					Code:    []byte{0x00},
+					Code:    []byte{0x60, 0x20, 0x5f, 0xf3},
 				})
 			}
 		}
@@ -311,24 +441,52 @@ func BuildSenderOverrides(sender, routerAddr common.Address, pools []pathfinder.
 			}{Slot: dsHash, Value: common.Hash{}})
 		}
 
+		// WhitelistSlots: set mapping[addr] = true for both sender and router
+		trueVal := common.Hash(uint256.NewInt(1).Bytes32())
+		for _, ws := range entry.WhitelistSlots {
+			wsHash := common.BigToHash(uint256.NewInt(uint64(ws)).ToBig())
+			for _, addr := range []common.Address{sender, routerAddr} {
+				var key [64]byte
+				copy(key[12:32], addr[:])
+				copy(key[32:64], wsHash[:])
+				wlSlot := crypto.Keccak256Hash(key[:])
+				po.Slots = append(po.Slots, struct {
+					Slot  common.Hash
+					Value common.Hash
+				}{Slot: wlSlot, Value: trueVal})
+			}
+		}
+
+		// RouterAddressSlots: overwrite plain slots with the router address
+		routerHash := common.BytesToHash(routerAddr[:])
+		for _, rs := range entry.RouterAddressSlots {
+			rsHash := common.BigToHash(uint256.NewInt(uint64(rs)).ToBig())
+			po.Slots = append(po.Slots, struct {
+				Slot  common.Hash
+				Value common.Hash
+			}{Slot: rsHash, Value: routerHash})
+		}
+
 		overrides = append(overrides, po)
 	}
 
-	// HookContract overrides: replace hook contract code with no-op
+	// HookContracts overrides: replace hook contract code with return-false no-op
 	hookSet := make(map[common.Address]bool)
 	for token := range tokenSet {
 		entry, ok := overrideMap[token]
-		if !ok || entry.HookContract == "" {
+		if !ok || len(entry.HookContracts) == 0 {
 			continue
 		}
-		hookAddr := common.HexToAddress(entry.HookContract)
-		if !hookSet[hookAddr] {
-			hookSet[hookAddr] = true
-			overrides = append(overrides, pathfinder.ParsedOverride{
-				Addr:    hookAddr,
-				Balance: uint256.NewInt(0),
-				Code:    []byte{0x00},
-			})
+		for _, hc := range entry.HookContracts {
+			hookAddr := common.HexToAddress(hc)
+			if !hookSet[hookAddr] {
+				hookSet[hookAddr] = true
+				overrides = append(overrides, pathfinder.ParsedOverride{
+					Addr:    hookAddr,
+					Balance: uint256.NewInt(0),
+					Code:    []byte{0x60, 0x20, 0x5f, 0xf3},
+				})
+			}
 		}
 	}
 

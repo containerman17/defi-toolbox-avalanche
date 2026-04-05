@@ -194,8 +194,10 @@ func runBlockBenchmark(
 
 	var wg sync.WaitGroup
 	for _, job := range fwdJobs {
-		// Read amount before goroutine to avoid data race with poolAmounts map
+		// Read amount under lock — goroutines from previous iterations may be writing poolAmounts
+		groundMu.Lock()
 		fwdAmt := poolAmounts[poolAmountKey{pools[job.poolIdx].Address, job.fwdDir}]
+		groundMu.Unlock()
 		wg.Add(1)
 		go func(j fwdWork, amountIn *uint256.Int) {
 			defer wg.Done()

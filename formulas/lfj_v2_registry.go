@@ -649,6 +649,7 @@ var lfjV2Registry = map[string]LFJV2Immutables{
 	"0xb66c5d40388900436a84dcf8b3ecc6527a7e9f1a": {100, true},
 	"0xb6ab90e3a6103222af351c2c3d65ed4de78ea758": {25, true},
 	"0xb768091a8e6ffcdc215767937bd9fb039cb06577": {1, true},
+	"0xb74f0e67f75114292134d86e99aa181e8fdf4560": {100, false},
 	"0xb783d6450efc21107db168a8d267fa4b0eeadbf8": {5, false},
 	"0xb7c4cbbc16cb31d7e6d32029a973daf70974e1d7": {25, false},
 	"0xb81a9a30cdb57d52f131de62aa755889b95aeec9": {100, true},

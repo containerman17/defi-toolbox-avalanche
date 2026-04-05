@@ -51,7 +51,7 @@ if (import.meta.filename === process.argv[1]) {
 
     const archivalRpcUrl =
         process.env.ARCHIVAL_RPC_URL || "https://api.avax.network/ext/bc/C/rpc";
-    const rpcUrl = process.env.RPC_URL || archivalRpcUrl;
+    const rpcUrl = process.env.RPC_URL || "http://localhost:9650/ext/bc/C/rpc";
     const poolsPath = process.argv[2] || defaultPoolsPath();
 
     console.log("Updating pool list...");

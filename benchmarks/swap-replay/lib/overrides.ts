@@ -15,9 +15,9 @@ interface TokenOverrideEntry {
   rTotalSlot?: number;
   /** For reflection tokens: raw storage slot of _tTotal */
   tTotalSlot?: number;
-  /** Contract whose code should be overridden with a no-op for swaps to work
-   *  (e.g. broken staking hooks). Address of the external hook contract. */
-  hookContract?: string;
+  /** Contracts whose code should be overridden with a no-op for swaps to work
+   *  (e.g. broken staking hooks, antiBot, antiWhale). */
+  hookContracts?: string[];
   /** Raw storage slots on the token contract to zero out (e.g. disable maxWallet checks) */
   disableSlots?: number[];
   /** Mapping slot(s) where mapping[holder]=true should be set for sender and router
@@ -205,12 +205,16 @@ export function getHookOverrides(token: string): Record<string, { code: Hex }> {
   const addr = token.toLowerCase();
   const overrides = loadOverrides();
   const entry = overrides.get(addr);
-  if (!entry?.hookContract) return {};
+  if (!entry?.hookContracts?.length) return {};
 
-  // Dummy runtime: PUSH1 1, PUSH1 0, MSTORE, PUSH1 0x20, PUSH1 0, RETURN
-  // Returns 32 bytes with value 1 (true) for any call
-  const dummyCode = "0x600160005260206000f3" as Hex;
-  return { [entry.hookContract.toLowerCase()]: { code: dummyCode } };
+  // Return 32 zero bytes for any call (false/0 — safe default for guard functions).
+  // Bytecode: PUSH1 0x20, PUSH0, RETURN
+  const dummyCode = "0x60205ff3" as Hex;
+  const result: Record<string, { code: Hex }> = {};
+  for (const hc of entry.hookContracts) {
+    result[hc.toLowerCase()] = { code: dummyCode };
+  }
+  return result;
 }
 
 /**

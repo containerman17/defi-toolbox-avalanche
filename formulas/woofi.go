@@ -123,6 +123,11 @@ func (p *WooFiPool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Addres
 		tokenOut = wavax
 	}
 
+	// Same token after mapping = no swap
+	if tokenIn == tokenOut {
+		return uint256.Int{}
+	}
+
 	// Only tokens with active reserves can be swapped
 	if !wooActiveTokens[tokenIn] || !wooActiveTokens[tokenOut] {
 		return uint256.Int{}
@@ -244,7 +249,9 @@ func (p *WooFiPool) sellQuote(baseToken common.Address, quoteAmount *big.Int) ui
 	return *result
 }
 
-// baseToBase: base1 → base2 (routed through quote)
+// baseToBase: base1 → base2 (routed through quote).
+// The WooPP pool applies a merged spread and merged fee for base-to-base swaps.
+// spread = max(spread1, spread2) / 2, fee = max(feeRate1, feeRate2)
 func (p *WooFiPool) baseToBase(base1, base2 common.Address, base1Amount *big.Int) uint256.Int {
 	price1, coeff1, spread1 := p.readOracleState(base1)
 	price2, coeff2, spread2 := p.readOracleState(base2)
@@ -324,55 +331,57 @@ func (p *WooFiPool) baseToBase(base1, base2 common.Address, base1Amount *big.Int
 }
 
 // wooCalcQuoteAmountSellBase: base → quote math
-// quoteAmount = baseAmount * price * quoteDec * (1e18 - gamma - spread) / 1e18 / baseDec / priceDec
-// gamma = baseAmount * price * coeff / baseDec / priceDec
+// Matches deployed WooPPV2 Solidity:
+//   coef = 1e18 - (coeff * baseAmount * price / baseDec / priceDec) - spread
+//   quoteAmount = baseAmount * quoteDec * price / priceDec * coef / 1e18 / baseDec
 func wooCalcQuoteAmountSellBase(baseAmount, price, coeff, spread, baseDec, quoteDec *big.Int) (*big.Int, *big.Int) {
-	// gamma = baseAmount * price * coeff / baseDec / priceDec
-	gamma := new(big.Int).Mul(baseAmount, price)
-	gamma.Mul(gamma, coeff)
+	// gamma = coeff * baseAmount * price / baseDec / priceDec
+	gamma := new(big.Int).Mul(coeff, baseAmount)
+	gamma.Mul(gamma, price)
 	gamma.Div(gamma, baseDec)
 	gamma.Div(gamma, wooPriceDec)
 
-	// discount = 1e18 - gamma - spread
-	discount := new(big.Int).Sub(woo1e18, gamma)
-	discount.Sub(discount, spread)
-	if discount.Sign() <= 0 {
+	// coef = 1e18 - gamma - spread
+	coef := new(big.Int).Sub(woo1e18, gamma)
+	coef.Sub(coef, spread)
+	if coef.Sign() <= 0 {
 		return nil, gamma
 	}
 
-	// quoteAmount = baseAmount * price * quoteDec / baseDec / priceDec * discount / 1e18
-	out := new(big.Int).Mul(baseAmount, price)
-	out.Mul(out, quoteDec)
-	out.Div(out, baseDec)
+	// quoteAmount = baseAmount * quoteDec * price / priceDec * coef / 1e18 / baseDec
+	out := new(big.Int).Mul(baseAmount, quoteDec)
+	out.Mul(out, price)
 	out.Div(out, wooPriceDec)
-	out.Mul(out, discount)
+	out.Mul(out, coef)
 	out.Div(out, woo1e18)
+	out.Div(out, baseDec)
 
 	return out, gamma
 }
 
 // wooCalcBaseAmountSellQuote: quote → base math
-// baseAmount = quoteAmount * baseDec * priceDec / price / quoteDec * (1e18 - gamma - spread) / 1e18
-// gamma = quoteAmount * coeff / quoteDec
+// Matches deployed WooPPV2 Solidity:
+//   coef = 1e18 - (quoteAmount * coeff / quoteDec) - spread
+//   baseAmount = quoteAmount * baseDec * priceDec / price * coef / 1e18 / quoteDec
 func wooCalcBaseAmountSellQuote(quoteAmount, price, coeff, spread, baseDec, quoteDec *big.Int) (*big.Int, *big.Int) {
 	// gamma = quoteAmount * coeff / quoteDec
 	gamma := new(big.Int).Mul(quoteAmount, coeff)
 	gamma.Div(gamma, quoteDec)
 
-	// discount = 1e18 - gamma - spread
-	discount := new(big.Int).Sub(woo1e18, gamma)
-	discount.Sub(discount, spread)
-	if discount.Sign() <= 0 {
+	// coef = 1e18 - gamma - spread
+	coef := new(big.Int).Sub(woo1e18, gamma)
+	coef.Sub(coef, spread)
+	if coef.Sign() <= 0 {
 		return nil, gamma
 	}
 
-	// baseAmount = quoteAmount * baseDec * priceDec / price / quoteDec * discount / 1e18
+	// baseAmount = quoteAmount * baseDec * priceDec / price * coef / 1e18 / quoteDec
 	out := new(big.Int).Mul(quoteAmount, baseDec)
 	out.Mul(out, wooPriceDec)
 	out.Div(out, price)
-	out.Div(out, quoteDec)
-	out.Mul(out, discount)
+	out.Mul(out, coef)
 	out.Div(out, woo1e18)
+	out.Div(out, quoteDec)
 
 	return out, gamma
 }

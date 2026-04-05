@@ -115,7 +115,18 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		compressed-- // round towards negative infinity
 	}
 	centerWord := int16(compressed >> 8)
+	// Scale bitmap radius inversely with tickSpacing so tick coverage stays
+	// roughly constant.  With tickSpacing=1, each word covers only 256 ticks
+	// and low-liquidity swaps can traverse 50k+ ticks, exceeding the default
+	// 200-word (51200-tick) window.  Radius 500 for tickSpacing=1 covers
+	// 128000 ticks per direction which matches tickSpacing=60's 3.07M tick
+	// coverage relative to fee-induced price impact.
 	bitmapRadius := int16(200)
+	if tickSpacing <= 2 {
+		bitmapRadius = 500
+	} else if tickSpacing <= 5 {
+		bitmapRadius = 300
+	}
 	bitmapMinWord := centerWord - bitmapRadius
 	bitmapMaxWord := centerWord + bitmapRadius
 	bitmapWords := make(map[int16]uint256.Int)

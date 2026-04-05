@@ -66,18 +66,28 @@ const (
 	RStateBelowOne RState = 2
 )
 
+// DODOLayout identifies the storage layout family of a DODO pool.
+type DODOLayout int
+
+const (
+	DODOLayoutDVM DODOLayout = iota
+	DODOLayoutDSP
+	DODOLayoutDPP
+)
+
 // DODOState holds the PMM state for a DODO V2 pool.
 type DODOState struct {
-	I         *big.Int // oracle price (1e18 fixed-point)
-	K         *big.Int // slippage coefficient (1e18 fixed-point)
-	B         *big.Int // base reserve
-	Q         *big.Int // quote reserve
-	B0        *big.Int // base target (adjusted)
-	Q0        *big.Int // quote target (adjusted)
-	R         RState   // equilibrium state
-	LpFeeRate *big.Int // LP fee rate (1e18 fixed-point)
-	MtFeeRate *big.Int // maintainer fee rate (1e18 fixed-point)
-	BaseToken string   // base token address
+	I         *big.Int   // oracle price (1e18 fixed-point)
+	K         *big.Int   // slippage coefficient (1e18 fixed-point)
+	B         *big.Int   // base reserve
+	Q         *big.Int   // quote reserve
+	B0        *big.Int   // base target (adjusted)
+	Q0        *big.Int   // quote target (adjusted)
+	R         RState     // equilibrium state
+	LpFeeRate *big.Int   // LP fee rate (1e18 fixed-point)
+	MtFeeRate *big.Int   // maintainer fee rate (1e18 fixed-point)
+	BaseToken string     // base token address
+	Layout    DODOLayout // storage layout family (DVM, DSP, or DPP)
 }
 
 // FetchDODOState reads pool state via direct storage reads (eth_getStorageAt).
@@ -161,6 +171,7 @@ func fetchDODOStateDVM(reader StateReader, poolAddress string) (*DODOState, erro
 		LpFeeRate: lpFeeRate,
 		MtFeeRate: new(big.Int).Div(new(big.Int).Mul(lpFeeRate, big.NewInt(25)), big.NewInt(100)),
 		BaseToken: baseToken,
+		Layout:    DODOLayoutDVM,
 	}
 
 	dodoAdjustedTarget(state)
@@ -224,6 +235,7 @@ func fetchDODOStateDSP(reader StateReader, poolAddress string, slot5, slot8 [32]
 		LpFeeRate: lpFeeRate,
 		MtFeeRate: mtFeeRate,
 		BaseToken: baseToken,
+		Layout:    DODOLayoutDSP,
 	}
 
 	dodoAdjustedTarget(state)
@@ -283,6 +295,7 @@ func fetchDODOStateDPP(reader StateReader, poolAddress string, slot5 [32]byte) (
 		LpFeeRate: lpFeeRate,
 		MtFeeRate: new(big.Int).Div(new(big.Int).Mul(lpFeeRate, big.NewInt(25)), big.NewInt(100)),
 		BaseToken: baseToken,
+		Layout:    DODOLayoutDPP,
 	}
 
 	dodoAdjustedTarget(state)

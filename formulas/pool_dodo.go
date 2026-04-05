@@ -14,8 +14,8 @@ type DODOPool struct {
 	addr         common.Address
 	state        *DODOState
 	baseIsToken0 bool          // true if baseToken is the lower-address token (token0)
-	minBaseSwap  *uint256.Int  // DPPAdvanced: _MIN_BASE_SWAP_AMOUNT_ (slot 10), nil if not applicable
-	minQuoteSwap *uint256.Int  // DPPAdvanced: _MIN_QUOTE_SWAP_AMOUNT_ (slot 11), nil if not applicable
+	minBaseSwap  *uint256.Int  // DPP/DSP: _MIN_BASE_SWAP_AMOUNT_ (slot 10), nil if not applicable
+	minQuoteSwap *uint256.Int  // DPP/DSP: _MIN_QUOTE_SWAP_AMOUNT_ (slot 11), nil if not applicable
 }
 
 func newDODOPool(addr common.Address, reader StorageReader, token0 common.Address) *DODOPool {
@@ -43,19 +43,24 @@ func newDODOPool(addr common.Address, reader StorageReader, token0 common.Addres
 		baseIsToken0: baseIsToken0,
 	}
 
-	// Read DPPAdvanced min swap amounts from slots 10/11 (if non-zero).
-	if minBase, err := stateReader(poolAddress, big.NewInt(10)); err == nil {
-		var v uint256.Int
-		v.SetBytes32(minBase[:])
-		if !v.IsZero() {
-			pool.minBaseSwap = new(uint256.Int).Set(&v)
+	// Read min swap amounts from slots 10/11 (if non-zero).
+	// DPP and DSP layout pools store _MIN_BASE_SWAP_AMOUNT_ / _MIN_QUOTE_SWAP_AMOUNT_
+	// at these slots. DVM pools store unrelated state variables there (e.g. slot 11
+	// holds a huge cumulative-price value), so skip DVM to avoid false positives.
+	if dodoState.Layout == DODOLayoutDPP || dodoState.Layout == DODOLayoutDSP {
+		if minBase, err := stateReader(poolAddress, big.NewInt(10)); err == nil {
+			var v uint256.Int
+			v.SetBytes32(minBase[:])
+			if !v.IsZero() {
+				pool.minBaseSwap = new(uint256.Int).Set(&v)
+			}
 		}
-	}
-	if minQuote, err := stateReader(poolAddress, big.NewInt(11)); err == nil {
-		var v uint256.Int
-		v.SetBytes32(minQuote[:])
-		if !v.IsZero() {
-			pool.minQuoteSwap = new(uint256.Int).Set(&v)
+		if minQuote, err := stateReader(poolAddress, big.NewInt(11)); err == nil {
+			var v uint256.Int
+			v.SetBytes32(minQuote[:])
+			if !v.IsZero() {
+				pool.minQuoteSwap = new(uint256.Int).Set(&v)
+			}
 		}
 	}
 
@@ -74,7 +79,7 @@ func (p *DODOPool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address
 		}
 	}()
 
-	// DPPAdvanced pools enforce _MIN_BASE_SWAP_AMOUNT_ / _MIN_QUOTE_SWAP_AMOUNT_.
+	// DPP/DSP pools enforce _MIN_BASE_SWAP_AMOUNT_ / _MIN_QUOTE_SWAP_AMOUNT_.
 	// Check against known minimums to avoid false positives.
 	if p.minBaseSwap != nil || p.minQuoteSwap != nil {
 		sellBase := zeroForOne == p.baseIsToken0

@@ -93,6 +93,14 @@ var fotCalculators = map[string]fotCalc{
 	// SLED: fee = amount * 2 / 100
 	"0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537": fotPct(2),
 
+	// GIVE TR YOUR COQ (0xa12d): fee = amount * 6 / 100 (6% tax, subtract form)
+	// Pool: 0xd65328f9 (lfj_v1, token0/WAVAX)
+	"0xa12dd2e5bcd0611a9245518902effa73e788b142": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(6))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	}),
+
 	// Tortuga: fee = amount*3/100 + amount*3/100 + amount*1/100 (THREE separate divisions)
 	"0xab2712b217f0015b602c06e4fb66b8cf8b04f894": fotCustom(func(amount *big.Int) *big.Int {
 		f1 := new(big.Int).Mul(amount, big.NewInt(3))
@@ -109,8 +117,8 @@ var fotCalculators = map[string]fotCalc{
 	// setLiquidity(pool) makes the pool the registered LP; fee applies both directions.
 	"0x169e8f8773072ce4b87fb7e7a47eed31b481a31f": fotPct(2),
 
-	// L-Swing: fee = amount * 20 / 100 (20%, unconditional)
-	"0x556b959d952085405e7c630bc45a34ace73854eb": fotPct(20),
+	// L-Swing: moved to reflectionTokenConfigs for exact RFI math (20% pure reflection).
+	// Was: fotPct(20), ~53 ppb residual from missing reflection redistribution bonus.
 
 	// WorldOfDogs: fee = amount*6/100 + amount*5/100 (TWO separate divisions)
 	"0xadcfb771e88fd804e0fb04eef6492a0daf389c51": fotCustom(func(amount *big.Int) *big.Int {
@@ -337,7 +345,9 @@ var fotCalculators = map[string]fotCalc{
 	// 0xcc0cbc7a — 1% tax (100 bps), seen in pangolin_v2, lfj_v2
 	"0xcc0cbc7aad6e89ffbe5028dea24dd80ddeb8455b": fotBps(100),
 
-	// 0x039d2e8f — 1% tax (100 bps)
+	// 0x039d2e8f (LINDA) — 1% tax (100 bps) on registered AMM pairs (lfj_v1 at slot 15).
+	// Unregistered pairs (e.g., pharaoh_v1) get the transfer fee of 50 bps.
+	// See FotPoolTokenOverrides for per-pool adjustments.
 	"0x039d2e8f097331278bd6c1415d839310e0d5ece4": fotBps(100),
 
 	// 0x0512384c — 1% tax (100 bps)
@@ -451,10 +461,12 @@ var FotExemptPools = map[string]bool{
 	"0x65659f44053eaf634ef924edb6427014b6f00b60": true, // BigRed/WAVAX lfj_v2
 
 	// HERESY (BulletCollection, 0x432d...): only charges fee on registered AMM pairs.
-	// Pharaoh V1/V3 pairs are not registered in the swapManager.
+	// Pharaoh V1/V3 pairs and lfj_v1 pair 0x2be1dcc are not registered in the swapManager.
+	// Only 0x17885bb0 (lfj_v1 HERESY/WAVAX) is registered.
 	"0x04a954bc8af9a1fdc2ce5f3192bdca369a4512cc": true, // HERESY/WAVAX pharaoh_v1
 	"0x2bcbf5c38a0e11985779f507c5b98ad1fdd7b196": true, // HERESY/WAVAX pharaoh_v1
 	"0x08ca0e8905beb997a6ade2a9a89a5a31eb1698ff": true, // HERESY/WAVAX pharaoh_v3
+	"0x2be1dccb84a06235a611cfae1d137388e710854a": true, // HERESY/MeowCat lfj_v1 — not registered in swapManager
 
 	// YFX (0x8901...): pool has NOT_TAXED_TO and NOT_TAXED_FROM roles — fully exempt.
 	"0x640f87fef16c1e767ed80bae124e067b49d3e6a7": true, // YFX/USDC.e pharaoh_v1
@@ -493,6 +505,23 @@ var FotExemptPools = map[string]bool{
 	"0x24208ef8e891db2b327a20eaefccf22206783e9a": true, // GOOD/WAVAX lfj_v1
 	"0x4d30d49735dc3cf20c39eb97ddcfa2b3258134ea": true, // GOOD/0x234b lfj_v1
 	"0x874d7fe773b3a73d6b26032ec543cf79ece89701": true, // GOOD/WAVAX lfj_v2
+}
+
+// FotPoolTokenOverrides maps (pool, token) to a custom FoT calculator.
+// Used when a token charges different fees for different pools (e.g., registered
+// AMM pairs get buyTotalFees/sellTotalFees, while unregistered pools get a lower
+// "transfer" fee rate).
+type fotPoolTokenKey struct {
+	Pool  string // lowercase hex pool address
+	Token string // lowercase hex token address
+}
+
+var FotPoolTokenOverrides = map[fotPoolTokenKey]fotCalc{
+	// LINDA (0x039d...): 100 bps on registered lfj_v1 pair, 50 bps on unregistered pools.
+	// Pharaoh V1 pool 0xe4f2... is not in the token's AMM pair mapping (slot 11),
+	// so the token charges the transfer fee (buyMarketingFee=50 bps, slot 21) instead
+	// of buyTotalFees (100 bps).
+	{Pool: "0xe4f24831b8e525b7330dffbdb725c16af62847e2", Token: "0x039d2e8f097331278bd6c1415d839310e0d5ece4"}: fotBps(50),
 }
 
 // FotRebasingTokens lists tokens that gain value over time (negative "tax"),
@@ -553,6 +582,11 @@ type reflectionTokenConfig struct {
 	burnRate     int64                  // burn fee numerator (0 = no burn)
 	burnDenom    int64                  // burn fee denominator (0 = no burn)
 	calcFee      func(*big.Int) *big.Int // total fee (reflection + team/burn), same math as fotCalculators
+
+	// Excluded account support: set all three to enable _getCurrentSupply() exclusion math.
+	excludedArraySlot common.Hash // storage slot for _excluded dynamic array (0 = disabled)
+	rOwnedSlot        common.Hash // storage slot for _rOwned mapping
+	tOwnedSlot        common.Hash // storage slot for _tOwned mapping
 }
 
 // reflectionTokenConfigs maps token addresses to their reflection config.
@@ -711,5 +745,29 @@ var reflectionTokenConfigs = map[string]reflectionTokenConfig{
 			fee.Mul(fee, big.NewInt(6))
 			return fee
 		},
+	},
+
+	// L-Swing: 20% pure reflection tax (all goes to _reflectFee, no team fee, no burn).
+	// _getTValues: tFee = tAmount.mul(20).div(100) — unconditional.
+	// _reflectFee only reduces _rTotal by rFee. _tTotal stored at slot 6.
+	// Storage layout (standard RFI fork):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_tTotal, slot 7=_rTotal.
+	// Pools: 0xaacfe51a (lfj_v1, tsAVAX/L-Swing, pool#2786),
+	//        0xe2330bfa (lfj_v1, L-Swing/USDC, pool#2993).
+	// Was fotPct(20) — mismatch of ~110 units (~52 ppb) due to excluded accounts in _getRate().
+	// Fix: read _excluded array and subtract rOwned/tOwned from supply (mirrors _getCurrentSupply).
+	"0x556b959d952085405e7c630bc45a34ace73854eb": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000007"),
+		tTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
+		reflectRate:  20,
+		reflectDenom: 100,
+		calcFee:      fotPct(20).calcFee,
+		// Excluded accounts: _getRate() uses _getCurrentSupply() which subtracts
+		// excluded accounts' rOwned/tOwned. Without this, the rate is slightly off
+		// causing ~110 unit mismatch.
+		excludedArraySlot: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000005"),
+		rOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+		tOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
 	},
 }

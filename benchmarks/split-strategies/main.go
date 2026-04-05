@@ -1,4 +1,6 @@
-// Cross-benchmark: tests split routing strategies across token pairs at multiple volumes.
+// Deterministic split strategy benchmark.
+// Runs all strategies across fixed blocks (deployment block + N*10000)
+// using /debug/{block} frozen snapshots. Results are fully reproducible.
 package main
 
 import (
@@ -19,6 +21,8 @@ import (
 	"github.com/holiman/uint256"
 )
 
+const deployBlock = 82067033
+
 var tokens = []struct {
 	Name     string
 	Address  common.Address
@@ -38,37 +42,11 @@ type strategy struct {
 }
 
 func main() {
-	stateServer := flag.String("state-server", "ws://localhost:7449/live", "state server WebSocket URL")
-	poolLimit := flag.Int("pool-limit", 2000, "max pools to load")
-	maxHops := flag.Int("max-hops", 3, "max hops per route")
+	stateServer := flag.String("state-server", "ws://localhost:7449", "state server base URL (no /live)")
+	numBlocks := flag.Int("blocks", 7, "number of blocks to test (at 10k intervals from deploy)")
 	chunks := flag.Int("chunks", 10, "base number of chunks")
 	flag.Parse()
 
-	ls, err := statedb.Connect(*stateServer)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stderr, "connected, block=%d\n", ls.Block())
-
-	q := quoter.NewQuoter(ls, *poolLimit, *maxHops)
-	q.StartBlockLoop()
-
-	ready := make(chan struct{})
-	q.SetOnBlock(func(block, timestamp uint64) {
-		select {
-		case ready <- struct{}{}:
-		default:
-		}
-	})
-	fmt.Fprintf(os.Stderr, "waiting for block...\n")
-	<-ready
-	fmt.Fprintf(os.Stderr, "block %d ready\n", ls.Block())
-
-	ls.RLock()
-	defer ls.RUnlock()
-
-	cfg := ls.EVMConfig()
 	ch := *chunks
 
 	strategies := []strategy{
@@ -77,10 +55,7 @@ func main() {
 		{"grad", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedGradual) }},
 		{"shuf2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedShuffle2) }},
 		{"d8_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyDynamic(p, a, 8, 2) }},
-		{"c30_5", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 30, 5) }},
 		{"c30_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 30, 2) }},
-		{"c20_3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 20, 3) }},
-		{"c50_5", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 50, 5) }},
 		{"max", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.SplitMax(p, a) }},
 	}
 
@@ -93,7 +68,6 @@ func main() {
 		{"÷100", 100},
 	}
 
-	// Collect per-strategy stats across ALL (pair × volume) combinations.
 	pcts := make([][]float64, len(strategies))
 	times := make([][]float64, len(strategies))
 	for i := range strategies {
@@ -102,75 +76,97 @@ func main() {
 	}
 
 	// Header
-	fmt.Printf("%-20s", "PAIR")
+	fmt.Printf("%-22s", "PAIR")
 	for _, s := range strategies {
 		fmt.Printf(" %8s", s.name)
 	}
 	fmt.Println()
-	fmt.Println(strings.Repeat("─", 20+len(strategies)*9))
+	fmt.Println(strings.Repeat("─", 22+len(strategies)*9))
 
-	for _, div := range dividers {
-		fmt.Printf("\n=== Volume %s ===\n\n", div.label)
+	for bi := 0; bi < *numBlocks; bi++ {
+		blockNum := uint64(deployBlock + bi*10000)
+		url := fmt.Sprintf("%s/debug/%d", strings.TrimRight(*stateServer, "/"), blockNum)
 
-		for i, tIn := range tokens {
-			for j, tOut := range tokens {
-				if i == j {
-					continue
-				}
+		fmt.Fprintf(os.Stderr, "connecting to block %d...\n", blockNum)
+		ls, err := statedb.Connect(url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "block %d: %v\n", blockNum, err)
+			continue
+		}
 
-				amount := parseDecimalAmount(tIn.Amount, tIn.Decimals)
-				if amount == nil || amount.Sign() <= 0 {
-					continue
-				}
-				amount.Div(amount, big.NewInt(int64(div.div)))
-				if amount.Sign() <= 0 {
-					continue
-				}
-				fullAmount := new(uint256.Int)
-				fullAmount.SetFromBig(amount)
+		q := quoter.NewQuoter(ls, 2000, 3)
+		// No StartBlockLoop — frozen snapshot, no new blocks
 
-				params := &splitter.Params{
-					PM: q.PM(), BasePM: q.PM(), Adj: q.Adj(), Pools: q.Pools(),
-					State: q.StateWithOverrides(), EVMConfig: cfg,
-					RouterAddr: q.RouterAddr(), Sender: q.Sender(),
-					TokenIn: tIn.Address, TokenOut: tOut.Address, MaxHops: q.MaxHops(),
-				}
+		ls.RLock()
+		cfg := ls.EVMConfig()
 
-				single := pf.FindBestRoute(params.PM, params.Adj, params.Pools, params.State,
-					cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
-				if single == nil {
-					continue
-				}
-				singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
+		fmt.Printf("\n=== Block %d ===\n\n", blockNum)
 
-				pair := tIn.Name + "→" + tOut.Name
-				fmt.Printf("%-20s", pair)
-
-				for si, s := range strategies {
-					result := s.run(params, fullAmount)
-					pct := 0.0
-					ms := 0.0
-					if result != nil {
-						outF := u256ToFloat(&result.Total, tOut.Decimals)
-						pct = pctImprovement(singleF, outF)
-						ms = float64(result.ElapsedUs) / 1000.0
+		for _, div := range dividers {
+			for i, tIn := range tokens {
+				for j, tOut := range tokens {
+					if i == j {
+						continue
 					}
-					pcts[si] = append(pcts[si], pct)
-					times[si] = append(times[si], ms)
-					fmt.Printf(" %+7.3f%%", pct)
+
+					amount := parseDecimalAmount(tIn.Amount, tIn.Decimals)
+					if amount == nil || amount.Sign() <= 0 {
+						continue
+					}
+					amount.Div(amount, big.NewInt(int64(div.div)))
+					if amount.Sign() <= 0 {
+						continue
+					}
+					fullAmount := new(uint256.Int)
+					fullAmount.SetFromBig(amount)
+
+					params := &splitter.Params{
+						PM: q.PM(), BasePM: q.PM(), Adj: q.Adj(), Pools: q.Pools(),
+						State: q.StateWithOverrides(), EVMConfig: cfg,
+						RouterAddr: q.RouterAddr(), Sender: q.Sender(),
+						TokenIn: tIn.Address, TokenOut: tOut.Address, MaxHops: q.MaxHops(),
+					}
+
+					single := pf.FindBestRoute(params.PM, params.Adj, params.Pools, params.State,
+						cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
+					if single == nil {
+						continue
+					}
+					singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
+
+					pair := fmt.Sprintf("%s→%s %s", tIn.Name, tOut.Name, div.label)
+					fmt.Printf("%-22s", pair)
+
+					for si, s := range strategies {
+						result := s.run(params, fullAmount)
+						pct := 0.0
+						ms := 0.0
+						if result != nil {
+							outF := u256ToFloat(&result.Total, tOut.Decimals)
+							pct = pctImprovement(singleF, outF)
+							ms = float64(result.ElapsedUs) / 1000.0
+						}
+						pcts[si] = append(pcts[si], pct)
+						times[si] = append(times[si], ms)
+						fmt.Printf(" %+7.3f%%", pct)
+					}
+					fmt.Println()
 				}
-				fmt.Println()
 			}
 		}
+
+		ls.RUnlock()
+		ls.Close()
 	}
 
-	// ── Aggregates across ALL volumes ────────────────────────────────
-	fmt.Println()
-	fmt.Println(strings.Repeat("═", 20+len(strategies)*9))
-	fmt.Printf("\nALL VOLUMES COMBINED (%d test cases):\n\n", len(pcts[0]))
+	// ── Aggregates ───────────────────────────────────────────────────
+	n := len(pcts[0])
+	fmt.Printf("\n%s\n", strings.Repeat("═", 22+len(strategies)*9))
+	fmt.Printf("\nALL %d test cases (%d blocks × %d pairs × %d volumes):\n\n",
+		n, *numBlocks, len(tokens)*(len(tokens)-1), len(dividers))
 
 	for _, label := range []string{"MEDIAN", "AVG", "MIN", "MAX"} {
-		fmt.Printf("%-20s", label)
+		fmt.Printf("%-22s", label)
 		for si := range strategies {
 			sorted := make([]float64, len(pcts[si]))
 			copy(sorted, pcts[si])
@@ -192,12 +188,12 @@ func main() {
 	}
 
 	fmt.Println()
-	fmt.Printf("%-20s", "AVG TIME")
+	fmt.Printf("%-22s", "AVG TIME")
 	for si := range strategies {
 		fmt.Printf(" %6.0fms", mean(times[si]))
 	}
 	fmt.Println()
-	fmt.Printf("%-20s", "MED TIME")
+	fmt.Printf("%-22s", "MED TIME")
 	for si := range strategies {
 		sorted := make([]float64, len(times[si]))
 		copy(sorted, times[si])
@@ -206,7 +202,7 @@ func main() {
 	}
 	fmt.Println()
 
-	// Head-to-head vs greedy
+	// Head-to-head
 	fmt.Println()
 	fmt.Println("vs greedy (W/L/T):")
 	for si := 1; si < len(strategies); si++ {

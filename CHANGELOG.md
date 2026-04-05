@@ -194,6 +194,10 @@ Added `SplitMax` — runs GreedyCompete + GreedyMixed(grad) + GreedyMixed(shuf2)
 the best. Cache sharing makes it barely slower than one strategy (~229ms vs ~210ms).
 W=39 L=0 — takes the max of three complementary approaches.
 
+Moved split-bench to `benchmarks/split-strategies/` with deterministic multi-block testing
+via `/debug/{block}` frozen snapshots. Runs 7 blocks at 10k intervals from deployment block
+(82067033). Fully reproducible results.
+
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 
 ### GreedyRecursive: binary split tournament

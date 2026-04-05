@@ -14,7 +14,35 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**99.2% correct** — 4188 match, 33 mismatch (2000 pools, 1 block).
+**99.2% correct** — 4257 match, 33 mismatch (2000 pools, 3 blocks aggregate).
+
+Added token overrides for APOW (`0xbde79b2a...`, slot 0) and XPOW (`0xeccb564c...`, slot 0) —
+both standard ERC20 balance mappings. Removed from `inputDeadTokens`. Fixes 8 pools total
+(4 lfj_v1 each). 100% match both directions across 3 blocks.
+
+Fixed MEMOries (`0x136acd46...`) reflection token override: added `shift: 128`. The _rOwned
+mapping is at slot 15, but the reflection rate (~1.75e40) made the default 1e36 override
+produce 0 effective balance. With shift=128, `balanceOf(router)` returns ~1.94e34, sufficient
+for realistic swap amounts. Fixes 11 pools (pangolin_v2, sushiswap_v2, lfj_v1, yetiswap).
+Removed from `inputDeadTokens`.
+
+Fixed TRACTOR JOE (`0x542fa0b2...`) reflection token override: wrong slot (was 2, should be 1
+= _rOwned mapping) and missing `shift: 128`. The reflection rate (~1.07e59) is extremely high.
+With slot=1 and shift=128, `balanceOf(router)` returns ~3.19e15. Fixes 8 pools (lfj_v1,
+pangolin_v2). Removed from `inputDeadTokens`.
+
+**Technique**: for `inputDeadTokens` reflection tokens with existing overrides that still
+fail, check: (1) is `slot` pointing to the correct mapping (_rOwned, not _tOwned or _balances)?
+Probe keccak256(holder, slot) against known holders. (2) Does the rate require `shift`?
+Compute `rate = _rTotal / _tTotal`; if `1e36 / rate < 1`, add shift such that
+`(1e36 << shift) / rate > swap_amount`. Use shift=128 for rates up to ~1e59.
+
+Remaining `inputDeadTokens` investigation: most tokens with "missing override" have zero pool
+liquidity (deUSD, weETH, tGBP, Unity, AUTISM CAPITAL, Treehouse Token, HOUDINI, multiple
+proxy tokens). SHIBAVAX (0x440abbf1, 12 pools) is a reflection token needing slot+shift
+investigation. aAVAXb (0x6c6f910a, 3 pools) is a rebasing token (shares at slot 101, not
+direct balance). USD+ (0xe80772ea, 7 pools) and ROCO (0xb2a85c5e, 22 pools) need reflection
+model fixes. GB (0x90842eb8, 30 pools) needs _rOwned/_rTotal compatible override.
 
 Fixed pharaoh_v3 pool#2815 (`0x64c5279f...`, WAVAX/0xca2e0f72...): formula returned 0,
 EVM returned nonzero. Pool was in `pharaohV3Pools` and `registry.txt` but missing from
@@ -167,6 +195,15 @@ to read `_excluded` array and subtract `_rOwned`/`_tOwned`. (2) Zero-amount tran
 false negative — skipped for tokens in `brokenTokens`. Both pools now match at 0 PPB.
 New technique: reflection tokens with excluded accounts need `excludedArraySlot`, `rOwnedSlot`,
 `tOwnedSlot` in their config. Standard RFI layout: slots 5, 1, 2 respectively.
+
+Fixed lfj_v1 pool#2583 (`0xd100bb9a...`, JUNIOR/WAVAX) DIFF mismatch: JUNIOR token
+(`0x214dd1b5...`) is a 1% FoT (subtract form: `fee = amount * 1 / 100`). Token was in
+`token_overrides.json` but missing from `fotCalculators`. Used `fotCustom` (not `fotPct(1)`)
+because complement form `amount * 99 / 100` differs by 1 wei from Solidity's subtract form
+when `amount % 100 != 0`. Also covers sibling pools `0xcf25fba7`, `0x02f51540`, `0xd3e6527c`.
+**Technique**: ~1% DIFF in both directions → 1% FoT. Compute `evm/formula` ratio; if ~0.99,
+check if output token has a 1% tax. Verify subtract vs complement rounding with a concrete
+amount to choose `fotCustom` vs `fotPct`.
 
 Added token override for 0xdc194d03 (pool#2668 arena_v2, also pool#23204 lfj_v2) — standard
 OZ ERC20 with sender-blacklist (slot 6), balance at slot 0. Missing override caused false-positive

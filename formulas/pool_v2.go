@@ -25,9 +25,7 @@ var inputDeadTokens = map[common.Address]bool{
 	common.HexToAddress("0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0xf16f18c155ef8fc46f980b23868d208db59cad9c"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0xba515304d8153c4b162dc79f867e152df9c127eb"): true, // router transfer reverts (missing override)
-	common.HexToAddress("0x136acd46c134e8269052c62a67042d6bdedde3c9"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0x556b959d952085405e7c630bc45a34ace73854eb"): true, // router transfer reverts (missing override)
-	common.HexToAddress("0x542fa0b261503333b90fe60c78f2beed16b7b7fd"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0xa3d68b74bf0528fdd07263c60d6488749044914b"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0x32f0c28be6a6ac5d3b471278b77f6971a3141348"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0x27f6c8289550fce67f6b50bed1f519966afe5287"): true, // router transfer reverts (missing override)
@@ -36,6 +34,7 @@ var inputDeadTokens = map[common.Address]bool{
 	common.HexToAddress("0x77146784315ba81904d654466968e3a7c196d1f3"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0xb57b25851fe2311cc3fe511c8f10e868932e0680"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0x0442ac2450dc0b2b56d7320afad0b63b1ff8b0d0"): true, // router transfer reverts (missing override)
+	common.HexToAddress("0xfb8a29e67eff2f8ec633771b572b08b7e69c57b4"): true, // FoT token (5.01%), router transfer reverts (missing override)
 }
 
 // V2Pool is a pre-loaded V2 constant product pool.

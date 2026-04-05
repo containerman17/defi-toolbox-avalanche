@@ -93,6 +93,15 @@ var fotCalculators = map[string]fotCalc{
 	// SLED: moved to reflectionTokenConfigs for exact RFI math (2% pure reflection).
 	// Was: fotPct(2), ~22 PPM residual from reflection redistribution drift.
 
+	// JUNIOR (0x214d): fee = amount * 1 / 100 (1% tax, subtract form, mutable up to 9%)
+	// Pools: 0xd100bb9a (lfj_v1, JUNIOR/WAVAX), 0xcf25fba7 (lfj_v1, JUNIOR/HOWDY),
+	//        0x02f51540 (lfj_v1), 0xd3e6527c (uniswap_v2, JUNIOR/WAVAX).
+	"0x214dd1b5cbe543d4189ab39832f1bc1eedebb1d3": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(1))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	}),
+
 	// GIVE TR YOUR COQ (0xa12d): fee = amount * 6 / 100 (6% tax, subtract form)
 	// Pool: 0xd65328f9 (lfj_v1, token0/WAVAX)
 	"0xa12dd2e5bcd0611a9245518902effa73e788b142": fotCustom(func(amount *big.Int) *big.Int {
@@ -247,6 +256,14 @@ var fotCalculators = map[string]fotCalc{
 	"0xca3130f29e296f1966e5999889d0824a9032ee97": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Div(amount, big.NewInt(100))
 		fee.Mul(fee, big.NewInt(5))
+		return fee
+	}),
+
+	// 0xfb8a (WAVAX/0xfb8a lfj_v1 pool 0x16f1): fee = amount * 501 / 10000 (5.01% tax, subtract form)
+	// Pool: 0x16f139fe (lfj_v1 pool#2570). Complement form (9499/10000) is 1 wei off.
+	"0xfb8a29e67eff2f8ec633771b572b08b7e69c57b4": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(501))
+		fee.Div(fee, big.NewInt(10000))
 		return fee
 	}),
 

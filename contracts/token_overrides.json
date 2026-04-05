@@ -960,7 +960,9 @@
   {
     "address": "0x136acd46c134e8269052c62a67042d6bdedde3c9",
     "slot": 15,
-    "shift": 128
+    "shift": 128,
+    "rOwnedSlot": 15,
+    "rTotalSlot": 14
   },
   {
     "address": "0x13a466998ce03db73abc2d4df3bbd845ed1f28e7",
@@ -1683,7 +1685,8 @@
   },
   {
     "address": "0x22897cf0da31e1f118649d9f6ad1809cabd84948",
-    "slot": 1
+    "slot": 1,
+    "shift": 128
   },
   {
     "address": "0x22bc1c924a6174eb9b2c98035f8d2f20e8bc4a1e",
@@ -3887,7 +3890,8 @@
   },
   {
     "address": "0x542fa0b261503333b90fe60c78f2beed16b7b7fd",
-    "slot": 2,
+    "slot": 1,
+    "shift": 128,
     "rOwnedSlot": 1,
     "rTotalSlot": 9,
     "tTotalSlot": 8

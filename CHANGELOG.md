@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-05 — Fix JUNIOR token FoT mismatch (pool#2583)
+
+### Bug
+lfj_v1 pool `0xd100bb9a...` (JUNIOR/WAVAX) had DIFF mismatch: both formula and EVM
+returned nonzero but formula was ~1% higher in both directions (dir=0: 98.38e15 vs
+97.40e15; dir=1: 3431e9 vs 3397e9).
+
+### Root cause
+Token JUNIOR (`0x214dd1b5cbe543d4189ab39832f1bc1eedebb1d3`) is a 1% FoT token.
+Its `_update()` override computes `taxAmount = amount * tax / 100` (tax=1, mutable
+up to 9%) and transfers the remainder. The token was in `token_overrides.json`
+(balance slot 0) but missing from `fotCalculators`.
+
+### Fix
+Added JUNIOR to `fotCalculators` with `fotCustom` (subtract form: `fee = amount * 1 / 100`).
+Cannot use `fotPct(1)` because its complement form (`amount * 99 / 100`) differs by 1 wei
+when `amount % 100 != 0`. Also covers 3 sibling pools: `0xcf25fba7` (lfj_v1, JUNIOR/HOWDY),
+`0x02f51540` (lfj_v1), `0xd3e6527c` (uniswap_v2).
+
 ## 2026-04-05 — Formula accuracy: 95.8% → 98.0% (308 → 140 mismatches)
 
 Systematic formula accuracy campaign on 3500 pools. Zeroed 11 of 15 ecosystems.

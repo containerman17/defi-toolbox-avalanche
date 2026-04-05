@@ -5329,6 +5329,10 @@
     "slot": 0
   },
   {
+    "address": "0x741bd193b6b40f8703d2e116fd1965421f290f58",
+    "slot": 5
+  },
+  {
     "address": "0x742dc16f79adb876a707ad2c973d216c6922d55b",
     "slot": 0
   },
@@ -8464,6 +8468,10 @@
   },
   {
     "address": "0xbdecf71788b193cc23d5408864db586e0fa32218",
+    "slot": 0
+  },
+  {
+    "address": "0xbde79b2a371ea759a85901e4a185d03399c089c1",
     "slot": 0
   },
   {

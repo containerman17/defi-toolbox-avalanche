@@ -250,6 +250,15 @@ var fotCalculators = map[string]fotCalc{
 		return fee
 	}),
 
+	// 0xc970 (WAVAX/0xc970 lfj_v1 pool 0x117ef430): fee = amount * 2 / 100 (2% tax, subtract form)
+	// Both directions affected: output tax (dir=0) and input tax (dir=1).
+	// Pools: 0x117ef430 (lfj_v1), 0x13e4a7f1 (pharaoh_v1), 0x52495ce8 (lfj_v1).
+	"0xc970d70234895dd6033f984fd00909623c666e66": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(2))
+		fee.Div(fee, big.NewInt(100))
+		return fee
+	}),
+
 	// HEFE: fee = amount * 10 / 1000 (1% tax on buys/sells for registered LPs)
 	"0x18e3605b13f10016901eac609b9e188cf7c18973": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(10))

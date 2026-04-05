@@ -809,6 +809,7 @@ var v3PoolFees = map[string][2]int32{
 	"0x6494c54a38d9c897ca1baca55eb59461aaa172db": {10000, 200}, // uniswap_v3
 	"0x64989a7de16c3c65baa631fcaa538281517cdee5": {10000, 200}, // pharaoh_v3
 	"0x64a7ad19e2301395d0f53c1ede606fea46777a9e": {10000, 200}, // pharaoh_v3
+	"0x64c5279f6837b8fa33b6199c1ddb2e97ebdc2132": {500, 10},    // pharaoh_v3
 	"0x64bd0cde663c11fb8511c29a360070c4beb9475c": {10000, 200}, // uniswap_v3
 	"0x64c9516c389ebcd65a4293deb823c44bbde97ace": {10000, 200}, // pharaoh_v3
 	"0x64fb9c60d8f1fa945a6d257efd50dda6012f1a6b": {10000, 200}, // uniswap_v3
@@ -1832,6 +1833,7 @@ var v3PoolFees = map[string][2]int32{
 	"0xe8a974dbee90c898362b9edeb8241987b405534d": {10000, 200}, // pharaoh_v3
 	"0xe8be729699fd697af95aed669462a416b2232a89": {100, 1}, // uniswap_v3
 	"0xe8c2b0ebb304713498785b6758125b3f3c3f0e56": {500, 10}, // uniswap_v3
+	"0xe8f1e38f60c22a51f54322c38306692139b6ed98": {100, 1}, // pharaoh_v3
 	"0xe907aba45313335fc1ad738c2ff7dfd4a0ff1521": {10000, 200}, // uniswap_v3
 	"0xe90ac74830bbf098db9ddb578061819a43c84975": {10000, 200}, // pharaoh_v3
 	"0xe9153e9e6ca683ff009e0b7a32ce7f048589bb03": {10000, 200}, // uniswap_v3

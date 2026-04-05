@@ -113,14 +113,15 @@ func (p *WooFiPool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Addres
 		return uint256.Int{}
 	}
 
-	// Map native AVAX sentinel to WAVAX
-	wavax := common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")
+	// Native AVAX sentinel handling:
+	// - tokenIn: router wraps native AVAX → WAVAX, so map to WAVAX
+	// - tokenOut: router cannot unwrap WAVAX → native AVAX, so return 0
 	nativeSentinel := common.HexToAddress("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-	if tokenIn == nativeSentinel {
-		tokenIn = wavax
-	}
 	if tokenOut == nativeSentinel {
-		tokenOut = wavax
+		return uint256.Int{}
+	}
+	if tokenIn == nativeSentinel {
+		tokenIn = common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")
 	}
 
 	// Same token after mapping = no swap

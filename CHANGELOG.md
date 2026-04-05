@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-04-05 — Fix pharaoh_v3 pool#2815 formula mismatch (missing v3PoolFees entry)
+
+### Root cause
+Pool 0x64c5279f6837b8fa33b6199c1ddb2e97ebdc2132 (pharaoh_v3, WAVAX/0xca2e0f72...)
+was previously added to `pharaoh_v3_registry.go` (pharaohV3Pools) and `registry.txt`
+(formula ID 2), but was never added to `v3PoolFees` in `formulas/v3_registry.go`.
+`newV3Pool()` checks `v3PoolFees` first and returns nil if the pool is missing,
+so the formula always returned 0 despite the pool being "registered". The layout
+resolution (pharaohV2/V1) and dynamic fee read never ran.
+
+### Fix
+Added `"0x64c5279f6837b8fa33b6199c1ddb2e97ebdc2132": {500, 10}` to `v3PoolFees`
+in alphabetical order. Fee=500 and tickSpacing=10 confirmed via on-chain `fee()`
+and `tickSpacing()` calls. The dynamic fee slot in PharaohV2 layout will override
+the registry fee at runtime.
+
+### Results
+- Before: formula=0, evm=298085578384565513965455 (dir=0) and evm=92213526162744819 (dir=1)
+- After: 2/2 match, 0 mismatch
+
+### Dead-end avoided
+The pool was already in two of three registries (pharaohV3Pools, registry.txt).
+The missing piece was `v3PoolFees` — all three registries must have an entry for
+V3 formula to work. When a pharaoh_v3 pool returns formula=0 despite being in
+pharaohV3Pools, check `v3PoolFees` next.
+
+## 2026-04-05 — Fix pharaoh_v3 pool#2536 mismatch: missing token override for evaUSDC
+
+### Root cause
+Pool `0x612B81fb0168c18793B5b26273a3c17132591948` (pharaoh_v3, evaUSDC/USDC) was
+previously fixed by adding it to `pharaohV3Pools` and `v3PoolFees` registries. The
+formula worked correctly (dir=1 matched), but dir=0 (evaUSDC→USDC) showed
+formula=890197 vs evm=0. The EVM returned 0 because token0 evaUSDC
+(`0x741bd193b6b40f8703d2e116fd1965421f290f58`) was missing from `token_overrides.json`,
+so the router had zero balance and the transfer reverted.
+
+### Fix
+Added evaUSDC to `token_overrides.json` with balance mapping at slot 5 (confirmed by
+probing the pool's known balance at `keccak256(pool_addr, slot)` for slots 0-20).
+
+### Results
+- Before: dir=0 formula=890197, evm=0 (mismatch). dir=1 matched.
+- After: 100% match both directions across 3 blocks.
+- Full benchmark: 33 mismatches (down from 37 in COVERAGE.md baseline).
+
+## 2026-04-05 — Fix lfj_v1 pool#3429 DIFF mismatch: 0xc970 token is 2% FoT
+
+### Root cause
+Token `0xc970d70234895dd6033f984fd00909623c666e66` charges a 2% fee-on-transfer
+(`fee = amount * 2 / 100`, subtract form). The formula returned pre-tax amounts,
+producing ~2.04% overshoot in both directions.
+
+### Fix
+Added token to `fotCalculators` in `formulas/fot.go` with `fotCustom` using the
+subtract form (`amount * 2 / 100`). The complement form (`amount * 98 / 100`) is
+off by 1 wei due to integer division rounding.
+
+### Results
+- Pool#3429 (`0x117ef430c565DD5c7C53A3Fdc585681CeaF18777`, WAVAX/0xc970, lfj_v1):
+  100% match both directions across 3 blocks
+- Also covers sibling pools: 0x13e4a7f1 (pharaoh_v1), 0x52495ce8 (lfj_v1)
+- Full benchmark: no regressions (142 mismatches unchanged at --limit 3500)
+
+## 2026-04-05 — Fix woofi_v2 native AVAX sentinel output (37→33 mismatches)
+
+### Root cause
+WooFi formula mapped native AVAX sentinel (`0xeee...`) to WAVAX for both input and output
+directions. The EVM router can wrap native AVAX on input (sender sends native AVAX, router
+wraps to WAVAX), but cannot unwrap WAVAX to native AVAX on output. So the EVM correctly
+returns 0 for swaps where `tokenOut` is the native sentinel, but the formula was computing
+a nonzero WAVAX-equivalent amount.
+
+### Fix
+In `formulas/woofi.go`, return 0 immediately when `tokenOut` is the native AVAX sentinel
+(`0xeee...`). Keep the WAVAX mapping only for `tokenIn`.
+
+### Results
+- Before: 37 mismatches (4 woofi_v2 on pool#9 `0x4c4AF8DBc524681930a27b2F1Af5bcC8062E6fB7`)
+- After: 33 mismatches (woofi_v2 → 0)
+- All 4 directions where output token was native AVAX now correctly return 0
+
 ## 2026-04-05 — Fix deadDirQuoter blocking output direction for input-dead tokens (72→37 mismatches)
 
 ### Root cause
@@ -26,7 +107,7 @@ Updated `deadDirQuoter` in `formulas/pool_quoter.go` to support both:
 - After: 37 mismatches at --limit 2000 (1 block)
 - 35 mismatches fixed across lfj_v1 (18→0), pangolin_v2 (7→0), yetiswap (2→0),
   swapsicle (2→0), pharaoh_v1 (1→0), oliveswap (1→0), uniswap_v3 (3→0)
-- Remaining 37: uniswap_v4 (30, impl gaps), woofi_v2 (4, AVAX sentinel), balancer_v3 (2),
+- Remaining 37: uniswap_v4 (30, impl gaps), woofi_v2 (4, AVAX sentinel — fixed above), balancer_v3 (2),
   pharaoh_v3 (1)
 - Accuracy: 99.1% (4184 match, 37 mismatch)
 

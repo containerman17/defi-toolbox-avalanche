@@ -14,7 +14,24 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**99.1% correct** — 4184 match, 37 mismatch (2000 pools, 1 block).
+**99.2% correct** — 4188 match, 33 mismatch (2000 pools, 1 block).
+
+Fixed lfj_v1 pool#3429 (`0x117ef430...`, WAVAX/0xc970) DIFF mismatch: token
+`0xc970d70234895dd6033f984fd00909623c666e66` is a 2% FoT token (subtract form:
+`fee = amount * 2 / 100`). Formula overshoot was ~2.04% in both directions. Added to
+`fotCalculators` with `fotCustom`. Also covers pharaoh_v1 pool#3430 and lfj_v1 pool#8328.
+**Technique**: when both formula and EVM return nonzero with a consistent ~N% ratio across
+both directions and multiple blocks, the output/input token is likely FoT. Compute
+`evm/formula` to get the tax complement; verify exact Solidity rounding (subtract form
+`amount - amount*rate/denom` vs complement form `amount*(denom-rate)/denom` — they differ
+by 1 wei when `amount % denom != 0`).
+
+Fixed woofi_v2 (4 mismatches → 0): formula returned nonzero for swaps where tokenOut was
+the native AVAX sentinel (`0xeee...`). The EVM router can't unwrap WAVAX to native AVAX,
+so it returns 0. Fix: return 0 immediately when tokenOut is the native sentinel.
+**Technique**: when a pool uses wrapped/native token pairs, check whether the router
+actually supports unwrapping on output. If not, the formula must return 0 for native
+output direction.
 
 Fixed `deadDirQuoter` blocking output direction for 22 input-dead tokens. These tokens had
 missing/broken overrides, so the router couldn't SEND them. But the formula was incorrectly

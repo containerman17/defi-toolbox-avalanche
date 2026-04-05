@@ -16,6 +16,10 @@ Living document for investigating and fixing formula coverage gaps.
 
 **96.4% correct** — 6888 match, 260 mismatch, 7148 tested quotes (3500 pools, 1 block).
 
+Fixed uniswap_v2 pool#3413 (`0x7a8fe1F0...`, WETH.e/USDC): missing from `registry.txt`.
+Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).
+Both tokens (WETH.e, USDC) already had overrides. 100% match across 3 blocks.
+
 Fixed sushiswap_v2 pool#2236 (`0x4c2e615b...`, USDC.e/0xd3ac): missing from `registry.txt`.
 Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).
 100% match across 3 blocks.
@@ -82,6 +86,30 @@ timeout 300 go run ./tools/token-pricer/ 2>&1
 ```
 
 ## Recent Fixes
+
+- **Pool#1703** (`0x2562557F...`): uniswap_v2 pool (BYAS/USDC), formula=835225 but evm=0 (dir=0).
+  BYAS (`0x26b13e76...`) is a reflection token (RFI-style) with `_reflectedBalances` at slot 9.
+  Two issues: (1) Reflection rate is ~7.2e48, so transferring even 11 tokens requires
+  rAmount ~7.96e67, exceeding the 1e36 balance override. Added `shift: 128` so stored
+  value = 1e36 << 128 = ~3.4e74. (2) Slot 5 = 2 is a reentrancy guard stuck in ENTERED
+  state, blocking sell-path transfers. Added `disableSlots: [5]`. 100% match both
+  directions across 3 blocks. **Technique**: reflection tokens with high rates
+  (rBalance/balance > 1e48) need `shift` in their override so the raw stored reflected
+  balance exceeds the rate multiplied by the swap amount. Also check for stuck reentrancy
+  guards (slot value = 2 with OZ ReentrancyGuard pattern: 1=NOT_ENTERED, 2=ENTERED).
+
+- **Pool#1272** (`0x70201236...`): lfj_v1 pool (WAVAX/SOCK), formula=98301931271636659 but evm=0
+  (dir=1, SOCK in). SOCK (0xf84be5e3) is a BulletCollection (NFT/ERC20 hybrid) with a 0.5% FoT.
+  Its `_transfer` calls `swapManager().attemptFeeSwap(_to)`, which — when `_to` is a registered AMM
+  pair and accumulated `feesCollected >= swapThreshold` — does a real swap through the JoeRouter
+  using the SAME pair. This modifies the pair's reserves mid-transfer, so the HayabusaRouter's
+  `getReserves()` call (before the transfer) is stale, producing an `amountOut` that fails the K
+  invariant check. Dir=0 (WAVAX in) unaffected because `attemptFeeSwap(_to=router)` has
+  `isAutomatedMarketMakerPair[router]=false`, skipping the fee swap. Fix: added to `deadPoolDirs`.
+  **Technique**: BulletCollection tokens with accumulated fees can trigger re-entrant swaps through
+  the same pair during `_transfer`, corrupting the K check. Check `feesCollected[token]` on the
+  token's swapManager vs `swapThreshold` — if fees exceed threshold, the dir where the token is
+  input to a registered AMM pair is dead.
 
 - **Pool#1566** (`0x672E8a49...`): pangolin_v2 pool (PumpKinsFarm/WAVAX), formula=126061309518754914934
   but evm=0 (dir=1). Token0 (`0x894aa2d0...`) is PumpKinsFarm — a FoT token (10% fee) with

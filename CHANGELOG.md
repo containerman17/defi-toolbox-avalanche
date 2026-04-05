@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-04-05 — Fix uniswap_v2 pool#1703: reflection token override underflow + reentrancy lock
+
+### Fixed
+- Pool `0x2562557F...` (uniswap_v2, BYAS/USDC, pool#1703) returned formula=835225 but evm=0 (dir=0)
+- Two root causes:
+  1. BYAS (`0x26b13e76...`) is a reflection token (RFI-style) with `_reflectedBalances` at slot 9. The reflection rate is ~7.2e48, so even a small transfer needs rAmount ~7.96e67, far exceeding the 1e36 balance override. Fix: added `shift: 128` so stored value = 1e36 << 128 = ~3.4e74 > rAmount.
+  2. Slot 5 held value 2 (reentrancy guard in ENTERED state), blocking sell-path transfers. Fix: added `disableSlots: [5]` to zero the lock.
+- Dir=1 also had ~0.06 PPM mismatch from the reentrancy guard side-effects; both fixes together resolve it.
+- 100% match both directions across 3 blocks
+
+## 2026-04-05 — Fix uniswap_v2 pool#3413: missing from registry.txt
+
+### Fixed
+- Pool `0x7a8fe1F0...` (uniswap_v2, WETH.e/USDC, pool#3413) returned formula=0 but evm=nonzero in both directions
+- Root cause: pool was missing from `formulas/registry.txt`, so it got a `zeroQuoter`
+- Added `0x7a8fe1f02073401f06f177a272073faf0e216895:0` to registry.txt (formula 0 = V2 constant product)
+- Both tokens already had overrides in `token_overrides.json`
+- 100% match both directions across 3 blocks
+
+## 2026-04-05 — Fix lfj_v1 pool#1272: SOCK FoT triggers re-entrant fee swap through same pair
+
+### Fixed
+- Pool `0x70201236...` (lfj_v1, WAVAX/SOCK) returned formula=98301931271636659 but evm=0 (dir=1)
+- SOCK (BulletCollection) `_transfer` calls `swapManager.attemptFeeSwap(pair)` which, with accumulated fees >= swapThreshold, does a real swap through the JoeRouter using the same pair
+- This modifies pair reserves mid-transfer; HayabusaRouter's pre-transfer `getReserves()` is then stale, producing an amountOut that fails the K invariant
+- Dir=0 unaffected: `attemptFeeSwap(router)` skips because router is not a registered AMM pair
+- Added pool to `deadPoolDirs` — SOCK as input to this pool always reverts on-chain
+- 100% match across 3 blocks
+
 ## 2026-04-05 — Fix sushiswap_v2 pool#2236: missing from registry.txt
 
 ### Fixed

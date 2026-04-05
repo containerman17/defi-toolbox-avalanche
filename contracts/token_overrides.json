@@ -1898,6 +1898,7 @@
   {
     "address": "0x26b13e7673cd4d47783c863c2ec7b20ac74fbe60",
     "slot": 9,
+    "shift": 128,
     "disableSlots": [5]
   },
   {

@@ -209,6 +209,10 @@ Definitive results:
 
 SplitMax: most wins, fewest losses, near-zero min, fastest (cache sharing).
 
+Added Greedy(10) as a fourth contestant in SplitMax. Previously max had 5 losses vs greedy
+because BFS at 10% volume finds paths that max's other strategies miss. Now max includes
+greedy itself — should have zero losses against any individual strategy.
+
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 
 ### GreedyRecursive: binary split tournament

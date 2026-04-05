@@ -21,8 +21,6 @@ var inputDeadTokens = map[common.Address]bool{
 	common.HexToAddress("0xb2a85c5ecea99187a977ac34303b80acbddfa208"): true, // ROCO: reflection token, EVM balance override doesn't set _rOwned correctly
 	common.HexToAddress("0x90842eb834cfd2a1db0b1512b254a18e4d396215"): true, // GoodBridging (GB): reflection token, _rOwned/_rTotal incompatible with EVM override
 	common.HexToAddress("0x440abbf18c54b2782a4917b80a1746d3a2c2cce1"): true, // router transfer reverts (missing override)
-	common.HexToAddress("0xbde79b2a371ea759a85901e4a185d03399c089c1"): true, // APOW: router transfer reverts (missing override)
-	common.HexToAddress("0xeccb564c288010ec3f437f2d9a7a836bd30da165"): true, // XPOW: router transfer reverts (missing override)
 	common.HexToAddress("0x6e7f5c0b9f4432716bdd0a77a3601291b9d9e985"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0x1f1fe1ef06ab30a791d6357fdf0a7361b39b1537"): true, // router transfer reverts (missing override)
 	common.HexToAddress("0xf16f18c155ef8fc46f980b23868d208db59cad9c"): true, // router transfer reverts (missing override)

@@ -16,6 +16,23 @@ Living document for investigating and fixing formula coverage gaps.
 
 **99.2% correct** — 4188 match, 33 mismatch (2000 pools, 1 block).
 
+Fixed pharaoh_v3 pool#2815 (`0x64c5279f...`, WAVAX/0xca2e0f72...): formula returned 0,
+EVM returned nonzero. Pool was in `pharaohV3Pools` and `registry.txt` but missing from
+`v3PoolFees` in `v3_registry.go`. Without the fee/tickSpacing entry, `newV3Pool()` returns
+nil before layout detection runs. Added `{500, 10}` (fee=500, tickSpacing=10 from on-chain
+`fee()` and `tickSpacing()` calls). **Technique**: pharaoh_v3 pools need entries in THREE
+registries: `registry.txt` (formula ID), `pharaoh_v3_registry.go` (layout selection),
+AND `v3_registry.go` (fee/tickSpacing). If a pharaoh_v3 pool returns formula=0 despite
+being in pharaohV3Pools, check `v3PoolFees`.
+
+Fixed pharaoh_v3 pool#2536 (`0x612B81fb...`, evaUSDC/USDC): dir=0 formula=890197
+but evm=0. Token0 evaUSDC (`0x741bd193...`) was missing from `token_overrides.json`
+(balance slot 5), so the router had zero balance and transfer reverted during EVM
+simulation. The pool was previously registered (pharaohV3Pools + v3PoolFees) which
+fixed the formula, but the missing token override made the EVM ground truth return 0.
+**Technique**: when a registered pool has formula=nonzero/evm=0 in only one direction,
+check if the input token for the failing direction is in `token_overrides.json`.
+
 Fixed lfj_v1 pool#3429 (`0x117ef430...`, WAVAX/0xc970) DIFF mismatch: token
 `0xc970d70234895dd6033f984fd00909623c666e66` is a 2% FoT token (subtract form:
 `fee = amount * 2 / 100`). Formula overshoot was ~2.04% in both directions. Added to

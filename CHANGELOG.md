@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-04-05 — evaUSDC override, more pharaoh_v3 fixes
+
+- evaUSDC token override (slot 5) for pharaoh_v3 0x612B81f
+- Continuing pharaoh_v3 zero-out campaign
+
 ## 2026-04-05 — Fix pharaoh_v3 pool#2815 formula mismatch (missing v3PoolFees entry)
 
 ### Root cause

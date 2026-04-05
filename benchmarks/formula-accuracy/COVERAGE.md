@@ -14,7 +14,15 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**99.1% correct** — 4181 match, 40 mismatch, 4221 tested quotes (2000 pools, 1 block).
+**96.3% correct** — 9741 match, 370 mismatch, 10111 tested quotes (5000 pools, 1 block).
+
+Batch registered 41 pools missing from `registry.txt` — all returned formula=0 while
+EVM returned nonzero. Breakdown: 22 lfj_v1, 9 pangolin_v2, 1 sushiswap_v2, 1 vapordex,
+1 swapsicle, 1 pharaoh_v1, 1 uniswap_v3, 2 pharaoh_v3. One pharaoh_v3 pool
+(`0x33a4b513...`) also needed entries in `v3_registry.go` (fee=250, tickSpacing=5) and
+`pharaoh_v3_registry.go`. All 41 pools now match. formula=0/evm=nonzero count dropped
+from 107 to 61. Remaining 61 are mostly uniswap_v4 (already registered, formula implementation
+gaps) and balancer_v3.
 
 Fixed uniswap_v2 pool#3194 (`0x84185907...`, 0x198dd15f/WAVAX): token0 (`0x198dd15f...`,
 UltimateTokenOwnable) missing from `token_overrides.json`. Token uses ERC-7201 namespaced

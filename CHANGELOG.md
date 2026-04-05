@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-04-05 — Batch register 41 pools missing from registry.txt
+
+- 41 pools with formula=0/evm=nonzero were simply missing from `formulas/registry.txt`
+- Breakdown: 22 lfj_v1, 9 pangolin_v2, 1 sushiswap_v2, 1 vapordex, 1 swapsicle,
+  1 pharaoh_v1, 1 uniswap_v3, 2 pharaoh_v3, 1 pharaoh_v3 also needed v3_registry.go
+  and pharaoh_v3_registry.go entries (fee=250, tickSpacing=5)
+- All 41 pools now match (0 still mismatched from this batch)
+- formula=0/evm=nonzero mismatches: 107 -> 61 (5000 pools, 1 block)
+- Remaining 61 are mostly uniswap_v4 and balancer_v3 (already registered, formula bugs)
+
 ## 2026-04-05 — Fix token override for pool#3194 (0x198dd15f ERC-7201 token)
 
 - Pool `0x84185907...` (uniswap_v2, 0x198dd15f/WAVAX) had formula=18221199990452332 but evm=0 (dir=0)

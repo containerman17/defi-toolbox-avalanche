@@ -405,6 +405,7 @@ var v3PoolFees = map[string][2]int32{
 	"0x331c4877d87f56241f2d3ff906578842f204567e": {500, 10}, // pharaoh_v3
 	"0x3347efc13838bceff9c703cb8a198c68e0826664": {10000, 200}, // uniswap_v3
 	"0x337d739d7fc29bd67072ab8e48b6ff90bb4cb82d": {100, 1}, // pharaoh_v3
+	"0x33a4b513c92a1d6115591e26bc683400c50b00de": {250, 5},     // pharaoh_v3
 	"0x33a7f40ac761012adaf604bbdb27c3ee8d4ca959": {10000, 200}, // uniswap_v3
 	"0x33b05c2c093c6b6720f176f6830ba58fe696bb31": {100, 1}, // uniswap_v3
 	"0x33cfd1fe903012f80be3717f1d8e5272c92ef641": {10000, 200}, // pharaoh_v3

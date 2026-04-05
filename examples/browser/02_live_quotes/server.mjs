@@ -51,14 +51,19 @@ const stateUrl = process.argv[2] || 'ws://localhost:7449/live';
 const poolLimit = parseInt(process.argv[3]) || 2000;
 console.log(`Connecting to ${stateUrl} (${poolLimit} pools)...`);
 await globalThis.connect(stateUrl, poolLimit, 3);
-console.log('Connected. Waiting for first block...');
-
-await new Promise(resolve => {
-  globalThis.subscribeBlocks((block, ts) => {
-    console.log(`Block ${block}`);
-    resolve();
+// On /live, wait for first block. On /debug (frozen snapshot), start immediately.
+const isDebug = stateUrl.includes('/debug/');
+if (!isDebug) {
+  console.log('Waiting for first block...');
+  await new Promise(resolve => {
+    globalThis.subscribeBlocks((block, ts) => {
+      console.log(`Block ${block}`);
+      resolve();
+    });
   });
-});
+} else {
+  console.log('Debug/snapshot mode — using frozen state.');
+}
 
 // ── Config (same as browser demo) ───────────────────────────────────
 const USDC = '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E';
@@ -102,85 +107,64 @@ for (const tok of TOKENS) {
 let quoteCount = 0;
 let totalMs = 0;
 
+// The quote() call with split=true computes both single-path and split on the
+// SAME locked block. We compare forward.amountOut (single) vs split.amountOut
+// from the same response — no block drift.
 console.log('\n' + [
   'Token'.padEnd(8),
-  'Buy'.padStart(18),
-  'ms'.padStart(7),
-  'Sell→USDC'.padStart(12),
-  'Spread'.padStart(8),
-  '│ SplitBuy'.padStart(20),
-  'SplitSell'.padStart(12),
-  'SplitSprd'.padStart(10),
-  'Δ'.padStart(8),
+  'Single Buy'.padStart(18),
+  'Split Buy'.padStart(18),
+  'Δ buy'.padStart(14),
+  '│ ms'.padStart(8),
+  'legs'.padStart(5),
 ].join(''));
-console.log('─'.repeat(103));
+console.log('─'.repeat(71));
 
 while (true) {
   for (const tok of TOKENS) {
-    // Single path: buy 100 USDC → token
     const t0 = performance.now();
-    const buy = await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC, true);
-    const buyMs = performance.now() - t0;
-    if (!buy.forward) continue;
-    const buyAmount = buy.forward.amountOut;
-    if (buyAmount === '0' || !buyAmount) continue;
+    const res = await globalThis.quote(USDC, tok.addr, AMOUNT_100_USDC, true);
+    const ms = performance.now() - t0;
+    if (!res.forward) continue;
+
+    const singleOut = res.forward.amountOut;
+    if (singleOut === '0' || !singleOut) continue;
     quoteCount++;
-    totalMs += buyMs;
+    totalMs += ms;
 
-    // Single path: sell token → USDC
-    const sell = await globalThis.quote(tok.addr, USDC, buyAmount, true);
-    if (!sell.forward || sell.forward.amountOut === '0') continue;
-    quoteCount++;
-
-    const sellBack = sell.forward.amountOut;
-    const spreadPct = (Number(100000000n - BigInt(sellBack)) / 1000000).toFixed(2);
-
-    // Split: use split buy amount, sell with split
-    let splitBuyStr = '—';
-    let splitSellStr = '—';
-    let splitSpreadStr = '—';
+    const singleStr = formatToken(singleOut, tok.decimals);
+    let splitStr = '—';
     let deltaStr = '';
+    let legsStr = '';
 
-    if (buy.split && buy.split.amountOut !== '0') {
-      splitBuyStr = formatToken(buy.split.amountOut, tok.decimals);
+    if (res.split && res.split.amountOut !== '0') {
+      splitStr = formatToken(res.split.amountOut, tok.decimals);
+      legsStr = String(res.split.legs.length);
 
-      // Sell the split buy amount back
-      const splitSell = await globalThis.quote(tok.addr, USDC, buy.split.amountOut, true);
-      quoteCount++;
+      const singleBI = BigInt(singleOut);
+      const splitBI = BigInt(res.split.amountOut);
+      const diff = splitBI - singleBI;
 
-      if (splitSell.split && splitSell.split.amountOut !== '0') {
-        splitSellStr = formatUSDC(splitSell.split.amountOut);
-        const splitSpread = (Number(100000000n - BigInt(splitSell.split.amountOut)) / 1000000).toFixed(2);
-        splitSpreadStr = splitSpread + '%';
-        const delta = parseFloat(spreadPct) - parseFloat(splitSpread);
-        if (Math.abs(delta) >= 0.005) {
-          deltaStr = (delta > 0 ? '-' : '+') + Math.abs(delta).toFixed(2) + '%';
-        } else {
-          deltaStr = '=';
-        }
-      } else if (splitSell.forward && splitSell.forward.amountOut !== '0') {
-        splitSellStr = formatUSDC(splitSell.forward.amountOut);
-        const splitSpread = (Number(100000000n - BigInt(splitSell.forward.amountOut)) / 1000000).toFixed(2);
-        splitSpreadStr = splitSpread + '%';
-        const delta = parseFloat(spreadPct) - parseFloat(splitSpread);
-        if (Math.abs(delta) >= 0.005) {
-          deltaStr = (delta > 0 ? '-' : '+') + Math.abs(delta).toFixed(2) + '%';
-        } else {
-          deltaStr = '=';
-        }
+      if (diff > 0n) {
+        // Split is better — show green
+        const pct = Number(diff) / Number(singleBI) * 100;
+        deltaStr = `+${pct.toFixed(4)}%`;
+      } else if (diff < 0n) {
+        // Split is worse — this should NEVER happen on same block
+        const pct = Number(-diff) / Number(singleBI) * 100;
+        deltaStr = `-${pct.toFixed(4)}% !!!`;
+      } else {
+        deltaStr = '=';
       }
     }
 
     console.log([
       tok.symbol.padEnd(8),
-      formatToken(buyAmount, tok.decimals).padStart(18),
-      `${buyMs.toFixed(0)}ms`.padStart(7),
-      formatUSDC(sellBack).padStart(12),
-      (spreadPct + '%').padStart(8),
-      ('│ ' + splitBuyStr).padStart(20),
-      splitSellStr.padStart(12),
-      splitSpreadStr.padStart(10),
-      deltaStr.padStart(8),
+      singleStr.padStart(18),
+      splitStr.padStart(18),
+      deltaStr.padStart(14),
+      ('│ ' + ms.toFixed(0) + 'ms').padStart(8),
+      legsStr.padStart(5),
     ].join(''));
   }
 

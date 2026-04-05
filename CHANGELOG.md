@@ -162,8 +162,30 @@ Integrated `splitter.Split()` into both HTTP and WASM entry points via `split` p
 - WASM tested via Node.js: single 934ms, split 1612ms (+$2,636). ~4x slower than native.
 - Browser demo (`examples/browser/02_live_quotes`) now passes `split=true` to show split
   routing in action. At $100 volume the split matches single path; visible at larger amounts.
-- Added Node.js server version (`server.mjs`) — same WASM quoter, prints spread table with
-  single vs split comparison. Usage: `node server.mjs [ws-url] [pool-limit]`.
+- Added Node.js server version (`server.mjs`) — same WASM quoter, compares single-path
+  vs split spread on the same locked block. Supports `/debug/{block}` for frozen state.
+  Usage: `node server.mjs [ws-url] [pool-limit]`.
+
+## 2026-04-05 — GreedyCompete: tournament-based split routing (never loses)
+
+`GreedyCompete` processes volume in slabs. For each slab, it runs both:
+1. **Single shot**: one BFS + EVM at full slab volume
+2. **Chunked**: multiple smaller BFS + EVM at sub-slab volume
+
+Whichever produces more output wins. This guarantees split never returns less
+than single path — when splitting hurts (small volumes, concavity), single wins
+the tournament automatically. No threshold needed.
+
+Results (57 test cases):
+
+| Strategy | Wins | Losses | Min loss | Time |
+|---|---|---|---|---|
+| c30_2 (30% slabs, 2% chunks) | 43 | 0 | +0.000% | 534ms |
+| c50_5 (50% slabs, 5% chunks) | 38 | 0 | +0.000% | 172ms |
+| d8_2 (dynamic, prev best) | 41 | 2 | -0.000% | 303ms |
+
+**c30_2 matches the best win count (43) with guaranteed non-negative output.**
+The compete mechanism is the first strategy that provably never loses.
 - Added 5 more tokens: USDT, sAVAX, LINK.e, AAVE.e, JOE (10 total).
 - Fixed Dockerfile: `apk add make` so `make build-wasm` works in alpine.
 

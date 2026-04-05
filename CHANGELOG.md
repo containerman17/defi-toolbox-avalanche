@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-05 — Sender-aware reflection tokens, Ape-X shift, batch registry
+
+- SLED reflection token: added SenderAwareOutputAdjuster for excluded-sender pools (0 PPB)
+- Ape-X reflection token: shift:128 for sufficient _rOwned balance
+- 41 pools batch-registered, more token overrides
+
 ## 2026-04-05 — Fix SLED reflection token mismatch (pool#3076, pool#2192)
 
 - Pool `0x7e449382...` (elkdex, SLED/ELK) and `0x18c8e134...` (pangolin_v2, SLED/WAVAX)

@@ -244,6 +244,16 @@ timeout 300 go run ./tools/token-pricer/ 2>&1
   non-proxy), balance mapping at slot 0. Same pattern as pool#3028 and pool#3032. 100% match
   both directions across 3 blocks after fix.
 
+- **Pool#1059** (`0x437705F7...`): vapordex pool (0x88f89b/USDC), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Same pattern as pool#526 and pool#593. Both token overrides already existed.
+  100% match both directions across 3 blocks.
+
+- **Pool#593** (`0x3770Ee18...`): vapordex pool (0x0256b2/0x88f89b), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Same pattern as pool#526. Both token overrides already existed.
+  100% match both directions across 3 blocks.
+
 - **Pool#526** (`0x0DBcB787...`): vapordex pool (0x88f89b/WAVAX), formula=0 but evm=nonzero.
   Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
   Vapordex is a V2 fork; the EVM router's custom fee path (feeBps via extraData) is not

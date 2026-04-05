@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-05 — Fix vapordex pool#1059: was incorrectly blacklisted
+
+### Fixed
+- Pool `0x437705F7...` (vapordex, 0x88f89b/USDC) returned formula=0 but evm=nonzero
+- Was blacklisted (-1) in `registry.txt` — changed to formula 0 (FormulaV2_30bps)
+- Both token overrides already existed; same pattern as pool#526 and pool#593
+- 100% match both directions across 3 blocks after fix
+
+## 2026-04-05 — Fix vapordex pool#593: was incorrectly blacklisted
+
+### Fixed
+- Pool `0x3770Ee18...` (vapordex, 0x0256b2/0x88f89b) returned formula=0 but evm=nonzero
+- Was blacklisted (-1) in `registry.txt` — changed to formula 0 (FormulaV2_30bps)
+- Both token overrides already existed; same pattern as pool#526
+- 100% match both directions across 3 blocks after fix
+
 ## 2026-04-05 — Fix arena_v2 pool#1702: missing token override
 
 ### Fixed

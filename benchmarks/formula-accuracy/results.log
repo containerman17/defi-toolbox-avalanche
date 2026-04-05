@@ -674,3 +674,8 @@ time=2026-04-05_10:27 git=417afea blocks=1 ms_per_pool=0.0031 total_ms=6.1 pools
 time=2026-04-05_10:27 git=417afea blocks=1 ms_per_pool=0.0027 total_ms=9.3 pools=3500 formula=7148 match=6938 mismatch=210 correctness=97.1 nonzero=91.9
 time=2026-04-05_10:28 git=417afea blocks=1 ms_per_pool=0.0047 total_ms=0.0 pools=1 formula=2 match=1 mismatch=1 correctness=50.0 nonzero=50.0
 time=2026-04-05_10:28 git=417afea blocks=3 ms_per_pool=0.0055 total_ms=0.0 pools=1 formula=1 match=0 mismatch=1 correctness=0.0 nonzero=0.0
+time=2026-04-05_10:28 git=65df3a0 blocks=3 ms_per_pool=0.0034 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
+time=2026-04-05_10:29 git=65df3a0 blocks=3 ms_per_pool=0.0014 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0
+time=2026-04-05_10:29 git=65df3a0 blocks=3 ms_per_pool=0.0026 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
+time=2026-04-05_10:30 git=65df3a0 blocks=3 ms_per_pool=0.0025 total_ms=0.0 pools=1 formula=1 match=1 mismatch=0 correctness=100.0 nonzero=0.0
+time=2026-04-05_10:30 git=65df3a0 blocks=3 ms_per_pool=0.0016 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0

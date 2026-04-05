@@ -56,6 +56,13 @@ _getCurrentSupply(). Added SenderAwareOutputAdjuster interface to pass pool addr
 to reflection model. New technique: when a reflection token has 10-100 PPB residual after
 adding to reflectionTokenConfigs, check if the swap sender (V2 pool) is excluded.
 
+Batch registered 505 pangolin_v2 pools missing from `registry.txt` — all assigned
+formula=0 (FormulaV2_30bps). Before: 986/1491 pangolin_v2 registered. After: 1491/1491.
+These were getting `zeroQuoter` and would show formula=0/evm=nonzero at higher --limit.
+The 8 pangolin_v2 pools already visible in the --limit 2000 benchmark were already
+registered; their result=0 mismatches are token-related (missing overrides), not
+registry gaps.
+
 Batch registered 41 pools missing from `registry.txt` — all returned formula=0 while
 EVM returned nonzero. Breakdown: 22 lfj_v1, 9 pangolin_v2, 1 sushiswap_v2, 1 vapordex,
 1 swapsicle, 1 pharaoh_v1, 1 uniswap_v3, 2 pharaoh_v3. One pharaoh_v3 pool

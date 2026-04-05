@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-05 — Batch register 505 missing pangolin_v2 pools
+
+- Added 505 pangolin_v2 pools to `formulas/registry.txt` with formula=0 (FormulaV2_30bps).
+  Pangolin V2 is a standard UniswapV2 fork; all use the same 30bps fee formula.
+- Before: 986 pangolin_v2 pools registered out of 1491 total. After: all 1491 registered.
+- These pools were returning result=0 (zeroQuoter) because they had no registry entry.
+  With --limit 2000 most weren't tested, but they would cause formula=0/evm=nonzero
+  mismatches at higher limits or when used by the quoter in production.
+- The 8 pangolin_v2 pools that already appeared as result=0/evm=nonzero in the benchmark
+  were already registered — their mismatches are token-related (missing token_overrides),
+  not registry-related.
+- Benchmark at --limit 2000: 98.2% correct (4147 match, 74 mismatch). No change in
+  mismatch count at this limit since the newly registered pools are beyond pool#2000.
+
 ## 2026-04-05 — Fix DZHV token diamond proxy dispatch (3 pools, formula nonzero, EVM=0)
 
 - Pool#3440 (uniswap_v3 `0x4Da924BC...`), pool#3192 (uniswap_v2), pool#2540 (lfj_v1)

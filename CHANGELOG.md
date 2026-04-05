@@ -195,8 +195,19 @@ the best. Cache sharing makes it barely slower than one strategy (~229ms vs ~210
 W=39 L=0 — takes the max of three complementary approaches.
 
 Moved split-bench to `benchmarks/split-strategies/` with deterministic multi-block testing
-via `/debug/{block}` frozen snapshots. Runs 7 blocks at 10k intervals from deployment block
-(82067033). Fully reproducible results.
+via `/debug/{block}` frozen snapshots. 399 test cases (7 blocks × 20 pairs × 3 volumes).
+
+Definitive results:
+
+| Strategy | Wins | Losses | Min | Time |
+|---|---|---|---|---|
+| **SplitMax** | **282** | **5** | **-0.000%** | **241ms** |
+| GreedyMixed grad | 280 | 22 | -1.915% | 489ms |
+| GreedyCompete c30_2 | 277 | 5 | -0.000% | 565ms |
+| GreedyFast 40 | 277 | 10 | -28.613% | 422ms |
+| GreedyDynamic d8_2 | 255 | 8 | -0.027% | 319ms |
+
+SplitMax: most wins, fewest losses, near-zero min, fastest (cache sharing).
 
 Updated `splitter.Split()` default to use `GreedyCompete(30, 2)`.
 

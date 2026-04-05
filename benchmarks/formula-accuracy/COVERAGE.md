@@ -14,7 +14,21 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**96.9% correct** — 7086 match, 226 mismatch (3500 pools, 3 blocks aggregate).
+**97.0% correct** — 7092 match, 220 mismatch (3500 pools, 3 blocks aggregate).
+
+Fixed DZHV token (`0x3419875b...`) diamond proxy dispatch for pool#3440 (uniswap_v3,
+`0x4Da924BC...`), pool#3192 (uniswap_v2), and pool#2540 (lfj_v1). The token uses a
+two-step proxy: STATICCALL to implementation gets handler address, then DELEGATECALL
+to handler executes the function. Neither the implementation nor the handler were in
+the state dump. Added `codeContracts` to `token_overrides.json` deploying: (1) a mock
+implementation that always returns the handler address, (2) a replacement ERC20 handler
+compiled with `--evm-version paris` (no PUSH0) that uses the same storage layout
+(slot 0 = balances, slot 1 = allowances) and returns `bool` from transfer/transferFrom.
+The original on-chain handler doesn't return `bool`, causing the router's Solidity 0.8+
+ABI decoder to revert. **Technique**: when a token uses a diamond/dispatcher proxy,
+deploy mock codeContracts for each link in the proxy chain. If the on-chain handler
+doesn't return `bool` from transfer, compile a replacement with matching storage layout
+that does. Use `--evm-version paris` to avoid PUSH0 (Avalanche C-Chain).
 
 Fixed pharaoh_v1 pool#3445 (`0x13e09b6a...`, PHAR/abcPHAR, stable): Newton-Raphson
 non-convergence at extreme reserve imbalance (r0=4.58e15, r1=363.95e18). The `getY`

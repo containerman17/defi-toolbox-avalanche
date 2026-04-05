@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-05 — Fix DZHV token diamond proxy dispatch (3 pools, formula nonzero, EVM=0)
+
+- Pool#3440 (uniswap_v3 `0x4Da924BC...`), pool#3192 (uniswap_v2), pool#2540 (lfj_v1)
+  all had formula=nonzero vs EVM=0 on dir=0 (DZHV->WAVAX).
+- Root cause: DZHV (`0x3419875b...`) uses a diamond-like proxy. The proxy STATICCALLs an
+  implementation contract to look up the handler address, then DELEGATECALLs the handler.
+  Neither the implementation (`0xDDA114b2...`) nor the handler (`0xbb9826a3...`) were in
+  the state dump, so the proxy dispatch failed silently (DELEGATECALL to address(0) = no-op).
+  Additionally, the on-chain handler's `transfer()` doesn't return `bool`, causing the
+  router's Solidity 0.8+ ABI decoder to revert.
+- Fix: added `codeContracts` to `token_overrides.json` deploying: (1) a mock implementation
+  that always returns the handler address, (2) a replacement ERC20 handler (compiled with
+  `--evm-version paris` to avoid PUSH0) with matching slot-0 balance / slot-1 allowance
+  layout that returns `bool` from transfer/transferFrom.
+- All 3 pools now match at 0 PPB across 3 blocks, both directions.
+- Dead end: initially deployed the on-chain handler bytecode as-is. Transfer succeeded but
+  returned empty data, causing the router to revert. Had to compile a replacement handler
+  with correct return values.
+
 ## 2026-04-05 — Fix pharaoh_v1 pool#3445 Newton-Raphson non-convergence (formula nonzero, EVM=0)
 
 - Pool `0x13e09b6a...` (pharaoh_v1, PHAR/abcPHAR, stable) had formula=109605651937277039200

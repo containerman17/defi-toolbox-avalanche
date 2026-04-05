@@ -348,27 +348,36 @@ func (pm *PoolManager) buildQuoter(pool common.Address, formulaID int) (pq PoolQ
 
 	wrapAndCache := func(inner PoolQuoter) PoolQuoter {
 		registerSlots()
-		// Wrap with dead direction check for broken tokens (generic, all pool types)
-		var deadTokens map[common.Address]bool
+		// Wrap with dead direction checks for broken tokens (generic, all pool types).
+		// Two categories:
+		// - deadAnyDirTokens: transfer() is fundamentally broken, both input and output dead
+		// - deadInputTokens: router can't send token (missing override), only input direction dead
+		var deadAnyDirTokens, deadInputOnlyTokens map[common.Address]bool
 		if hasTokens {
 			for _, tok := range tokens {
 				if brokenTokens[tok] {
-					if deadTokens == nil {
-						deadTokens = make(map[common.Address]bool)
+					if deadAnyDirTokens == nil {
+						deadAnyDirTokens = make(map[common.Address]bool)
 					}
-					deadTokens[tok] = true
+					deadAnyDirTokens[tok] = true
+				}
+				if inputDeadTokens[tok] {
+					if deadInputOnlyTokens == nil {
+						deadInputOnlyTokens = make(map[common.Address]bool)
+					}
+					deadInputOnlyTokens[tok] = true
 				}
 			}
 		}
-		// Pool-specific dead directions override token-level checks
+		// Pool-specific dead directions: only blocks input direction
 		if deadTok, ok := deadPoolDirs[pool]; ok {
-			if deadTokens == nil {
-				deadTokens = make(map[common.Address]bool)
+			if deadInputOnlyTokens == nil {
+				deadInputOnlyTokens = make(map[common.Address]bool)
 			}
-			deadTokens[deadTok] = true
+			deadInputOnlyTokens[deadTok] = true
 		}
-		if len(deadTokens) > 0 {
-			inner = &deadDirQuoter{inner: inner, deadTokens: deadTokens}
+		if len(deadAnyDirTokens) > 0 || len(deadInputOnlyTokens) > 0 {
+			inner = &deadDirQuoter{inner: inner, deadAnyDirTokens: deadAnyDirTokens, deadInputTokens: deadInputOnlyTokens}
 		}
 		if wantFot {
 			poolHex := strings.ToLower(pool.Hex())
@@ -510,16 +519,21 @@ var deadPoolDirs = map[common.Address]common.Address{
 }
 
 // deadDirQuoter wraps a PoolQuoter to block directions where a broken token
-// causes on-chain reverts. Checks both input and output: a token whose transfer()
-// always reverts will cause reverts whether it's being sent in or sent out.
+// causes on-chain reverts. Two modes:
+// - deadAnyDirTokens: transfer() is fundamentally broken, blocks both input and output
+// - deadInputTokens: router can't send token, blocks only when token is input
 type deadDirQuoter struct {
-	inner      PoolQuoter
-	deadTokens map[common.Address]bool // tokens that revert when used as input or output
+	inner            PoolQuoter
+	deadAnyDirTokens map[common.Address]bool // tokens that revert when used as input or output
+	deadInputTokens  map[common.Address]bool // tokens that revert only when used as input
 }
 
 func (d *deadDirQuoter) Address() common.Address { return d.inner.Address() }
 func (d *deadDirQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) uint256.Int {
-	if d.deadTokens[tokenIn] || d.deadTokens[tokenOut] {
+	if d.deadAnyDirTokens[tokenIn] || d.deadAnyDirTokens[tokenOut] {
+		return uint256.Int{}
+	}
+	if d.deadInputTokens[tokenIn] {
 		return uint256.Int{}
 	}
 	return d.inner.Quote(amountIn, tokenIn, tokenOut)

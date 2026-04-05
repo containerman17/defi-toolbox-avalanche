@@ -14,7 +14,21 @@ Living document for investigating and fixing formula coverage gaps.
 
 ## Current State (2026-04-05)
 
-**97.0% correct** — 7092 match, 220 mismatch (3500 pools, 3 blocks aggregate).
+**99.1% correct** — 4184 match, 37 mismatch (2000 pools, 1 block).
+
+Fixed `deadDirQuoter` blocking output direction for 22 input-dead tokens. These tokens had
+missing/broken overrides, so the router couldn't SEND them. But the formula was incorrectly
+returning 0 even when the token was the OUTPUT (pool sends to router — works fine on-chain).
+Root cause: `brokenTokens` map mixed truly-broken tokens (transfer always reverts) with
+input-only-dead tokens (router can't send due to missing override). Split into two maps:
+`brokenTokens` (both dirs dead) and `inputDeadTokens` (input only). Updated `deadDirQuoter`
+to support `deadAnyDirTokens` (blocks both) and `deadInputTokens` (blocks input only).
+Fixed 35 mismatches across 7 DEX types: lfj_v1 (18→0), pangolin_v2 (7→0), yetiswap (2→0),
+swapsicle (2→0), pharaoh_v1 (1→0), oliveswap (1→0), uniswap_v3 (3→0).
+**Technique**: when a pool has formula=0/evm=nonzero and the output token is in
+`brokenTokens` with comment "transfer reverts in EVM simulation", the token's transfer
+works FROM the pool (which already holds tokens) — only the router→pool direction is dead.
+These should be in `inputDeadTokens`, not `brokenTokens`.
 
 Fixed DZHV token (`0x3419875b...`) diamond proxy dispatch for pool#3440 (uniswap_v3,
 `0x4Da924BC...`), pool#3192 (uniswap_v2), and pool#2540 (lfj_v1). The token uses a

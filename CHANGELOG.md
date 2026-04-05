@@ -1,5 +1,35 @@
 # Changelog
 
+## 2026-04-05 — Fix deadDirQuoter blocking output direction for input-dead tokens (72→37 mismatches)
+
+### Root cause
+`brokenTokens` mixed two categories: tokens with genuinely broken `transfer()` (both
+directions dead) and tokens where the router's EVM simulation couldn't send them due to
+missing/broken overrides (input direction only). The `deadDirQuoter` wrapper blocked
+BOTH input and output for all entries, preventing the formula from quoting when a
+broken-override token was the swap OUTPUT — even though the pool can still transfer
+output tokens to the router on-chain.
+
+### Fix
+Split `brokenTokens` into two maps in `formulas/pool_v2.go`:
+- `brokenTokens`: transfer() fundamentally broken (EVDC SafeMath overflow, xPRYM INVALID
+  opcode). Both directions dead.
+- `inputDeadTokens`: router can't send token as input (missing/wrong override). Only
+  input direction dead; output direction works because the pool already holds the tokens.
+
+Updated `deadDirQuoter` in `formulas/pool_quoter.go` to support both:
+- `deadAnyDirTokens` (from `brokenTokens`): blocks input and output
+- `deadInputTokens` (from `inputDeadTokens` + `deadPoolDirs`): blocks input only
+
+### Results
+- Before: 72 mismatches at --limit 2000 (1 block)
+- After: 37 mismatches at --limit 2000 (1 block)
+- 35 mismatches fixed across lfj_v1 (18→0), pangolin_v2 (7→0), yetiswap (2→0),
+  swapsicle (2→0), pharaoh_v1 (1→0), oliveswap (1→0), uniswap_v3 (3→0)
+- Remaining 37: uniswap_v4 (30, impl gaps), woofi_v2 (4, AVAX sentinel), balancer_v3 (2),
+  pharaoh_v3 (1)
+- Accuracy: 99.1% (4184 match, 37 mismatch)
+
 ## 2026-04-05 — Batch register 505 missing pangolin_v2 pools
 
 - Added 505 pangolin_v2 pools to `formulas/registry.txt` with formula=0 (FormulaV2_30bps).

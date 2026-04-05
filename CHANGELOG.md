@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-04-05 — Fix SLED reflection token mismatch (pool#3076, pool#2192)
+
+- Pool `0x7e449382...` (elkdex, SLED/ELK) and `0x18c8e134...` (pangolin_v2, SLED/WAVAX)
+  had formula vs EVM mismatch on dir=1 (buying SLED). Before: formula=3470237909365,
+  evm=3470315473701 (22 PPM off) using fotPct(2) static approximation.
+- Root cause: SLED (`0x1f1fe1ef...`) is a pure 2% reflection token (RFI fork), not a
+  simple fee-on-transfer. The static fotPct(2) ignored reflection redistribution that
+  changes the rate after each transfer, causing a 22 PPM drift.
+- Fix step 1: moved SLED from fotCalculators to reflectionTokenConfigs with exact RFI math.
+  Storage layout: slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances,
+  slot 4=_isExcluded(map), slot 5=_excluded(array), slot 6=_rTotal. tTotal=10*10^6*10^9 (constant).
+  This reduced the error from 22 PPM to 25 PPB.
+- Fix step 2: the V2 pool (sender) is in the token's _excluded array. For excluded senders,
+  _transfer reduces both _rOwned and _tOwned, which changes _getCurrentSupply() after the
+  transfer. The reflection model didn't account for this, computing newRSupply/newTSupply wrong.
+  Added SenderAwareOutputAdjuster interface: reflection tokens check if the sender is excluded
+  and adjust the post-transfer supply accordingly. fotPoolQuoter now passes the pool address
+  as sender when the output token model supports it.
+- Result: 0 PPB across 3 blocks for both pools. No regressions (3500 pools).
+- Technique: when a reflection token has a small residual (10-100 PPB) after adding to
+  reflectionTokenConfigs, check if the swap sender (V2 pool) is in the _excluded array.
+  If so, the post-transfer _getCurrentSupply must account for the sender's rOwned/tOwned changes.
+
+## 2026-04-05 — Fix token override for Ape-X reflection token (pool#3264)
+
+- Pool `0x93281bea...` (partyswap, WAVAX/Ape-X) had formula=88265161824869661 but evm=0 (dir=1)
+- Root cause: token `0xd039c9079ca7f2a87d632a9c0d7cea0137bacfb5` (Ape-X) is an RFI reflection
+  token. Slot 3 stores `_rOwned` (not raw balances). `balanceOf = _rOwned / (_rTotal / _tTotal)`.
+  The override wrote 1e36 to slot 3, but `_rTotal` at slot 10 is ~2^256, so `balanceOf = 0`.
+  The router had zero effective balance, causing the EVM transfer to silently produce no output.
+- Fix: added `"shift": 128` to the token override. With shift, stored value = 1e36 << 128 = ~2^248,
+  giving `balanceOf(router) ~= 32.9e18` tokens — enough for swap quoting.
+- Also fixes pangolin_v2 pool `0x6e667ccc...` (pool#3263) with the same token.
+- 100% match both directions across 3 blocks. No regressions (2000 pools, 1 block).
+
 ## 2026-04-05 — Batch register 41 pools missing from registry.txt
 
 - 41 pools with formula=0/evm=nonzero were simply missing from `formulas/registry.txt`

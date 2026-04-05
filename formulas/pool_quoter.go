@@ -563,7 +563,13 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Ad
 	// Adjust output: if tokenOut is FoT, user receives less.
 	// Skip if this pool is exempt on the output side (token skips fee when pool is sender).
 	if !f.outputExempt {
-		out = modelOut.AdjustOutput(&out)
+		// For reflection tokens, the pool (sender) being excluded affects the
+		// post-transfer rate. Use SenderAwareOutputAdjuster when available.
+		if sa, ok := modelOut.(SenderAwareOutputAdjuster); ok {
+			out = sa.AdjustOutputFromSender(&out, f.inner.Address())
+		} else {
+			out = modelOut.AdjustOutput(&out)
+		}
 	}
 
 	return out

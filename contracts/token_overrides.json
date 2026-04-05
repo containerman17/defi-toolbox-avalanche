@@ -9225,7 +9225,8 @@
   },
   {
     "address": "0xd039c9079ca7f2a87d632a9c0d7cea0137bacfb5",
-    "slot": 3
+    "slot": 3,
+    "shift": 128
   },
   {
     "address": "0xd05b010eddb2dc65d5bd5a1389330d475049a4d5",

@@ -84,6 +84,13 @@ func (f *fotTokenModel) adjust(amount *uint256.Int) uint256.Int {
 	return *adjusted
 }
 
+// SenderAwareOutputAdjuster is optionally implemented by TokenModels that need
+// the sender address to compute the exact output. Reflection tokens use this to
+// adjust for excluded senders, whose _rOwned/_tOwned changes affect _getCurrentSupply.
+type SenderAwareOutputAdjuster interface {
+	AdjustOutputFromSender(amount *uint256.Int, sender common.Address) uint256.Int
+}
+
 // reflectionTokenModel implements exact RFI/SafeMoon reflection math.
 // After a transfer, _reflectFee reduces _rTotal by rFee, changing the rate.
 // The recipient's actual received tokens = rTransferAmount * _tTotal / (_rTotal - rFee),
@@ -115,11 +122,15 @@ type reflectionTokenModel struct {
 func (r *reflectionTokenModel) IsFoT() bool { return true }
 
 func (r *reflectionTokenModel) AdjustInput(amount *uint256.Int) uint256.Int {
-	return r.adjustReflection(amount)
+	return r.adjustReflection(amount, common.Address{})
 }
 
 func (r *reflectionTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int {
-	return r.adjustReflection(amount)
+	return r.adjustReflection(amount, common.Address{})
+}
+
+func (r *reflectionTokenModel) AdjustOutputFromSender(amount *uint256.Int, sender common.Address) uint256.Int {
+	return r.adjustReflection(amount, sender)
 }
 
 // getCurrentSupply mirrors Solidity's _getCurrentSupply(), which subtracts
@@ -183,8 +194,11 @@ func (r *reflectionTokenModel) getCurrentSupply(rTotal, tTotal *big.Int) (rSuppl
 
 // adjustReflection computes the exact post-reflection received amount.
 // tAmount is the raw transfer amount before any fees.
+// sender is the transfer sender (e.g. the V2 pool); if non-zero AND the sender is
+// an excluded account, the post-transfer _getCurrentSupply is adjusted for the
+// sender's _rOwned/_tOwned changes (rOwned -= rAmount, tOwned -= tAmount).
 // Returns the amount the recipient's balanceOf increases by.
-func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int {
+func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int, sender common.Address) uint256.Int {
 	tAmount := amount.ToBig()
 
 	// Compute total fee (reflection + team/other) — same as fotCalculators entry
@@ -233,6 +247,9 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int
 	// rate = rSupply / tSupply (integer division, same as Solidity _getRate)
 	rate := new(big.Int).Div(rSupply, tSupply)
 
+	// rAmount = tAmount * rate (total r-space amount debited from sender)
+	rAmount := new(big.Int).Mul(tAmount, rate)
+
 	// rFee = tFee * rate (reflection fee in r-space)
 	rFee := new(big.Int).Mul(tFee, rate)
 
@@ -248,14 +265,27 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int
 
 	// After _reflectFee: _rTotal -= rFee (and rBurn if applicable).
 	// This changes the effective supply for the new rate calculation.
-	// rSupply decreases by rFee + rBurn (excluded accounts' rOwned unchanged).
-	// tSupply decreases by tBurn only (excluded accounts' tOwned unchanged).
+	// For non-excluded senders: rSupply decreases by rFee only.
+	// For excluded senders: _rOwned[sender] -= rAmount and _tOwned[sender] -= tAmount,
+	// so rSupply = (rTotal - rFee) - (sender_rOwned - rAmount) - other_excluded
+	//            = rSupply - rFee + rAmount
+	// and tSupply = tTotal - (sender_tOwned - tAmount) - other_excluded
+	//            = tSupply + tAmount
 	newRSupply := new(big.Int).Sub(rSupply, rFee)
 	newTSupply := new(big.Int).Set(tSupply)
 	if rBurn != nil {
 		newRSupply.Sub(newRSupply, rBurn)
 		newTSupply.Sub(newTSupply, tBurn)
 	}
+
+	// If sender is excluded, adjust for their _rOwned/_tOwned changes
+	if (sender != common.Address{}) && (r.excludedArraySlot != common.Hash{}) {
+		if r.isSenderExcluded(sender) {
+			newRSupply.Add(newRSupply, rAmount)
+			newTSupply.Add(newTSupply, tAmount)
+		}
+	}
+
 	if newRSupply.Sign() <= 0 || newTSupply.Sign() <= 0 {
 		result, _ := uint256.FromBig(tTransfer)
 		if result == nil { return uint256.Int{} }
@@ -278,6 +308,32 @@ func (r *reflectionTokenModel) adjustReflection(amount *uint256.Int) uint256.Int
 		return uint256.Int{}
 	}
 	return *result
+}
+
+// isSenderExcluded checks if the sender address is in the _excluded array.
+func (r *reflectionTokenModel) isSenderExcluded(sender common.Address) bool {
+	if (r.excludedArraySlot == common.Hash{}) {
+		return false
+	}
+	lengthRaw := r.reader(r.tokenAddr, r.excludedArraySlot)
+	length := new(big.Int).SetBytes(lengthRaw[:])
+	if length.Sign() == 0 || length.BitLen() > 16 {
+		return false
+	}
+	n := int(length.Int64())
+	arrayBase := new(big.Int).SetBytes(solKeccak256Slot(r.excludedArraySlot))
+	for i := 0; i < n; i++ {
+		elemSlot := new(big.Int).Add(arrayBase, big.NewInt(int64(i)))
+		var elemSlotHash common.Hash
+		elemSlot.FillBytes(elemSlotHash[:])
+		addrRaw := r.reader(r.tokenAddr, elemSlotHash)
+		var excAddr common.Address
+		copy(excAddr[:], addrRaw[12:32])
+		if excAddr == sender {
+			return true
+		}
+	}
+	return false
 }
 
 // TokenModelRegistry maps token addresses to their TokenModel.

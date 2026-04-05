@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-04-05 — Fix lfj_v1 pool#2570 FoT mismatch (0xfb8a token)
+## 2026-04-05 — FoT token 0xfb8a (5.01%), more lfj_v1 fixes
 
 ### Fixed
 - **lfj_v1 pool#2570** (`0x16f139fe...`, WAVAX/0xfb8a): token `0xfb8a29e6...` is a 5.01%

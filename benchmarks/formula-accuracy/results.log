@@ -825,3 +825,4 @@ time=2026-04-05_11:43 git=d7d8b39 blocks=1 ms_per_pool=0.0029 total_ms=7.4 pools
 time=2026-04-05_11:43 git=d568440 blocks=3 ms_per_pool=0.0063 total_ms=0.0 pools=1 formula=2 match=0 mismatch=2 correctness=0.0 nonzero=100.0
 time=2026-04-05_11:44 git=d568440 blocks=1 ms_per_pool=0.0037 total_ms=0.0 pools=1 formula=2 match=2 mismatch=0 correctness=100.0 nonzero=100.0
 time=2026-04-05_11:44 git=d568440 blocks=1 ms_per_pool=0.0029 total_ms=10.1 pools=3500 formula=7151 match=7016 mismatch=135 correctness=98.1 nonzero=92.3
+time=2026-04-05_11:45 git=25b3cbb blocks=1 ms_per_pool=0.0032 total_ms=6.3 pools=2000 formula=4221 match=4189 mismatch=32 correctness=99.2 nonzero=92.1

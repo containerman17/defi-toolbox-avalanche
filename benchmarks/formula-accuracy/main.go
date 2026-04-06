@@ -45,19 +45,21 @@ type quoteKey struct {
 }
 
 type typeStats struct {
-	Quotes   int     // total quotes (2 per pool)
-	HotMs    float64 // hot pass execution time
-	Match    int     // result == EVM ground truth
-	Mismatch int     // result != EVM ground truth
-	NonZero  int     // EVM ground truth was non-zero
-	Formula  int     // quotes handled by formula
+	Quotes    int     // total quotes (2 per pool)
+	HotMs     float64 // hot pass execution time
+	Match     int     // formula == EVM (within tolerance)
+	Overquote int     // formula > EVM — CRITICAL, never acceptable
+	Underquote int    // formula < EVM — safe, missed opportunity
+	NonZero   int     // EVM ground truth was non-zero
+	Formula   int     // quotes handled by formula
 }
 
 type blockResult struct {
-	blockNum    uint64
-	byType      map[int]*typeStats
-	mismatchSet map[quoteKey]bool // true = mismatched on this block
-	mismatchLog []string
+	blockNum     uint64
+	byType       map[int]*typeStats
+	mismatchSet  map[quoteKey]bool // true = mismatched on this block
+	overquoteSet map[quoteKey]bool // true = overquoted on this block
+	mismatchLog  []string
 }
 
 var typeNames = map[int]string{
@@ -306,6 +308,7 @@ func runBlockBenchmark(
 	fmt.Fprintf(os.Stderr, "[benchmark] pass 3 (hot pass)...\n")
 
 	mismatchSet := make(map[quoteKey]bool)
+	overquoteSet := make(map[quoteKey]bool)
 	var mismatchLog []string
 	t0 := time.Now()
 
@@ -343,7 +346,8 @@ func runBlockBenchmark(
 				ts.Match++
 			} else {
 				var diff uint256.Int
-				if result.Gt(&evmResult) {
+				isOver := result.Gt(&evmResult)
+				if isOver {
 					diff.Sub(&result, &evmResult)
 				} else {
 					diff.Sub(&evmResult, &result)
@@ -355,20 +359,30 @@ func runBlockBenchmark(
 					scaled.Mul(&diff, uint256.NewInt(100_000_000))
 				}
 				denom := &evmResult
-				if result.Gt(&evmResult) {
+				if isOver {
 					denom = &result
 				}
 				if !denom.IsZero() && scaled.Lt(denom) {
-					ts.Match++
+					ts.Match++ // within tolerance
+				} else if isOver {
+					ts.Overquote++
+					mismatchSet[key] = true
+					overquoteSet[key] = true
+					tn := typeNames[pool.PoolType]
+					if tn == "" {
+						tn = fmt.Sprintf("type_%d", pool.PoolType)
+					}
+					mismatchLog = append(mismatchLog, fmt.Sprintf("  OVERQUOTE [%s] %s dir=%d formula=%s evm=%s (pool#%d)",
+						tn, pool.Address.Hex(), ti, result.Dec(), evmResult.Dec(), i+2))
 				} else {
-					ts.Mismatch++
+					ts.Underquote++
 					mismatchSet[key] = true
 					if len(mismatchLog) < 200 {
 						tn := typeNames[pool.PoolType]
 						if tn == "" {
 							tn = fmt.Sprintf("type_%d", pool.PoolType)
 						}
-						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH [%s] %s dir=%d result=%s evm=%s (pool#%d)",
+						mismatchLog = append(mismatchLog, fmt.Sprintf("  UNDERQUOTE [%s] %s dir=%d formula=%s evm=%s (pool#%d)",
 							tn, pool.Address.Hex(), ti, result.Dec(), evmResult.Dec(), i+2))
 					}
 				}
@@ -390,18 +404,19 @@ func runBlockBenchmark(
 	}
 
 	return &blockResult{
-		blockNum:    blockNum,
-		byType:      byType,
-		mismatchSet: mismatchSet,
-		mismatchLog: mismatchLog,
+		blockNum:     blockNum,
+		byType:       byType,
+		mismatchSet:  mismatchSet,
+		overquoteSet: overquoteSet,
+		mismatchLog:  mismatchLog,
 	}, nil
 }
 
 // printTypeTable prints the per-type breakdown table to stderr and returns totals.
-func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, totalMatch, totalMismatch, totalNonZero, totalFmla int, totalHotMs float64) {
-	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %8s %6s %6s %8s\n",
-		"TYPE", "POOLS", "QUOTES", "FMLA", "MS", "MATCH", "MISS", "NONZERO%")
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 74))
+func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, totalMatch, totalOver, totalUnder, totalNonZero, totalFmla int, totalHotMs float64) {
+	fmt.Fprintf(os.Stderr, "\n%-16s %6s %8s %6s %8s %6s %6s %6s %9s\n",
+		"TYPE", "POOLS", "QUOTES", "FMLA", "MS", "MATCH", "OVER!", "UNDER", "PRECISION")
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
 
 	type sortEntry struct {
 		poolType int
@@ -426,27 +441,30 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 			name = fmt.Sprintf("type_%d", e.poolType)
 		}
 		pc := s.Quotes / 2
-		nzPct := 0.0
-		if s.Quotes > 0 {
-			nzPct = float64(s.NonZero) / float64(s.Quotes) * 100
+		total := s.Match + s.Overquote + s.Underquote
+		precPct := 0.0
+		if total > 0 {
+			precPct = float64(s.Match) / float64(total) * 100
 		}
-		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
-			name, pc, s.Quotes, s.Formula, s.HotMs, s.Match, s.Mismatch, nzPct)
+		fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %6d %8.1f%%\n",
+			name, pc, s.Quotes, s.Formula, s.HotMs, s.Match, s.Overquote, s.Underquote, precPct)
 		totalQuotes += s.Quotes
 		totalMatch += s.Match
-		totalMismatch += s.Mismatch
+		totalOver += s.Overquote
+		totalUnder += s.Underquote
 		totalNonZero += s.NonZero
 		totalFmla += s.Formula
 		totalHotMs += s.HotMs
 	}
 
-	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 74))
-	totalNzPct := 0.0
-	if totalQuotes > 0 {
-		totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+	fmt.Fprintf(os.Stderr, "%s\n", strings.Repeat("-", 82))
+	totalTotal := totalMatch + totalOver + totalUnder
+	totalPrecPct := 0.0
+	if totalTotal > 0 {
+		totalPrecPct = float64(totalMatch) / float64(totalTotal) * 100
 	}
-	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %7.1f%%\n",
-		"TOTAL", poolCount, totalQuotes, totalFmla, totalHotMs, totalMatch, totalMismatch, totalNzPct)
+	fmt.Fprintf(os.Stderr, "%-16s %6d %8d %6d %8.1f %6d %6d %6d %8.1f%%\n",
+		"TOTAL", poolCount, totalQuotes, totalFmla, totalHotMs, totalMatch, totalOver, totalUnder, totalPrecPct)
 	return
 }
 
@@ -575,17 +593,20 @@ func main() {
 		}
 
 		// Print per-type breakdown for this block
-		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(res.byType, len(pools))
-		correctPct := 0.0
-		if totalMatch+totalMismatch > 0 {
-			correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100
+		_, totalMatch, totalOver, totalUnder, _, _, _ := printTypeTable(res.byType, len(pools))
+		totalAll := totalMatch + totalOver + totalUnder
+		precPct := 0.0
+		if totalAll > 0 {
+			precPct = float64(totalMatch) / float64(totalAll) * 100
 		}
-		totalNzPct := 0.0
-		if totalQuotes > 0 {
-			totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+		if totalOver > 0 {
+			fmt.Fprintf(os.Stderr, "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+			fmt.Fprintf(os.Stderr, "!!! OVERQUOTING: %d quotes have formula > EVM              !!!\n", totalOver)
+			fmt.Fprintf(os.Stderr, "!!! This is NEVER acceptable. Fix formula or set pool -1   !!!\n")
+			fmt.Fprintf(os.Stderr, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 		}
-		fmt.Fprintf(os.Stderr, "\n[result] block %d: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
-			blockNum, correctPct, totalMatch, totalMismatch, totalNzPct)
+		fmt.Fprintf(os.Stderr, "\n[result] block %d: overquoting=%d, precision=%.1f%% (%d match, %d under)\n",
+			blockNum, totalOver, precPct, totalMatch, totalUnder)
 	}
 
 	// ─── Cross-block aggregation (only when N > 1) ───
@@ -616,16 +637,21 @@ func main() {
 					ts := aggGetStats(pool.PoolType)
 					ts.Quotes++
 
-					// Check if mismatched on any block
+					// Check across all blocks
+					anyOver := false
 					anyMismatch := false
 					for _, res := range results {
+						if res.overquoteSet[key] {
+							anyOver = true
+						}
 						if res.mismatchSet[key] {
 							anyMismatch = true
-							break
 						}
 					}
-					if anyMismatch {
-						ts.Mismatch++
+					if anyOver {
+						ts.Overquote++
+					} else if anyMismatch {
+						ts.Underquote++
 					} else {
 						ts.Match++
 					}
@@ -641,38 +667,37 @@ func main() {
 			ts.HotMs = fs.HotMs
 		}
 
-		totalQuotes, totalMatch, totalMismatch, totalNonZero, _, _ := printTypeTable(aggByType, len(pools))
-		correctPct := 0.0
-		if totalMatch+totalMismatch > 0 {
-			correctPct = float64(totalMatch) / float64(totalMatch+totalMismatch) * 100
+		_, totalMatch, totalOver, totalUnder, _, _, _ := printTypeTable(aggByType, len(pools))
+		totalAll := totalMatch + totalOver + totalUnder
+		precPct := 0.0
+		if totalAll > 0 {
+			precPct = float64(totalMatch) / float64(totalAll) * 100
 		}
-		totalNzPct := 0.0
-		if totalQuotes > 0 {
-			totalNzPct = float64(totalNonZero) / float64(totalQuotes) * 100
+		if totalOver > 0 {
+			fmt.Fprintf(os.Stderr, "\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+			fmt.Fprintf(os.Stderr, "!!! OVERQUOTING: %d quotes have formula > EVM              !!!\n", totalOver)
+			fmt.Fprintf(os.Stderr, "!!! This is NEVER acceptable. Fix formula or set pool -1   !!!\n")
+			fmt.Fprintf(os.Stderr, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
 		}
-		fmt.Fprintf(os.Stderr, "\n[result] AGGREGATE: %.1f%% correct, %d match, %d mismatch, %.1f%% non-zero\n",
-			correctPct, totalMatch, totalMismatch, totalNzPct)
+		fmt.Fprintf(os.Stderr, "\n[result] AGGREGATE: overquoting=%d, precision=%.1f%% (%d match, %d under)\n",
+			totalOver, precPct, totalMatch, totalUnder)
 	}
 
-	// ─── JSON output ───
-	// Use first block's stats for single-block backward compat
+	// ─── Log output ───
 	first := results[0]
-	firstQ, firstMatch, firstMismatch, firstNonZero, firstFmla, firstHotMs := 0, 0, 0, 0, 0, 0.0
+	firstMatch, firstOver, firstUnder, firstFmla := 0, 0, 0, 0
+	firstHotMs := 0.0
 	for _, s := range first.byType {
-		firstQ += s.Quotes
 		firstMatch += s.Match
-		firstMismatch += s.Mismatch
-		firstNonZero += s.NonZero
+		firstOver += s.Overquote
+		firstUnder += s.Underquote
 		firstFmla += s.Formula
 		firstHotMs += s.HotMs
 	}
-	firstCorrectPct := 0.0
-	if firstMatch+firstMismatch > 0 {
-		firstCorrectPct = float64(firstMatch) / float64(firstMatch+firstMismatch) * 100
-	}
-	firstNzPct := 0.0
-	if firstQ > 0 {
-		firstNzPct = float64(firstNonZero) / float64(firstQ) * 100
+	firstAll := firstMatch + firstOver + firstUnder
+	firstPrecPct := 0.0
+	if firstAll > 0 {
+		firstPrecPct = float64(firstMatch) / float64(firstAll) * 100
 	}
 	msPerPool := firstHotMs / float64(len(pools))
 
@@ -686,8 +711,8 @@ func main() {
 			gitHash = strings.TrimSpace(string(gitOut))
 		}
 		logTs := time.Now().Format("2006-01-02_15:04")
-		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d match=%d mismatch=%d correctness=%.1f nonzero=%.1f\n",
-			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstMatch, firstMismatch, firstCorrectPct, firstNzPct)
+		line := fmt.Sprintf("time=%s git=%s blocks=%d ms_per_pool=%.4f total_ms=%.1f pools=%d formula=%d match=%d overquote=%d underquote=%d precision=%.1f\n",
+			logTs, gitHash, numBlocks, msPerPool, firstHotMs, len(pools), firstFmla, firstMatch, firstOver, firstUnder, firstPrecPct)
 		logF, logErr := os.OpenFile(logResult, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if logErr == nil {
 			logF.WriteString(line)

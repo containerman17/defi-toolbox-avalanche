@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026-04-06 — Benchmark: overquoting/precision split, lfj_v1 zero overquotes
+
+### New benchmark metrics: overquoting + precision
+Replaced the single "mismatch" metric with two:
+- **Overquoting** (OVER!): formula > EVM. Binary pass/fail. Never acceptable — would
+  route through a pool expecting more output than reality. Shown with `!!!` banner.
+- **Precision**: % of quotes where formula == EVM. Underquotes (formula < EVM) are safe
+  missed opportunities, not critical failures.
+
+Table now shows: MATCH, OVER!, UNDER, PRECISION per ecosystem.
+
+### lfj_v1: zero overquotes (29 pools set to -1)
+Set 29 lfj_v1 pools to formula -1 (zero quoter) that had broken tokens (missing
+overrides, max_wallet, reflection incompatibility). These pools were overquoting
+(formula returned nonzero, EVM returned 0). Now: 0 overquotes, 99.3% precision,
+23 underquotes (safe — the -1 pools returning 0 where EVM works in one direction).
+
+Remaining overquotes: v2 (23), uniswap_v4 (25), balancer_v3 (6).
+
 ## 2026-04-06 — Water-fill split routing strategy
 
 ### New strategy: `WaterFill`

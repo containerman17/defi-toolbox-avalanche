@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-04-05 — Redesign SplitMax: two-phase architecture, new benchmark metric
+
+### New benchmark metric: near-best
+Changed the benchmark from "wins vs greedy" to "near-best" — measures whether a
+strategy is within 0.0001% of the per-case best across ALL strategies. This revealed
+that `front` (FrontLoaded schedule) was the best single strategy at 292/360 near-best,
+despite looking mediocre under the old metric. Also added combinatorial search for
+optimal strategy combinations and per-case path diagnostics.
+
+### Two-phase split architecture (OptimizedV2/V3/V4)
+Introduced strategies that separate path discovery (Phase 1) from allocation (Phase 2):
+- Phase 1: Run a full strategy (e.g. shuf2, front) to discover all viable routes
+- Phase 2: Re-allocate the full amount across discovered paths using formula-only
+  selection per chunk (no BFS) with EVM dirty-slot tracking. Fine 2% uniform chunks.
+- `CollectPaths()` and `AllocateAcrossPaths()` are exported for future path caching.
+
+Dead ends: purpose-built "staged discovery" with BFS probes at multiple volumes and
+depletion levels — reached 60/360 near-best. Not enough diversity compared to running
+actual strategies. The chunk schedule IS the diversity engine, not the probe volume.
+
+### New SplitMax composition
+Before: greedy(10) + c30_2 + grad + shuf2 → pick best. ~250ms.
+After: front + OptimizedV2 + grad + c30_2 → pick best → AllocateAcrossPaths on
+the union of all discovered paths. ~236ms.
+
+Results (10 blocks, 360 test cases):
+- Before: ~336/360 near-best
+- After: 358/360 near-best at 236ms (default)
+- With GreedyFine added: 360/360 at 426ms (not default, trades 2 cases for 45% speed)
+
+### Benchmark improvements
+- Added `--only` flag to select specific strategies (e.g. `--only max,staged`)
+- Changed default from 7 blocks to 3 blocks
+- Removed sAVAX from token list (broken formula distorting results)
+
+## 2026-04-05 — Fix lfj_v1 pool#2060 BabyCoq/WAVAX: reflection token DIFF mismatch
+
+### Root cause
+Pool `0x02C7D2d1eA5239e2d5D1B2e65CE0D832c75440D9` (lfj_v1, BabyCoq/WAVAX).
+Token0 BabyCoq (`0x22897cf0...`) is an RFI-style reflection token (taxFee=2/10000
+reflection + liquidityFee=100/10000 + charityFee=1/10000 = 103 bps total). The
+previous `fotBps(103)` model had ~25 PPM residual on dir=0 because the V2 router
+measures `balanceOf(pool) after - before` which includes the reflection bonus on the
+pool's large existing BabyCoq balance (~53.7e18 tokens). When `_reflectFee` reduces
+`_rTotal`, the pool's `_rOwned / rate` increases slightly, adding ~1.09e12 tokens to
+the measured `actualIn` beyond what the flat FoT model predicted.
+
+### Fix
+1. Moved BabyCoq from `fotCalculators` (fotBps(103)) to `reflectionTokenConfigs` with:
+   - `_rTotal` at slot 8, `_tTotal` = 420690e15 (constant), excluded array at slot 6
+   - 2 excluded accounts (charity 0x2a9613..., dead 0xdaf604...)
+   - reflectRate=2, reflectDenom=10000
+
+2. Added `RecipientAwareInputAdjuster` interface in `token_model.go`, implemented by
+   `reflectionTokenModel.AdjustInputToRecipient`. Computes the exact `balanceOf(pool)
+   after - before` by reading the pool's `_rOwned` from storage and factoring in the
+   rate change from `_reflectFee`.
+
+3. Updated `fotPoolQuoter.Quote` to use `RecipientAwareInputAdjuster` when the input
+   token model supports it.
+
+### Results
+- Before: dir=0 ~25 PPM DIFF, dir=1 ~0.6 PPM DIFF (2/2 mismatch)
+- After: dir=0 MATCH (0 PPB), dir=1 ~0.6 PPM DIFF (1/2 mismatch)
+- Remaining dir=1 residual is caused by the router's override balance (shift:128)
+  receiving the same reflection bonus on the output side. This is an EVM simulation
+  artifact (the router doesn't hold BabyCoq in real swaps).
+- Full benchmark: no regressions (4258 match, 32 mismatch, 99.3%)
+
+### Dead-ends
+- Initially assumed the existing `AdjustInput` / `adjustReflection` would suffice.
+  With only 2 bps reflection rate, the reflection bonus on *new* tokens is ~20 PPB,
+  negligible. The 25 PPM gap comes from the *pool's existing balance* getting the
+  reflection bonus -- requires reading `_rOwned[pool]` from storage.
+
 ## 2026-04-05 — FoT token 0xfb8a (5.01%), more lfj_v1 fixes
 
 ### Fixed

@@ -32,7 +32,6 @@ var tokens = []struct {
 	{"WAVAX", common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7"), 18, "50000"},
 	{"USDC", common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E"), 6, "1000000"},
 	{"USDT", common.HexToAddress("0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7"), 6, "1000000"},
-	{"sAVAX", common.HexToAddress("0x2b2C81e08f1Af8835a78Bb2A90AE924ACE0eA4bE"), 18, "50000"},
 	{"WETH.e", common.HexToAddress("0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB"), 18, "300"},
 }
 
@@ -43,15 +42,20 @@ type strategy struct {
 
 func main() {
 	stateServer := flag.String("state-server", "ws://localhost:7449", "state server base URL (no /live)")
-	numBlocks := flag.Int("blocks", 7, "number of blocks to test (at 10k intervals from deploy)")
+	numBlocks := flag.Int("blocks", 3, "number of blocks to test (at 10k intervals from deploy)")
 	chunks := flag.Int("chunks", 10, "base number of chunks")
+	only := flag.String("only", "", "comma-separated list of strategies to run (always includes greedy as baseline)")
 	flag.Parse()
 
 	ch := *chunks
 
-	strategies := []strategy{
+	allStrategies := []strategy{
 		{"greedy", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Greedy(p, a, ch) }},
 		{"optim", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Optimized(p, a, ch) }},
+		{"optim2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.OptimizedV2(p, a) }},
+		{"optim3", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.OptimizedV3(p, a) }},
+		{"optim4", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.OptimizedV4(p, a) }},
+		{"staged", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.Staged(p, a) }},
 		{"gfine", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFine(p, a, ch) }},
 		{"gfast40", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyFast(p, a, ch*4) }},
 		{"grad", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyMixed(p, a, splitter.SchedGradual) }},
@@ -62,6 +66,23 @@ func main() {
 		{"c30_2", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 30, 2) }},
 		{"c50_5", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.GreedyCompete(p, a, 50, 5) }},
 		{"max", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.SplitMax(p, a) }},
+	}
+
+	// Filter strategies if --only is set
+	var strategies []strategy
+	if *only != "" {
+		want := make(map[string]bool)
+		want["greedy"] = true // always include baseline
+		for _, name := range strings.Split(*only, ",") {
+			want[strings.TrimSpace(name)] = true
+		}
+		for _, s := range allStrategies {
+			if want[s.name] {
+				strategies = append(strategies, s)
+			}
+		}
+	} else {
+		strategies = allStrategies
 	}
 
 	dividers := []struct {
@@ -75,10 +96,12 @@ func main() {
 
 	pcts := make([][]float64, len(strategies))
 	times := make([][]float64, len(strategies))
+	results := make([][]*splitter.Result, len(strategies))
 	for i := range strategies {
 		pcts[i] = []float64{}
 		times[i] = []float64{}
 	}
+	var pairLabels []string
 
 	// Header
 	fmt.Printf("%-22s", "PAIR")
@@ -140,6 +163,7 @@ func main() {
 					singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
 
 					pair := fmt.Sprintf("%s→%s %s", tIn.Name, tOut.Name, div.label)
+					pairLabels = append(pairLabels, pair)
 					fmt.Printf("%-22s", pair)
 
 					for si, s := range strategies {
@@ -153,6 +177,7 @@ func main() {
 						}
 						pcts[si] = append(pcts[si], pct)
 						times[si] = append(times[si], ms)
+						results[si] = append(results[si], result)
 						fmt.Printf(" %+7.3f%%", pct)
 					}
 					fmt.Println()
@@ -207,7 +232,7 @@ func main() {
 	}
 	fmt.Println()
 
-	// Head-to-head
+	// Head-to-head vs greedy
 	fmt.Println()
 	fmt.Println("vs greedy (W/L/T):")
 	for si := 1; si < len(strategies); si++ {
@@ -223,6 +248,141 @@ func main() {
 		}
 		fmt.Printf("  %-8s W=%-3d L=%-3d T=%-3d\n", strategies[si].name, wins, losses, t)
 	}
+
+	// Per-case best: wins = within 0.0001% of best across all strategies
+	const tol = 0.0001
+	fmt.Println()
+	fmt.Println("vs per-case best (W=near-best, L=missed, tol=0.0001%):")
+	bestPct := make([]float64, n)
+	for pi := range bestPct {
+		for si := range strategies {
+			if pcts[si][pi] > bestPct[pi] {
+				bestPct[pi] = pcts[si][pi]
+			}
+		}
+	}
+	// nearBest[si][pi] = true if strategy si is near-best on case pi
+	nearBest := make([][]bool, len(strategies))
+	for si := range strategies {
+		nearBest[si] = make([]bool, n)
+		wins, losses := 0, 0
+		for pi := range bestPct {
+			if bestPct[pi]-pcts[si][pi] <= tol {
+				nearBest[si][pi] = true
+				wins++
+			} else {
+				losses++
+			}
+		}
+		fmt.Printf("  %-8s near-best=%-3d missed=%-3d\n", strategies[si].name, wins, losses)
+	}
+
+	// Combinatorial search: best 2, 3, 4 strategy combos by union near-best coverage
+	coverageOf := func(combo []int) int {
+		count := 0
+		for pi := 0; pi < n; pi++ {
+			for _, si := range combo {
+				if nearBest[si][pi] {
+					count++
+					break
+				}
+			}
+		}
+		return count
+	}
+
+	// Path diagnostics for missed cases: show which paths each strategy used
+	fmt.Println()
+	fmt.Println("PATH DIAGNOSTICS (missed cases for optim2, optim3):")
+	for si := range strategies {
+		if strategies[si].name != "optim2" && strategies[si].name != "optim3" {
+			continue
+		}
+		for pi := range bestPct {
+			if nearBest[si][pi] {
+				continue
+			}
+			// Find the best strategy for this case
+			bestSi := -1
+			for bsi := range strategies {
+				if nearBest[bsi][pi] && (bestSi < 0 || pcts[bsi][pi] > pcts[bestSi][pi]) {
+					bestSi = bsi
+				}
+			}
+			fmt.Printf("\n  %s missed %s: %.4f%% vs best %.4f%% (%s)\n",
+				strategies[si].name, pairLabels[pi], pcts[si][pi], pcts[bestSi][pi], strategies[bestSi].name)
+
+			// Show paths used by this strategy
+			if results[si][pi] != nil {
+				paths := legPaths(results[si][pi].Legs)
+				fmt.Printf("    %s paths: %v\n", strategies[si].name, paths)
+			}
+			// Show paths used by the winner
+			if results[bestSi][pi] != nil {
+				paths := legPaths(results[bestSi][pi].Legs)
+				fmt.Printf("    %s paths: %v\n", strategies[bestSi].name, paths)
+			}
+		}
+	}
+
+	ns := len(strategies)
+	for size := 2; size <= 4; size++ {
+		bestCoverage := 0
+		var bestCombos [][]int
+		// iterate all combos of `size` strategies
+		combo := make([]int, size)
+		var search func(start, depth int)
+		search = func(start, depth int) {
+			if depth == size {
+				c := coverageOf(combo)
+				if c > bestCoverage {
+					bestCoverage = c
+					bestCombos = [][]int{append([]int(nil), combo...)}
+				} else if c == bestCoverage {
+					bestCombos = append(bestCombos, append([]int(nil), combo...))
+				}
+				return
+			}
+			for i := start; i <= ns-(size-depth); i++ {
+				combo[depth] = i
+				search(i+1, depth+1)
+			}
+		}
+		search(0, 0)
+
+		fmt.Printf("\nBest %d-strategy combo(s) covering %d/%d cases:\n", size, bestCoverage, n)
+		shown := bestCombos
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		for _, c := range shown {
+			names := make([]string, len(c))
+			for i, si := range c {
+				names[i] = strategies[si].name
+			}
+			fmt.Printf("  %v\n", names)
+		}
+		if len(bestCombos) > 5 {
+			fmt.Printf("  ... and %d more\n", len(bestCombos)-5)
+		}
+	}
+}
+
+func legPaths(legs []splitter.Leg) []string {
+	seen := make(map[string]bool)
+	var paths []string
+	for _, leg := range legs {
+		var parts []string
+		for _, s := range leg.Steps {
+			parts = append(parts, s.Pool.Hex()[:10])
+		}
+		key := strings.Join(parts, "→")
+		if !seen[key] {
+			seen[key] = true
+			paths = append(paths, key)
+		}
+	}
+	return paths
 }
 
 func u256ToFloat(v *uint256.Int, decimals int) float64 {

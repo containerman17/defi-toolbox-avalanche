@@ -17,7 +17,8 @@ overrides, max_wallet, reflection incompatibility). These pools were overquoting
 (formula returned nonzero, EVM returned 0). Now: 0 overquotes, 99.3% precision,
 23 underquotes (safe — the -1 pools returning 0 where EVM works in one direction).
 
-Remaining overquotes: v2 (23), uniswap_v4 (25), balancer_v3 (6).
+Set additional 46 pools to -1 across v2, uniswap_v4, balancer_v3, and uniswap_v3.
+Result: **zero overquotes across all 3500 pools, 5 blocks**. Precision 98.5%.
 
 ## 2026-04-06 — Water-fill split routing strategy
 

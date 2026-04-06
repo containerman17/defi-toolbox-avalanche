@@ -853,3 +853,8 @@ time=2026-04-06_09:55 git=bf6d547 blocks=5 ms_per_pool=0.0013 total_ms=0.3 pools
 time=2026-04-06_09:55 git=bf6d547 blocks=5 ms_per_pool=0.0029 total_ms=10.0 pools=3500 formula=7151 match=7019 mismatch=132 correctness=98.2 nonzero=92.3
 time=2026-04-06_22:32 git=4df9372 blocks=5 ms_per_pool=0.0007 total_ms=1.1 pools=1547 formula=3032 match=3009 overquote=0 underquote=23 precision=99.2
 time=2026-04-06_22:33 git=4df9372 blocks=1 ms_per_pool=0.0029 total_ms=10.2 pools=3500 formula=7151 match=7029 overquote=54 underquote=68 precision=98.3
+time=2026-04-06_22:33 git=6713d97 blocks=1 ms_per_pool=0.0028 total_ms=9.8 pools=3500 formula=7151 match=7029 overquote=54 underquote=68 precision=98.3
+time=2026-04-06_22:33 git=6713d97 blocks=1 ms_per_pool=0.0026 total_ms=9.0 pools=3500 formula=7151 match=7029 overquote=54 underquote=68 precision=98.3
+time=2026-04-06_22:34 git=6713d97 blocks=1 ms_per_pool=0.0024 total_ms=8.4 pools=3500 formula=7151 match=7046 overquote=0 underquote=105 precision=98.5
+time=2026-04-06_22:34 git=6713d97 blocks=5 ms_per_pool=0.0024 total_ms=8.5 pools=3500 formula=7151 match=7046 overquote=0 underquote=105 precision=98.5
+time=2026-04-06_22:34 git=6713d97 blocks=5 ms_per_pool=0.0023 total_ms=8.2 pools=3500 formula=7151 match=7044 overquote=0 underquote=107 precision=98.5

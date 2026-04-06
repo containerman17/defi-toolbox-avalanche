@@ -364,8 +364,12 @@ func runBlockBenchmark(
 					ts.Mismatch++
 					mismatchSet[key] = true
 					if len(mismatchLog) < 200 {
-						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH %s dir=%d result=%s evm=%s (pool#%d)",
-							pool.Address.Hex(), ti, result.Dec(), evmResult.Dec(), i+2))
+						tn := typeNames[pool.PoolType]
+						if tn == "" {
+							tn = fmt.Sprintf("type_%d", pool.PoolType)
+						}
+						mismatchLog = append(mismatchLog, fmt.Sprintf("  MISMATCH [%s] %s dir=%d result=%s evm=%s (pool#%d)",
+							tn, pool.Address.Hex(), ti, result.Dec(), evmResult.Dec(), i+2))
 					}
 				}
 			}
@@ -458,6 +462,7 @@ func main() {
 	cpuProfileFlag := flag.String("cpuprofile", "", "write CPU profile to file")
 	memProfileFlag := flag.String("memprofile", "", "write memory profile to file")
 	logResultFlag := flag.String("log", "", "append results to file")
+	ecoFlag := flag.String("eco", "", "filter to a single ecosystem (e.g. pharaoh_v1)")
 	flag.Parse()
 
 	numBlocks := *numBlocksFlag
@@ -495,6 +500,33 @@ func main() {
 			fmt.Fprintf(os.Stderr, "pool %s not found in pool list\n", singlePool)
 			os.Exit(1)
 		}
+		pools = filtered
+	}
+
+	// Filter to ecosystem if --eco specified
+	if *ecoFlag != "" {
+		ecoType := -1
+		for pt, name := range typeNames {
+			if name == *ecoFlag {
+				ecoType = pt
+				break
+			}
+		}
+		if ecoType == -1 {
+			fmt.Fprintf(os.Stderr, "unknown ecosystem %q, valid: ", *ecoFlag)
+			for _, n := range typeNames {
+				fmt.Fprintf(os.Stderr, "%s ", n)
+			}
+			fmt.Fprintln(os.Stderr)
+			os.Exit(1)
+		}
+		var filtered []pathfinder.Pool
+		for i := range pools {
+			if pools[i].PoolType == ecoType {
+				filtered = append(filtered, pools[i])
+			}
+		}
+		fmt.Fprintf(os.Stderr, "[benchmark] eco filter %q: %d pools\n", *ecoFlag, len(filtered))
 		pools = filtered
 	}
 

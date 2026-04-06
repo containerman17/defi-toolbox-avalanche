@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-04-06 — pharaoh_v1 formula: zero mismatches (5 blocks, 256 pools)
+
+### FoT exemption for Quasi/WAVAX pharaoh pool
+Pool `0x13e4a7f1...` was getting a 2% FoT deduction for the Quasi token (`0xc970...`),
+but Quasi's fee only triggers when `from/to == liquidityPool` (slot 6 = `0x117ef430`,
+an lfj_v1 pool). The pharaoh pool is not the registered liquidityPool — added to
+`FotExemptPools`.
+
+### Expanded _f form for non-beacon stable pools
+Non-beacon pharaoh_v1 pools (various Solidly forks, `PackedSlot >= 0`) use the expanded
+`x³y/e18³ + y³x/e18³` form for `_f` in Newton-Raphson, while beacon proxies use the
+factored `(xy)(x²+y²)/e18³`. The ±1 integer rounding difference cascades through
+Newton-Raphson iteration, causing ~960000 output discrepancy. Added `ExpandedF` field
+to `PharaohV1State`, set when `Stable && PackedSlot >= 0`, with a dedicated
+`pharaohFExpanded` function used in `getY`.
+
+Dead end: initially set `ExpandedF = cfg.Stable` for all stable pools, but this broke
+beacon proxy pool `0x13e09B6A...` (formula returned non-zero, EVM returned 0). Beacon
+proxies use the factored form — the fix is `Stable && PackedSlot >= 0`.
+
+### Benchmark eco filter
+Added `-eco` flag to the formula-accuracy benchmark to filter by ecosystem name,
+speeding up iteration when debugging a single ecosystem.
+
 ## 2026-04-05 — Redesign SplitMax: two-phase architecture, new benchmark metric
 
 ### New benchmark metric: near-best

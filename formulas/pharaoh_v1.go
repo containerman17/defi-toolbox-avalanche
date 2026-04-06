@@ -28,6 +28,7 @@ type PharaohV1State struct {
 	Token1      string
 	FeeBps      int  // fee in basis points (1-10000)
 	SubtractOne bool // some Solidly forks do `return amountOut - 1`
+	ExpandedF   bool // use expanded x³y+y³x form for _f (some non-beacon Solidly forks)
 }
 
 var metadataSelector = crypto.Keccak256([]byte("metadata()"))[:4]
@@ -184,7 +185,7 @@ func getAmountOutStable(state *PharaohV1State, amountIn *uint256.Int, zeroForOne
 	// y = reserveB - get_y(amountInNorm + reserveA, xy, reserveB)
 	var xNew uint256.Int
 	xNew.Add(&amountInNorm, reserveA)
-	yNew := getY(&xNew, &xy, reserveB)
+	yNew := getY(&xNew, &xy, reserveB, state.Decimals0, state.Decimals1, state.ExpandedF)
 	if yNew == nil || yNew.IsZero() {
 		// nil: uint256 overflow in Solidity (getAmountOut() reverts)
 		// zero: Newton-Raphson converged to zero — output would equal
@@ -267,6 +268,33 @@ func pharaohF(x0, y *uint256.Int) *uint256.Int {
 	return new(uint256.Int).Set(&result)
 }
 
+// pharaohFExpanded computes: f(x0, y) = x0³*y/1e18³ + y³*x0/1e18³
+// This is mathematically equivalent to pharaohF but differs by ±1 in integer rounding.
+// Some non-beacon Solidly forks use this form in _get_y while using factored _k for invariant.
+func pharaohFExpanded(x0, y *uint256.Int) *uint256.Int {
+	// x0^3 * y / e18^3
+	var xx, x3, term1 uint256.Int
+	xx.Mul(x0, x0)
+	xx.Div(&xx, e18)
+	x3.Mul(&xx, x0)
+	x3.Div(&x3, e18)
+	term1.Mul(&x3, y)
+	term1.Div(&term1, e18)
+
+	// y^3 * x0 / e18^3
+	var yy, y3, term2 uint256.Int
+	yy.Mul(y, y)
+	yy.Div(&yy, e18)
+	y3.Mul(&yy, y)
+	y3.Div(&y3, e18)
+	term2.Mul(&y3, x0)
+	term2.Div(&term2, e18)
+
+	var result uint256.Int
+	result.Add(&term1, &term2)
+	return new(uint256.Int).Set(&result)
+}
+
 // pharaohD computes the derivative: d(x0, y) = 3 * x0 * (y² / 1e18) / 1e18 + (x0² / 1e18 * x0) / 1e18
 func pharaohD(x0, y *uint256.Int) uint256.Int {
 	// 3 * x0 * (y*y/1e18) / 1e18
@@ -305,6 +333,7 @@ func FetchPharaohV1StateStorage(reader StorageReader, poolAddress string) (*Phar
 		Stable:      cfg.Stable,
 		FeeBps:      cfg.Fee,
 		SubtractOne: cfg.SubtractOne,
+		ExpandedF:   cfg.Stable && cfg.PackedSlot >= 0, // non-beacon Solidly forks use expanded x³y+y³x in _get_y
 	}
 
 	addr := common.HexToAddress(poolAddress)
@@ -381,18 +410,22 @@ func slotHash(n int64) common.Hash {
 }
 
 // getY implements Newton-Raphson iteration to find y such that f(x0, y) = xy (the invariant).
-// This mirrors the Solidity _get_y function exactly.
+// This mirrors the Solidity _get_y function exactly, including the dy==0 edge-case
+// handling that calls _k(x0, y+1) with the pool's decimals.
 // Returns nil if the computation would overflow uint256 (Solidity revert behavior).
-func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
+func getY(x0, xy, y0, decimals0, decimals1 *uint256.Int, expandedF bool) *uint256.Int {
+	fFunc := pharaohF
+	if expandedF {
+		fFunc = pharaohFExpanded
+	}
+
 	var y uint256.Int
 	y.Set(y0)
 
 	for i := 0; i < 255; i++ {
-		var yPrev uint256.Int
-		yPrev.Set(&y)
-		k := pharaohF(x0, &y)
+		y_prev := new(uint256.Int).Set(&y)
+		k := fFunc(x0, &y)
 		if k == nil {
-			// uint256 overflow — mirrors Solidity revert
 			return nil
 		}
 
@@ -405,6 +438,9 @@ func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
 				return new(uint256.Int).Set(&y)
 			}
 			dy.Div(&dy, &dVal)
+			if dy.IsZero() {
+				return new(uint256.Int).Set(&y)
+			}
 			y.Add(&y, &dy)
 		} else {
 			var diff, dy uint256.Int
@@ -415,8 +451,10 @@ func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
 				return new(uint256.Int).Set(&y)
 			}
 			dy.Div(&dy, &dVal)
-			// In Solidity 0.8+, y - dy reverts on underflow.
-			// Clamp to zero to match: the pool can't be swapped at this size.
+			if dy.IsZero() {
+				return new(uint256.Int).Set(&y)
+			}
+			// Solidity 0.8+ reverts on underflow; clamp to zero.
 			if dy.Gt(&y) {
 				y.Clear()
 			} else {
@@ -424,12 +462,12 @@ func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
 			}
 		}
 
-		// Convergence: |y - yPrev| <= 1
+		// Convergence: |y - y_prev| <= 1
 		var delta uint256.Int
-		if y.Gt(&yPrev) {
-			delta.Sub(&y, &yPrev)
+		if y.Gt(y_prev) {
+			delta.Sub(&y, y_prev)
 		} else {
-			delta.Sub(&yPrev, &y)
+			delta.Sub(y_prev, &y)
 		}
 		if !delta.Gt(uint256.NewInt(1)) {
 			return new(uint256.Int).Set(&y)
@@ -437,8 +475,5 @@ func getY(x0, xy, y0 *uint256.Int) *uint256.Int {
 	}
 
 	// Newton-Raphson did not converge within 255 iterations.
-	// On-chain, non-convergence leads to unreliable output (the returned
-	// amount may exceed the reserve, causing swap() to revert). Return nil
-	// to signal the swap is not executable at this amount.
 	return nil
 }

@@ -564,7 +564,14 @@ func (f *fotPoolQuoter) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Ad
 	if f.inputExempt {
 		effectiveIn = *amountIn
 	} else {
-		effectiveIn = modelIn.AdjustInput(amountIn)
+		// For reflection tokens, the pool (recipient) having a large existing balance
+		// means _reflectFee's rate change gives a bonus on the existing balance.
+		// Use RecipientAwareInputAdjuster when available.
+		if ra, ok := modelIn.(RecipientAwareInputAdjuster); ok {
+			effectiveIn = ra.AdjustInputToRecipient(amountIn, f.inner.Address())
+		} else {
+			effectiveIn = modelIn.AdjustInput(amountIn)
+		}
 		if effectiveIn.IsZero() {
 			return uint256.Int{}
 		}

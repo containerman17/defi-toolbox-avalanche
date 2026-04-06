@@ -16,6 +16,21 @@ Living document for investigating and fixing formula coverage gaps.
 
 **98.1% correct** — 7016 match, 135 mismatch (3500 pools, 1 block).
 
+Fixed lfj_v1 pool#2060 (`0x02C7D2d1...`, BabyCoq/WAVAX): ~25 PPM DIFF on dir=0.
+BabyCoq (`0x22897cf0...`) is an RFI reflection token (103 bps total: 2 bps reflection +
+100 bps liquidity + 1 bps charity, all /10000). `fotBps(103)` was accurate for the fee
+deduction but missed the reflection bonus on the pool's existing BabyCoq balance (~53.7e18).
+The V2 router measures `balanceOf(pool) after - before`, which includes the `_reflectFee`
+rate-change bonus: pool's `_rOwned / newRate > _rOwned / oldRate`. Moved to
+`reflectionTokenConfigs` and added new `RecipientAwareInputAdjuster` interface that reads
+the pool's `_rOwned` from storage to compute the exact balance increase. Dir=0 now matches
+(0 PPB). Dir=1 residual (~0.6 PPM) is caused by the router's override balance receiving the
+same bonus (EVM simulation artifact). **Technique**: when a reflection token has a DIFF
+mismatch that's proportional to the pool's existing balance (not the transfer amount), the
+pool's `_rOwned` bonus from `_reflectFee` is the cause. Use `RecipientAwareInputAdjuster`
+to compute `balanceOf(pool) after - before` exactly. The `_excluded` array (slot 6 for
+BabyCoq) must also be accounted for in `_getCurrentSupply` rate computation.
+
 Fixed pharaoh_v3 pool#1563 (`0xe8f1e38f...`, evaUSDT/USDC). Two issues: (1) missing
 `v3PoolFees` entry in `v3_registry.go` — added `{100, 1}`. (2) evaUSDT (`0x501ebf66...`)
 missing from `token_overrides.json` — added slot 5. Token is a LayerZero OFT with

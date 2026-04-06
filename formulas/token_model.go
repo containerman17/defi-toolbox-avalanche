@@ -91,6 +91,16 @@ type SenderAwareOutputAdjuster interface {
 	AdjustOutputFromSender(amount *uint256.Int, sender common.Address) uint256.Int
 }
 
+// RecipientAwareInputAdjuster is optionally implemented by TokenModels that need
+// the recipient (pool) address to compute the exact input. Reflection tokens use this
+// because _reflectFee changes the rate, giving the recipient a bonus on their existing
+// rOwned balance. The V2 router measures balanceOf(pool) after - before, which includes
+// this bonus. Without the recipient's address, AdjustInput under-estimates the effective
+// input for pools with large existing balances.
+type RecipientAwareInputAdjuster interface {
+	AdjustInputToRecipient(amount *uint256.Int, recipient common.Address) uint256.Int
+}
+
 // reflectionTokenModel implements exact RFI/SafeMoon reflection math.
 // After a transfer, _reflectFee reduces _rTotal by rFee, changing the rate.
 // The recipient's actual received tokens = rTransferAmount * _tTotal / (_rTotal - rFee),
@@ -127,6 +137,114 @@ func (r *reflectionTokenModel) AdjustInput(amount *uint256.Int) uint256.Int {
 
 func (r *reflectionTokenModel) AdjustOutput(amount *uint256.Int) uint256.Int {
 	return r.adjustReflection(amount, common.Address{})
+}
+
+// AdjustInputToRecipient computes the effective balance increase of the recipient (pool)
+// after a transfer of `amount` tokens. This accounts for the reflection bonus on the
+// recipient's existing rOwned balance caused by _reflectFee reducing rTotal.
+// actualIn = balanceOf(recipient) after - balanceOf(recipient) before
+//          = (recipientROwned + rTransferAmount) / newRate - recipientROwned / oldRate
+func (r *reflectionTokenModel) AdjustInputToRecipient(amount *uint256.Int, recipient common.Address) uint256.Int {
+	if (r.rOwnedSlot == common.Hash{}) {
+		return r.adjustReflection(amount, common.Address{})
+	}
+	tAmount := amount.ToBig()
+	totalFee := r.calcFee(tAmount)
+	tTransfer := new(big.Int).Sub(tAmount, totalFee)
+	if tTransfer.Sign() <= 0 {
+		return uint256.Int{}
+	}
+
+	// Reflection fee only
+	tFee := new(big.Int).Mul(tAmount, big.NewInt(r.reflectRate))
+	tFee.Div(tFee, big.NewInt(r.reflectDenom))
+
+	// Burn fee if applicable
+	var tBurn *big.Int
+	if r.burnRate > 0 {
+		tBurn = new(big.Int).Mul(tAmount, big.NewInt(r.burnRate))
+		tBurn.Div(tBurn, big.NewInt(r.burnDenom))
+	}
+
+	// Read _rTotal
+	rTotalRaw := r.reader(r.tokenAddr, r.rTotalSlot)
+	rTotal := new(big.Int).SetBytes(rTotalRaw[:])
+	if rTotal.Sign() == 0 {
+		result, _ := uint256.FromBig(tTransfer)
+		if result == nil { return uint256.Int{} }
+		return *result
+	}
+
+	// Read _tTotal
+	tTotal := r.tTotal
+	if (r.tTotalSlot != common.Hash{}) {
+		tTotalRaw := r.reader(r.tokenAddr, r.tTotalSlot)
+		tTotal = new(big.Int).SetBytes(tTotalRaw[:])
+		if tTotal.Sign() == 0 {
+			result, _ := uint256.FromBig(tTransfer)
+			if result == nil { return uint256.Int{} }
+			return *result
+		}
+	}
+
+	rSupply, tSupply := r.getCurrentSupply(rTotal, tTotal)
+	if tSupply.Sign() <= 0 {
+		result, _ := uint256.FromBig(tTransfer)
+		if result == nil { return uint256.Int{} }
+		return *result
+	}
+
+	oldRate := new(big.Int).Div(rSupply, tSupply)
+	if oldRate.Sign() <= 0 {
+		result, _ := uint256.FromBig(tTransfer)
+		if result == nil { return uint256.Int{} }
+		return *result
+	}
+
+	rFee := new(big.Int).Mul(tFee, oldRate)
+	rTransferAmount := new(big.Int).Mul(tTransfer, oldRate)
+
+	newRSupply := new(big.Int).Sub(rSupply, rFee)
+	newTSupply := new(big.Int).Set(tSupply)
+	if tBurn != nil {
+		rBurn := new(big.Int).Mul(tBurn, oldRate)
+		newRSupply.Sub(newRSupply, rBurn)
+		newTSupply.Sub(newTSupply, tBurn)
+	}
+
+	if newRSupply.Sign() <= 0 || newTSupply.Sign() <= 0 {
+		result, _ := uint256.FromBig(tTransfer)
+		if result == nil { return uint256.Int{} }
+		return *result
+	}
+
+	newRate := new(big.Int).Div(newRSupply, newTSupply)
+	if newRate.Sign() <= 0 {
+		result, _ := uint256.FromBig(tTransfer)
+		if result == nil { return uint256.Int{} }
+		return *result
+	}
+
+	// Read recipient's _rOwned
+	recipientROwnedRaw := r.reader(r.tokenAddr, solMappingSlot(recipient, r.rOwnedSlot))
+	recipientROwned := new(big.Int).SetBytes(recipientROwnedRaw[:])
+
+	// balBefore = recipientROwned / oldRate
+	balBefore := new(big.Int).Div(recipientROwned, oldRate)
+	// balAfter = (recipientROwned + rTransferAmount) / newRate
+	balAfter := new(big.Int).Add(recipientROwned, rTransferAmount)
+	balAfter.Div(balAfter, newRate)
+
+	actualIn := new(big.Int).Sub(balAfter, balBefore)
+	if actualIn.Sign() <= 0 {
+		return uint256.Int{}
+	}
+
+	result, overflow := uint256.FromBig(actualIn)
+	if overflow || result == nil || result.IsZero() {
+		return uint256.Int{}
+	}
+	return *result
 }
 
 func (r *reflectionTokenModel) AdjustOutputFromSender(amount *uint256.Int, sender common.Address) uint256.Int {

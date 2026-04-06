@@ -269,7 +269,7 @@ var fotCalculators = map[string]fotCalc{
 
 	// 0xc970 (WAVAX/0xc970 lfj_v1 pool 0x117ef430): fee = amount * 2 / 100 (2% tax, subtract form)
 	// Both directions affected: output tax (dir=0) and input tax (dir=1).
-	// Pools: 0x117ef430 (lfj_v1), 0x13e4a7f1 (pharaoh_v1), 0x52495ce8 (lfj_v1).
+	// Pools: 0x117ef430 (lfj_v1), 0x52495ce8 (lfj_v1). Pharaoh pool 0x13e4a7f1 exempt (not liquidityPool).
 	"0xc970d70234895dd6033f984fd00909623c666e66": fotCustom(func(amount *big.Int) *big.Int {
 		fee := new(big.Int).Mul(amount, big.NewInt(2))
 		fee.Div(fee, big.NewInt(100))
@@ -419,9 +419,8 @@ var fotCalculators = map[string]fotCalc{
 	// DEX pair exemption possible (_isExcludedFromFee)
 	"0x9d11bb9b6b6134182477859937c4c3921f5bf441": fotBps(200),
 
-	// 0x22897cf0 — ~1.03% tax (103 bps)
-	// DEX pair exemption possible (_isExcludedFromFee)
-	"0x22897cf0da31e1f118649d9f6ad1809cabd84948": fotBps(103),
+	// BabyCoq (0x22897cf0): moved to reflectionTokenConfigs for exact RFI math.
+	// Was: fotBps(103), ~25 PPM residual from pool-side reflection bonus on existing balance.
 
 	// KIOO (Reflectx): moved to reflectionTokenConfigs for exact RFI+burn math.
 
@@ -524,6 +523,10 @@ var FotExemptPools = map[string]bool{
 	"0xe795273c9938b98554dc31831b4b4360ad869259": true, // HEFE/Always lfj_v1
 	"0x1e9477cfb06b58cba28a99b5a1a035c9f4045529": true, // HEFE/0x234b lfj_v1
 	"0x3fb14bc69c84f3030cb8e7fec7e5b45b1bfd1afc": true, // HEFE/0xc139 lfj_v1
+
+	// Quasi (0xc970...): fee only applies when from/to == liquidityPool (slot 6 = 0x117ef430, lfj_v1).
+	// Pharaoh_v1 pool is NOT the registered liquidityPool — no fee.
+	"0x13e4a7f12c72f0a791b4e6831b2e3a6aa2680b9a": true, // Quasi/WAVAX pharaoh_v1
 
 	// GoodToken (GOOD, 0x169e8f): fee only applies for the ONE registered lp address
 	// (set via setLiquidity). Only pool 0x21013fe86a is the registered lp.
@@ -815,6 +818,29 @@ var reflectionTokenConfigs = map[string]reflectionTokenConfig{
 		// Excluded accounts: _getRate() uses _getCurrentSupply() which subtracts
 		// excluded accounts' rOwned/tOwned from supply.
 		excludedArraySlot: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000005"),
+		rOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
+		tOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
+	},
+
+	// BabyCoq (0x22897cf0): 0.02% reflection + 1% liquidity + 0.01% charity = 1.03% total.
+	// _taxFee=2, _liquidityFee=100, _charityFee=1 — all divided by 10000 (fee denom = 10^(_feeDecimal+2)).
+	// _taxFee (2/10000) is the reflection fee that reduces _rTotal via _reflectFee(rFee).
+	// Liquidity and charity fees go to contract/wallet (do NOT reduce _rTotal).
+	// Storage layout (Ownable slot 0 = _owner, renounced to 0x0):
+	//   slot 0=_owner, slot 1=_rOwned(map), slot 2=_tOwned(map), slot 3=_allowances(map),
+	//   slot 4=_isExcluded(map), slot 5=_isExcludedFromFee(map), slot 6=_excluded(array, length=2),
+	//   slot 7=_tTotal(420690e18), slot 8=_rTotal, slot 9=_tFeeTotal.
+	// Excluded accounts: 0xdaf604... (zero balance), 0x2a9613... (charity, nonzero rOwned/tOwned).
+	// Pool: 0x02c7d2d1 (lfj_v1, BabyCoq/WAVAX).
+	// Was fotBps(103) — ~25 PPM residual from pool-side reflection bonus on existing balance.
+	// Needs RecipientAwareInputAdjuster to compute balanceOf(pool) after - before exactly.
+	"0x22897cf0da31e1f118649d9f6ad1809cabd84948": {
+		rTotalSlot:   common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000008"),
+		tTotal:       new(big.Int).Mul(big.NewInt(420690), new(big.Int).Exp(big.NewInt(10), big.NewInt(15), nil)),
+		reflectRate:  2,
+		reflectDenom: 10000,
+		calcFee:      fotBps(103).calcFee,
+		excludedArraySlot: common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000006"),
 		rOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000001"),
 		tOwnedSlot:        common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000000002"),
 	},

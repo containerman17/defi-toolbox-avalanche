@@ -473,7 +473,7 @@ func printTypeTable(byType map[int]*typeStats, poolCount int) (totalQuotes, tota
 func main() {
 	poolLimit := flag.Int("limit", 3500, "max pools to load")
 	skipFormulas := flag.Bool("skip-formulas", false, "skip formula pass")
-	numBlocksFlag := flag.Int("blocks", 3, "number of blocks to test")
+	numBlocksFlag := flag.Int("blocks", 10, "number of blocks to test")
 	singlePoolFlag := flag.String("pool", "", "test a single pool address")
 	stateServerFlag := flag.String("state-server", "ws://localhost:7449", "state server base URL")
 	useCacheFlag := flag.Bool("cache", false, "use formula quote cache")

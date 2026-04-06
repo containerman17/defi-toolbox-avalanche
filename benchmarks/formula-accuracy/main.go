@@ -683,6 +683,23 @@ func main() {
 			totalOver, precPct, totalMatch, totalUnder)
 	}
 
+	// ─── Write precision file (checked by pre-commit hook) ───
+	if !*skipFormulas {
+		// Count aggregate overquotes across all blocks
+		aggOver := 0
+		overKeys := make(map[quoteKey]bool)
+		for _, res := range results {
+			for k := range res.overquoteSet {
+				overKeys[k] = true
+			}
+		}
+		aggOver = len(overKeys)
+
+		precFile := "benchmarks/formula-accuracy/precision.txt"
+		content := fmt.Sprintf("overquotes=%d\n", aggOver)
+		os.WriteFile(precFile, []byte(content), 0o644)
+	}
+
 	// ─── Log output ───
 	first := results[0]
 	firstMatch, firstOver, firstUnder, firstFmla := 0, 0, 0, 0

@@ -170,7 +170,23 @@ func main() {
 		fmt.Printf("  (no result)\n")
 	}
 
-	// ── 3b. GreedyFine split ────────────────────────────────────────
+	// ── 3b. Water-fill split ────────────────────────────────────────
+
+	fmt.Printf("\n--- Water-Fill Split ---\n")
+	waterfill := splitter.WaterFill(params, fullAmount)
+	if waterfill != nil {
+		for i, leg := range waterfill.Legs {
+			fmt.Printf("  leg %2d: %s  vol=%s  gas=%d  path=%s\n",
+				i+1, fmtOut(&leg.Output), formatTokenAmount(&leg.Volume, decimalsIn),
+				leg.GasUsed, formatPath(leg.Steps, params.Pools))
+		}
+		fmt.Printf("  total:   %s  gas=%d  time=%dμs\n",
+			fmtOut(&waterfill.Total), waterfill.TotalGas, waterfill.ElapsedUs)
+	} else {
+		fmt.Printf("  (no result)\n")
+	}
+
+	// ── 3c. GreedyFine split ────────────────────────────────────────
 
 	fmt.Printf("\n--- GreedyFine Split (%d chunks) ---\n", *chunks*4)
 	greedyfine := splitter.GreedyFine(params, fullAmount, *chunks)
@@ -284,6 +300,11 @@ func main() {
 		diff := diffStr(&optimized.Total, singleRoute.AmountOut, decimalsOut)
 		fmt.Printf("  optimized:  %s  gas=%-8d  time=%dμs  %s\n",
 			fmtOut(&optimized.Total), optimized.TotalGas, optimized.ElapsedUs, diff)
+	}
+	if waterfill != nil {
+		diff := diffStr(&waterfill.Total, singleRoute.AmountOut, decimalsOut)
+		fmt.Printf("  waterfill:  %s  gas=%-8d  time=%dμs  %s\n",
+			fmtOut(&waterfill.Total), waterfill.TotalGas, waterfill.ElapsedUs, diff)
 	}
 	if greedyfine != nil {
 		diff := diffStr(&greedyfine.Total, singleRoute.AmountOut, decimalsOut)

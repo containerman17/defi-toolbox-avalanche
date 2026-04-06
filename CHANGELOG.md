@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-06 — Water-fill split routing strategy
+
+### New strategy: `WaterFill`
+Added a fourth split routing strategy that finds the mathematically optimal volume
+split by binary-searching for the equilibrium marginal rate — where all active paths
+produce equal marginal output per unit of additional input.
+
+Algorithm: discover paths (same as optimized), then binary search (30 outer × 20 inner
+iterations) for the rate r* where sum of per-path volumes equals amountIn. Each path's
+volume is found by binary search on [0, amountIn] using numerical marginal
+(QuotePath(v+delta) - QuotePath(v)). ~6000 formula quotes total, no EVM until final
+verification.
+
+Handles: dust elimination (<0.1% legs zeroed), rounding residual assigned to
+best-marginal path, sequential EVM execution with dirty-slot accumulation.
+
 ## 2026-04-06 — pharaoh_v1 formula: zero mismatches (5 blocks, 256 pools)
 
 ### FoT exemption for Quasi/WAVAX pharaoh pool

@@ -95,6 +95,16 @@ type PoolManager struct {
 	cacheMu sync.RWMutex
 }
 
+// ClearQuoteCache wipes the quote ring buffers and balance cache but keeps
+// all pool quoter structs intact. Used by benchmarks to get fair per-strategy
+// timing without paying pool construction cost again.
+func (pm *PoolManager) ClearQuoteCache() {
+	pm.cacheMu.Lock()
+	pm.quoteCaches = make(map[common.Address]*QuoteCache)
+	pm.balanceCache = make(map[common.Address][]uint256.Int)
+	pm.cacheMu.Unlock()
+}
+
 // NewPoolManager creates a PoolManager backed by the given registry and storage reader.
 func NewPoolManager(registry *Registry, reader StorageReader) *PoolManager {
 	return &PoolManager{

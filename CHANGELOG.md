@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-04-07 — Fix benchmark cache bias, parallelize by (block × strategy)
+
+### Cache isolation
+Previous benchmark shared a single PoolManager across all strategies — later strategies
+got free cache hits from earlier ones, making timing meaningless (max appeared faster
+than front despite containing it). Fixed with per-strategy `NewPM()` via `Quoter.NewPM()`.
+Added `PoolManager.ClearQuoteCache()` for future use.
+
+### Parallel execution
+Each (block × strategy) now runs in its own goroutine with isolated PM. Progress printed
+every 10s. Wall clock scales with cores (~10× faster on 24-core). Timing measured inside
+each strategy (ElapsedUs) remains single-threaded and honest.
+
+### Self-loops
+Added self-loop pairs (WAVAX→WAVAX, USDC→USDC, etc.) to benchmark coverage.
+Total cases: 16 pairs × 3 volumes × N blocks.
+
 ## 2026-04-07 — QUOTING_GAPS.md: documented 4 gaps in formula quoting pipeline
 
 Added `QUOTING_GAPS.md` documenting features the swap-replay benchmark handles but

@@ -1,6 +1,9 @@
 // Deterministic split strategy benchmark.
 // Runs all strategies across fixed blocks (deployment block + N*10000)
 // using /debug/{block} frozen snapshots. Results are fully reproducible.
+//
+// Each (block × strategy) runs in its own goroutine with an isolated
+// PoolManager — no cross-strategy cache sharing. Wall clock scales with cores.
 package main
 
 import (
@@ -11,6 +14,9 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	pf "defi-toolbox/pathfinder"
 	"defi-toolbox/pathfinder/splitter"
@@ -35,9 +41,25 @@ var tokens = []struct {
 	{"WETH.e", common.HexToAddress("0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB"), 18, "300"},
 }
 
+var dividers = []struct {
+	label string
+	div   uint64
+}{
+	{"1x", 1},
+	{"÷10", 10},
+	{"÷100", 100},
+}
+
 type strategy struct {
 	name string
 	run  func(*splitter.Params, *uint256.Int) *splitter.Result
+}
+
+// caseResult holds the result for one (block, strategy, pair, volume) combo.
+type caseResult struct {
+	pct    float64
+	ms     float64
+	result *splitter.Result
 }
 
 func main() {
@@ -68,11 +90,10 @@ func main() {
 		{"max", func(p *splitter.Params, a *uint256.Int) *splitter.Result { return splitter.SplitMax(p, a) }},
 	}
 
-	// Filter strategies if --only is set
 	var strategies []strategy
 	if *only != "" {
 		want := make(map[string]bool)
-		want["greedy"] = true // always include baseline
+		want["greedy"] = true
 		for _, name := range strings.Split(*only, ",") {
 			want[strings.TrimSpace(name)] = true
 		}
@@ -85,63 +106,100 @@ func main() {
 		strategies = allStrategies
 	}
 
-	dividers := []struct {
-		label string
-		div   uint64
-	}{
-		{"1x", 1},
-		{"÷10", 10},
-		{"÷100", 100},
+	// Build test case list (pairs × volumes)
+	type testCase struct {
+		tIn, tOut int
+		div       uint64
+		divLabel  string
+		pair      string
+	}
+	var cases []testCase
+	for _, div := range dividers {
+		for i := range tokens {
+			for j := range tokens {
+				pair := ""
+				if i == j {
+					pair = fmt.Sprintf("%s loop %s", tokens[i].Name, div.label)
+				} else {
+					pair = fmt.Sprintf("%s→%s %s", tokens[i].Name, tokens[j].Name, div.label)
+				}
+				cases = append(cases, testCase{i, j, div.div, div.label, pair})
+			}
+		}
 	}
 
-	pcts := make([][]float64, len(strategies))
-	times := make([][]float64, len(strategies))
-	results := make([][]*splitter.Result, len(strategies))
-	for i := range strategies {
-		pcts[i] = []float64{}
-		times[i] = []float64{}
+	nBlocks := *numBlocks
+	nStrats := len(strategies)
+	nCases := len(cases)
+	totalJobs := nBlocks * nStrats * nCases
+	// results[block][strategy][case]
+	allResults := make([][][]caseResult, nBlocks)
+	for bi := range allResults {
+		allResults[bi] = make([][]caseResult, nStrats)
+		for si := range allResults[bi] {
+			allResults[bi][si] = make([]caseResult, nCases)
+		}
 	}
-	var pairLabels []string
 
-	// Header
-	fmt.Printf("%-22s", "PAIR")
-	for _, s := range strategies {
-		fmt.Printf(" %8s", s.name)
+	// Connect to all blocks first
+	type blockState struct {
+		q   *quoter.Quoter
+		ls  *statedb.LiveState
+		cfg statedb.EVMConfig
 	}
-	fmt.Println()
-	fmt.Println(strings.Repeat("─", 22+len(strategies)*9))
-
-	for bi := 0; bi < *numBlocks; bi++ {
+	blocks := make([]blockState, nBlocks)
+	for bi := 0; bi < nBlocks; bi++ {
 		blockNum := uint64(deployBlock + bi*10000)
 		url := fmt.Sprintf("%s/debug/%d", strings.TrimRight(*stateServer, "/"), blockNum)
-
 		fmt.Fprintf(os.Stderr, "connecting to block %d...\n", blockNum)
 		ls, err := statedb.Connect(url)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: %v\n", blockNum, err)
 			continue
 		}
-
 		q := quoter.NewQuoter(ls, 2000, 3)
-		// No StartBlockLoop — frozen snapshot, no new blocks
-
 		ls.RLock()
-		cfg := ls.EVMConfig()
+		blocks[bi] = blockState{q: q, ls: ls, cfg: ls.EVMConfig()}
+	}
 
-		fmt.Printf("\n=== Block %d ===\n\n", blockNum)
+	// Progress tracker
+	var completed int64
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			done := atomic.LoadInt64(&completed)
+			if done >= int64(totalJobs) {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "progress: %d/%d jobs (%.0f%%)\n", done, totalJobs, float64(done)/float64(totalJobs)*100)
+		}
+	}()
 
-		for _, div := range dividers {
-			for i, tIn := range tokens {
-				for j, tOut := range tokens {
-					if i == j {
-						continue
-					}
+	// Launch goroutine per (block × strategy) — each with its own fresh PM
+	var wg sync.WaitGroup
+	for bi := 0; bi < nBlocks; bi++ {
+		bs := blocks[bi]
+		if bs.q == nil {
+			atomic.AddInt64(&completed, int64(nStrats*nCases))
+			continue
+		}
+		for si := 0; si < nStrats; si++ {
+			wg.Add(1)
+			go func(bi, si int) {
+				defer wg.Done()
+
+				q := bs.q
+				pm := q.NewPM()
+
+				for ci, tc := range cases {
+					tIn := tokens[tc.tIn]
+					tOut := tokens[tc.tOut]
 
 					amount := parseDecimalAmount(tIn.Amount, tIn.Decimals)
 					if amount == nil || amount.Sign() <= 0 {
 						continue
 					}
-					amount.Div(amount, big.NewInt(int64(div.div)))
+					amount.Div(amount, big.NewInt(int64(tc.div)))
 					if amount.Sign() <= 0 {
 						continue
 					}
@@ -149,51 +207,89 @@ func main() {
 					fullAmount.SetFromBig(amount)
 
 					params := &splitter.Params{
-						PM: q.PM(), BasePM: q.PM(), Adj: q.Adj(), Pools: q.Pools(),
-						State: q.StateWithOverrides(), EVMConfig: cfg,
+						PM: pm, BasePM: pm, Adj: q.Adj(), Pools: q.Pools(),
+						State: q.StateWithOverrides(), EVMConfig: bs.cfg,
 						RouterAddr: q.RouterAddr(), Sender: q.Sender(),
 						TokenIn: tIn.Address, TokenOut: tOut.Address, MaxHops: q.MaxHops(),
 					}
 
-					single := pf.FindBestRoute(params.PM, params.Adj, params.Pools, params.State,
-						cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
+					// Single-path baseline (needed for pct calculation)
+					single := pf.FindBestRoute(pm, params.Adj, params.Pools, params.State,
+						bs.cfg, params.RouterAddr, params.Sender, tIn.Address, tOut.Address, fullAmount, q.MaxHops())
 					if single == nil {
 						continue
 					}
 					singleF := u256ToFloat(single.AmountOut, tOut.Decimals)
 
-					pair := fmt.Sprintf("%s→%s %s", tIn.Name, tOut.Name, div.label)
-					pairLabels = append(pairLabels, pair)
-					fmt.Printf("%-22s", pair)
-
-					for si, s := range strategies {
-						result := s.run(params, fullAmount)
-						pct := 0.0
-						ms := 0.0
-						if result != nil {
-							outF := u256ToFloat(&result.Total, tOut.Decimals)
-							pct = pctImprovement(singleF, outF)
-							ms = float64(result.ElapsedUs) / 1000.0
-						}
-						pcts[si] = append(pcts[si], pct)
-						times[si] = append(times[si], ms)
-						results[si] = append(results[si], result)
-						fmt.Printf(" %+7.3f%%", pct)
+					result := strategies[si].run(params, fullAmount)
+					var cr caseResult
+					if result != nil {
+						cr.result = result
+						cr.pct = pctImprovement(singleF, u256ToFloat(&result.Total, tOut.Decimals))
+						cr.ms = float64(result.ElapsedUs) / 1000.0
 					}
-					fmt.Println()
+					allResults[bi][si][ci] = cr
+					atomic.AddInt64(&completed, 1)
 				}
-			}
+			}(bi, si)
 		}
+	}
+	wg.Wait()
+	fmt.Fprintf(os.Stderr, "done.\n")
 
-		ls.RUnlock()
-		ls.Close()
+	// Close connections
+	for _, bs := range blocks {
+		if bs.ls != nil {
+			bs.ls.RUnlock()
+			bs.ls.Close()
+		}
+	}
+
+	// ── Print results ────────────────────────────────────────────────
+	// Flatten into per-strategy arrays (same format as before)
+	pcts := make([][]float64, nStrats)
+	times := make([][]float64, nStrats)
+	results := make([][]*splitter.Result, nStrats)
+	for si := range strategies {
+		pcts[si] = []float64{}
+		times[si] = []float64{}
+	}
+	var pairLabels []string
+
+	fmt.Printf("%-22s", "PAIR")
+	for _, s := range strategies {
+		fmt.Printf(" %8s", s.name)
+	}
+	fmt.Println()
+	fmt.Println(strings.Repeat("─", 22+len(strategies)*9))
+
+	for bi := 0; bi < nBlocks; bi++ {
+		if blocks[bi].q == nil {
+			continue
+		}
+		fmt.Printf("\n=== Block %d ===\n\n", uint64(deployBlock+bi*10000))
+
+		for ci, tc := range cases {
+			if bi == 0 {
+				pairLabels = append(pairLabels, tc.pair)
+			}
+			fmt.Printf("%-22s", tc.pair)
+			for si := range strategies {
+				cr := allResults[bi][si][ci]
+				pcts[si] = append(pcts[si], cr.pct)
+				times[si] = append(times[si], cr.ms)
+				results[si] = append(results[si], cr.result)
+				fmt.Printf(" %+7.3f%%", cr.pct)
+			}
+			fmt.Println()
+		}
 	}
 
 	// ── Aggregates ───────────────────────────────────────────────────
 	n := len(pcts[0])
 	fmt.Printf("\n%s\n", strings.Repeat("═", 22+len(strategies)*9))
 	fmt.Printf("\nALL %d test cases (%d blocks × %d pairs × %d volumes):\n\n",
-		n, *numBlocks, len(tokens)*(len(tokens)-1), len(dividers))
+		n, nBlocks, len(tokens)*len(tokens), len(dividers))
 
 	for _, label := range []string{"MEDIAN", "AVG", "MIN", "MAX"} {
 		fmt.Printf("%-22s", label)
@@ -249,7 +345,7 @@ func main() {
 		fmt.Printf("  %-8s W=%-3d L=%-3d T=%-3d\n", strategies[si].name, wins, losses, t)
 	}
 
-	// Per-case best: wins = within 0.0001% of best across all strategies
+	// Per-case best
 	const tol = 0.0001
 	fmt.Println()
 	fmt.Println("vs per-case best (W=near-best, L=missed, tol=0.0001%):")
@@ -261,7 +357,6 @@ func main() {
 			}
 		}
 	}
-	// nearBest[si][pi] = true if strategy si is near-best on case pi
 	nearBest := make([][]bool, len(strategies))
 	for si := range strategies {
 		nearBest[si] = make([]bool, n)
@@ -277,7 +372,7 @@ func main() {
 		fmt.Printf("  %-8s near-best=%-3d missed=%-3d\n", strategies[si].name, wins, losses)
 	}
 
-	// Combinatorial search: best 2, 3, 4 strategy combos by union near-best coverage
+	// Combinatorial search
 	coverageOf := func(combo []int) int {
 		count := 0
 		for pi := 0; pi < n; pi++ {
@@ -291,45 +386,10 @@ func main() {
 		return count
 	}
 
-	// Path diagnostics for missed cases: show which paths each strategy used
-	fmt.Println()
-	fmt.Println("PATH DIAGNOSTICS (missed cases for optim2, optim3):")
-	for si := range strategies {
-		if strategies[si].name != "optim2" && strategies[si].name != "optim3" {
-			continue
-		}
-		for pi := range bestPct {
-			if nearBest[si][pi] {
-				continue
-			}
-			// Find the best strategy for this case
-			bestSi := -1
-			for bsi := range strategies {
-				if nearBest[bsi][pi] && (bestSi < 0 || pcts[bsi][pi] > pcts[bestSi][pi]) {
-					bestSi = bsi
-				}
-			}
-			fmt.Printf("\n  %s missed %s: %.4f%% vs best %.4f%% (%s)\n",
-				strategies[si].name, pairLabels[pi], pcts[si][pi], pcts[bestSi][pi], strategies[bestSi].name)
-
-			// Show paths used by this strategy
-			if results[si][pi] != nil {
-				paths := legPaths(results[si][pi].Legs)
-				fmt.Printf("    %s paths: %v\n", strategies[si].name, paths)
-			}
-			// Show paths used by the winner
-			if results[bestSi][pi] != nil {
-				paths := legPaths(results[bestSi][pi].Legs)
-				fmt.Printf("    %s paths: %v\n", strategies[bestSi].name, paths)
-			}
-		}
-	}
-
 	ns := len(strategies)
 	for size := 2; size <= 4; size++ {
 		bestCoverage := 0
 		var bestCombos [][]int
-		// iterate all combos of `size` strategies
 		combo := make([]int, size)
 		var search func(start, depth int)
 		search = func(start, depth int) {

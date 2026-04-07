@@ -206,7 +206,36 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 
 // ── Getters for split routing ────────────────────────────────────────
 
-func (q *Quoter) PM() *formulas.PoolManager                   { return q.pm }
+func (q *Quoter) PM() *formulas.PoolManager { return q.pm }
+
+// NewPM creates a fresh PoolManager with empty caches but the same pool/token
+// setup as the original. Used by benchmarks to avoid cache warming bias.
+func (q *Quoter) NewPM() *formulas.PoolManager {
+	state := q.ls.State()
+	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
+		return state.GetState(addr, slot)
+	}
+	pm := formulas.NewPoolManager(q.registry, stateReader)
+	for i := range q.pools {
+		p := &q.pools[i]
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens...)
+		}
+		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+	}
+	pm.SetBlockTimestamp(q.ls.Timestamp())
+	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		cs := statedb.NewCallState(state)
+		cfg := statedb.EVMConfig{
+			BlockNumber: q.ls.Block(), Timestamp: q.ls.Timestamp(),
+			ChainID: 43114, BaseFee: q.ls.BaseFee(), GasLimit: q.ls.GasLimit(),
+		}
+		ctx := statedb.GetCachedContext(cfg)
+		ret, _, err := ctx.ExecuteWithCallState(cs, common.Address{}, to, data)
+		return ret, err == nil
+	})
+	return pm
+}
 func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge       { return q.adj }
 func (q *Quoter) Pools() []pf.Pool                            { return q.pools }
 func (q *Quoter) StateWithOverrides() *statedb.StateDB         { return q.stateWithOverrides }

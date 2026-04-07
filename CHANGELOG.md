@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-07 — QUOTING_GAPS.md: documented 4 gaps in formula quoting pipeline
+
+Added `QUOTING_GAPS.md` documenting features the swap-replay benchmark handles but
+the formula quoter doesn't: ERC4626 vault wrap/unwrap (8 vaults, pool type 10),
+Balancer V3 buffered swaps (type 11), V4 native AVAX wrapping (`wrapNative` flag),
+and reflection token override fields missing from Go struct. Each gap includes
+exact file paths, router code references, and step-by-step implementation plan.
+
 ## 2026-04-06 — Benchmark: overquoting/precision split, lfj_v1 zero overquotes
 
 ### New benchmark metrics: overquoting + precision

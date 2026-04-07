@@ -24,6 +24,7 @@ Result: **zero overquotes across all 3500 pools, 10 blocks**. Precision 98.4%.
 ### Pre-commit hook for overquoting
 Benchmark writes `benchmarks/formula-accuracy/precision.txt` with `overquotes=N`.
 Pre-commit hook reads this file and blocks commits if overquotes > 0.
+Moved hooks to `.githooks/` (committed). Activate: `git config core.hooksPath .githooks`.
 
 ## 2026-04-06 — Water-fill split routing strategy
 
@@ -4342,4 +4343,5 @@ Per-type highlights:
 - BFS with all-token overrides explores 5000+ quotes per direction vs 1400 with 4-token overrides
 - Pathfinder needs beam width / pruning for wider search
 - LFJ V2 formula not implemented yet (335 pools, 441ms — next formula target)
+test
 test

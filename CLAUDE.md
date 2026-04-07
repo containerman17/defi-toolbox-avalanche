@@ -1,5 +1,13 @@
 # DeFi Toolbox — Avalanche C-Chain
 
+## Git Hooks (`.githooks/`)
+
+Hooks are in `.githooks/` (committed). Activate with: `git config core.hooksPath .githooks`
+
+Pre-commit hook enforces:
+1. **Changelog** — every commit must include CHANGELOG.md changes.
+2. **No overquoting** — reads `benchmarks/formula-accuracy/precision.txt`. Blocks commit if any formula returns more than EVM. Fix the formula or set the pool to -1 in `registry.txt`, then re-run the benchmark.
+
 ## Changelog (MANDATORY — enforced by pre-commit hook)
 
 **Every commit MUST include changes to CHANGELOG.md.** A git pre-commit hook will reject commits without it — do not bypass it.

@@ -1,17 +1,37 @@
 # Changelog
 
-## 2026-04-08 — Arb4 plan: two-phase BFS arbitrage rewrite
+## 2026-04-08 — Arb4: two-phase BFS arbitrage implementation
 
-Added `experiments/arb4/PLAN.md` — complete design doc for a rewrite of the cyclic
-arbitrage scanner. Three-phase architecture:
-1. Exclusion BFS (formula): discover diverse pool set by repeatedly running BFS with
-   different pools excluded, forcing genuinely different routes.
-2. EVM BFS (narrow): run BFS on reduced pool set (~20-40 pools) using EVM calls for
-   exact gas measurement. Scoring = profit after gas, not gross output.
-3. Binary search sizing: find optimal input amount on the concave profit curve.
+Implemented `experiments/arb4/` — complete rewrite of cyclic arbitrage scanner.
 
-Key improvements over arb1: gas-aware path selection, optimal sizing (vs 5 fixed buckets),
-multi-hub support (WAVAX/USDC/USDT/WETH.e), no rate table false positives.
+### Architecture (4 phases per block)
+1. **Exclusion BFS** (formula, `discover.go`): discover diverse pool set by running BFS
+   with different pools excluded, forcing genuinely different routes. Multi-hub
+   (WAVAX/USDC/USDT/WETH.e), multiple probe amounts per hub.
+2. **Pricing wave** (`pricing.go`): 3-wave formula BFS to get WAVAX price for every token
+   in the reduced pool set. Used for gas conversion during intermediate node pruning.
+3. **EVM BFS** (`evmbfs.go`): BFS on reduced pool set (~20-40 pools) using full multi-hop
+   EVM swaps per candidate. Each hop extends the path and re-executes the full chain as
+   one transaction — captures side effects and measures exact gas. beam=1 per token.
+   Scoring = profit after gas, not gross output.
+4. **Optimal sizing** (`sizing.go`): ternary search on concave profit curve using formula
+   quotes, final EVM verification at optimal amount.
+
+### Key design decisions
+- Full-path EVM swaps (not per-hop) — each BFS edge evaluation runs the entire path from
+  hub as a single `swap()` call via `EncodeSwapMulti`. Side effects from hop 1 affect hop 2.
+- Pricing wave for gas conversion at intermediate nodes — 3 waves of formula quotes
+  (direct WAVAX pairs, then chained) gives WAVAX price for every token. No path-dependent
+  rate chaining fragility.
+- Gas comparison: `net_value = amount - gas_in_token_terms`. For WAVAX hub, gas is native.
+  For other hubs, one formula quote `1 WAVAX → hub` gives the conversion rate.
+
+### Improvements over arb1
+- Gas-aware from Phase 2 (arb1 only considers gas in Phase 3)
+- Optimal sizing via ternary search (arb1 uses 5 fixed buckets)
+- Multi-hub support (arb1 is WAVAX-only)
+- No rate table screening (arb1 has ~7000 false positives per block)
+- No static cycle enumeration (arb1 enumerates all cycles at startup)
 
 ## 2026-04-07 — Fix benchmark cache bias, parallelize by (block × strategy)
 

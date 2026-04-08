@@ -1,0 +1,109 @@
+package main
+
+import (
+	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+// PricingWave computes a WAVAX-denominated price for every token reachable
+// in the reduced pool set. The price is: how many units of token equal 1 WAVAX.
+//
+// Three waves of formula quotes:
+//   Wave 1: tokens with a direct WAVAX pool
+//   Wave 2: tokens pairing with Wave 1 tokens
+//   Wave 3: one more layer
+//
+// Returns map[token]float64 where price[token] = units_of_token per 1 WAVAX.
+// WAVAX itself has price = 1e18 (1 WAVAX = 1e18 wei).
+func PricingWave(
+	pm *formulas.PoolManager,
+	adj map[common.Address][]pf.PoolEdge,
+	pools []pf.Pool,
+	wavax common.Address,
+) map[common.Address]float64 {
+	prices := make(map[common.Address]float64)
+	prices[wavax] = 1e18 // 1 WAVAX in wei
+
+	oneWAVAX := toWei(1, 18)
+
+	// Build token→pool edges for quick lookup
+	// Wave 1: direct WAVAX pairs
+	for _, edge := range adj[wavax] {
+		tok := edge.TokenOut
+		if _, ok := prices[tok]; ok {
+			continue
+		}
+		out := pm.Quote(pools[edge.PoolIdx].Address, oneWAVAX, edge.TokenIn, edge.TokenOut)
+		if !out.IsZero() {
+			prices[tok] = float64FromU256(&out)
+		}
+	}
+
+	// Wave 2 & 3: extend from priced tokens
+	for wave := 0; wave < 2; wave++ {
+		// Collect currently priced tokens
+		var pricedTokens []common.Address
+		for tok := range prices {
+			pricedTokens = append(pricedTokens, tok)
+		}
+
+		for _, pricedTok := range pricedTokens {
+			if prices[pricedTok] <= 0 {
+				continue
+			}
+			// Amount to quote: 1 unit of the priced token (at its WAVAX-equivalent scale)
+			// Use a standardized amount: price[tok] is how many token-wei = 1 WAVAX
+			// Quote 1 unit of priced token → unpriced token
+			oneUnit := amountForPricing(pricedTok, prices[pricedTok])
+			if oneUnit.IsZero() {
+				continue
+			}
+
+			for _, edge := range adj[pricedTok] {
+				tok := edge.TokenOut
+				if _, ok := prices[tok]; ok {
+					continue
+				}
+				out := pm.Quote(pools[edge.PoolIdx].Address, oneUnit, edge.TokenIn, edge.TokenOut)
+				if !out.IsZero() {
+					// price[tok] = (price[pricedTok] / oneUnit) * out
+					// = how many tok-wei per WAVAX
+					ratio := float64FromU256(&out) / float64FromU256(oneUnit)
+					prices[tok] = prices[pricedTok] * ratio
+				}
+			}
+		}
+	}
+
+	return prices
+}
+
+// amountForPricing returns a reasonable amount to quote for a given token.
+// We want roughly 1 WAVAX worth of the token.
+func amountForPricing(token common.Address, pricePerWAVAX float64) *uint256.Int {
+	if pricePerWAVAX <= 0 {
+		return uint256.NewInt(0)
+	}
+	// pricePerWAVAX is in token-wei per 1 WAVAX.
+	// Quote this amount through pools.
+	amt := uint256.NewInt(uint64(pricePerWAVAX))
+	if amt.IsZero() {
+		amt = uint256.NewInt(1)
+	}
+	return amt
+}
+
+// GasCostInToken converts gas cost (in AVAX wei) to token units using pricing wave data.
+func GasCostInToken(gasUsed, gasPrice uint64, token common.Address, prices map[common.Address]float64) float64 {
+	gasCostAVAX := float64(gasUsed) * float64(gasPrice)
+	tokenPrice, ok := prices[token]
+	if !ok || tokenPrice <= 0 {
+		return 0 // unpriced token — can't convert
+	}
+	// gasCostAVAX is in wei. tokenPrice is token-wei per 1 WAVAX (= 1e18 wei).
+	// gas_in_token = gasCostAVAX * tokenPrice / 1e18
+	return gasCostAVAX * tokenPrice / 1e18
+}

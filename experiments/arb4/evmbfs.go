@@ -1,0 +1,174 @@
+package main
+
+import (
+	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/statedb"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+// CycleResult is the output of Phase 2 (EVM BFS) or Phase 3 (sizing).
+type CycleResult struct {
+	Hub      common.Address
+	Steps    []pf.RouteStep
+	AmountIn uint256.Int
+	AmountOut uint256.Int
+	Profit   uint256.Int // amountOut - amountIn - gasCost (in hub token wei)
+	GasUsed  uint64
+	Calldata []byte
+}
+
+// evmNode represents one BFS frontier entry.
+type evmNode struct {
+	token    common.Address
+	amount   uint256.Int
+	gasUsed  uint64
+	steps    []pf.RouteStep // full path from hub to this node
+}
+
+// EVMBFS runs BFS on the reduced pool set using full-path EVM swaps.
+// Each candidate path is executed as a single multi-hop EVM transaction.
+// Returns the most profitable cycle (hub → ... → hub) or nil.
+func EVMBFS(
+	adj map[common.Address][]pf.PoolEdge,
+	pools []pf.Pool,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr, sender common.Address,
+	hub common.Address,
+	probeAmount *uint256.Int,
+	maxHops int,
+	gasPrice uint64,
+	prices map[common.Address]float64,
+) *CycleResult {
+	evmCtx := statedb.GetCachedContext(cfg)
+
+	// Layer 0: start at hub with probeAmount
+	currentLayer := []evmNode{{
+		token:  hub,
+		amount: *probeAmount,
+	}}
+
+	var bestCycle *CycleResult
+
+	for hop := 0; hop < maxHops; hop++ {
+		// Per-token best for this layer (beam = 1)
+		tokenBest := make(map[common.Address]*evmNode)
+
+		for _, parent := range currentLayer {
+			for _, edge := range adj[parent.token] {
+				// Don't use the same pool we arrived through
+				if len(parent.steps) > 0 && parent.steps[len(parent.steps)-1].Pool == pools[edge.PoolIdx].Address {
+					continue
+				}
+
+				// Build full path: parent.steps + this edge
+				newSteps := make([]pf.RouteStep, len(parent.steps)+1)
+				copy(newSteps, parent.steps)
+				p := &pools[edge.PoolIdx]
+				newSteps[len(parent.steps)] = pf.RouteStep{
+					Pool:      p.Address,
+					PoolType:  p.PoolType,
+					TokenIn:   edge.TokenIn,
+					TokenOut:  edge.TokenOut,
+					ExtraData: p.ExtraData,
+				}
+
+				// Execute full path via EVM
+				calldata := buildCalldata(newSteps, probeAmount)
+				cs := statedb.NewCallState(stateWithOverrides)
+				ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, sender, routerAddr, calldata)
+				if err != nil || len(ret) < 32 {
+					continue
+				}
+
+				var evmOut uint256.Int
+				evmOut.SetBytes(ret[:32])
+				// Skip negative (fee-on-transfer) or zero outputs
+				if evmOut.Bytes32()[0]&0x80 != 0 || evmOut.IsZero() {
+					continue
+				}
+
+				tok := edge.TokenOut
+
+				// Cycle candidate: back to hub at hop >= 1
+				if tok == hub && hop >= 1 {
+					gasCostWei := gasUsed * gasPrice
+					gasCostU := new(uint256.Int).SetUint64(gasCostWei)
+					totalCost := new(uint256.Int).Add(probeAmount, gasCostU)
+					if evmOut.Gt(totalCost) {
+						profit := new(uint256.Int).Sub(&evmOut, totalCost)
+						if bestCycle == nil || profit.Cmp(&bestCycle.Profit) > 0 {
+							bestCycle = &CycleResult{
+								Hub:      hub,
+								Steps:    newSteps,
+								AmountIn: *probeAmount,
+								AmountOut: evmOut,
+								Profit:   *profit,
+								GasUsed:  gasUsed,
+								Calldata: calldata,
+							}
+						}
+					}
+					continue
+				}
+
+				// Intermediate node: compare using net value (amount - gas in token terms)
+				gasCostInTok := GasCostInToken(gasUsed, gasPrice, tok, prices)
+				netValue := float64FromU256(&evmOut) - gasCostInTok
+
+				existing := tokenBest[tok]
+				if existing == nil {
+					node := evmNode{
+						token:   tok,
+						amount:  evmOut,
+						gasUsed: gasUsed,
+						steps:   newSteps,
+					}
+					tokenBest[tok] = &node
+				} else {
+					existingGas := GasCostInToken(existing.gasUsed, gasPrice, tok, prices)
+					existingNet := float64FromU256(&existing.amount) - existingGas
+					if netValue > existingNet {
+						existing.amount = evmOut
+						existing.gasUsed = gasUsed
+						existing.steps = newSteps
+					}
+				}
+			}
+		}
+
+		// Build next frontier (exclude hub — cycles already handled above)
+		currentLayer = currentLayer[:0]
+		for tok, node := range tokenBest {
+			if tok == hub {
+				continue
+			}
+			currentLayer = append(currentLayer, *node)
+		}
+
+		if len(currentLayer) == 0 {
+			break
+		}
+	}
+
+	return bestCycle
+}
+
+// buildCalldata encodes a multi-hop swap from the given steps.
+func buildCalldata(steps []pf.RouteStep, amountIn *uint256.Int) []byte {
+	poolAddrs := make([]common.Address, len(steps))
+	poolTypes := make([]int, len(steps))
+	tokenPairs := make([]common.Address, 0, len(steps)*2)
+	extraDatas := make([]string, len(steps))
+
+	for i, s := range steps {
+		poolAddrs[i] = s.Pool
+		poolTypes[i] = s.PoolType
+		tokenPairs = append(tokenPairs, s.TokenIn, s.TokenOut)
+		extraDatas[i] = s.ExtraData
+	}
+
+	return pf.EncodeSwapMulti(poolAddrs, poolTypes, tokenPairs, amountIn, extraDatas, uint256.NewInt(0))
+}

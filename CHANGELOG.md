@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-04-08 — Arb4 plan: two-phase BFS arbitrage rewrite
+
+Added `experiments/arb4/PLAN.md` — complete design doc for a rewrite of the cyclic
+arbitrage scanner. Three-phase architecture:
+1. Exclusion BFS (formula): discover diverse pool set by repeatedly running BFS with
+   different pools excluded, forcing genuinely different routes.
+2. EVM BFS (narrow): run BFS on reduced pool set (~20-40 pools) using EVM calls for
+   exact gas measurement. Scoring = profit after gas, not gross output.
+3. Binary search sizing: find optimal input amount on the concave profit curve.
+
+Key improvements over arb1: gas-aware path selection, optimal sizing (vs 5 fixed buckets),
+multi-hub support (WAVAX/USDC/USDT/WETH.e), no rate table false positives.
+
 ## 2026-04-07 — Fix benchmark cache bias, parallelize by (block × strategy)
 
 ### Cache isolation

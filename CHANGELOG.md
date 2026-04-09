@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-09 — Arb4: replace formula-based sizing with EVM ternary search
+
+Phase 3 (optimal sizing) was using formula quotes to search for the best input amount,
+then doing one final EVM verification. But formulas don't know gas — which is the entire
+reason we do EVM BFS in Phase 2. Replaced with pure EVM ternary search: each of ~15
+iterations runs a full swap() call on the winning path, getting exact profit after gas.
+~1.5ms total cost.
+
 ## 2026-04-08 — Arb4: two-phase BFS arbitrage implementation
 
 Implemented `experiments/arb4/` — complete rewrite of cyclic arbitrage scanner.

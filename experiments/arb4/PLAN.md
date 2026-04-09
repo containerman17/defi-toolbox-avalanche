@@ -112,21 +112,21 @@ intermediate token is the right one. TopK was an artifact of formula imprecision
 
 ---
 
-### Phase 3: Optimal Sizing (binary search)
+### Phase 3: EVM Sizing (ternary search)
 
 **Goal**: Find the input amount that maximizes profit for the winning cycle.
 
 **Algorithm**:
 1. Take the winning cycle (path) from Phase 2.
-2. Binary search on input amount: for each candidate, formula-quote the cycle and compute
-   `profit = output - input - (estimated_gas × gasPrice)`.
-3. Profit curve is concave. Binary search finds the peak in ~15 iterations.
-4. Final EVM verification at the optimal amount to confirm exact profit and gas.
+2. Ternary search on input amount: each evaluation is a full EVM swap() call on the
+   winning path. Returns exact `(amountOut, gasUsed)`.
+3. Profit curve is concave. Ternary search finds the peak in ~15 iterations.
 
-**Gas estimate**: Use the gas from Phase 2 as a constant — gas is mostly a function of
-hop count and pool types, not amount.
+**Why EVM, not formulas**: Formulas don't know gas. Phase 2 already proved EVM is the right
+tool for gas-aware scoring. Ternary search with EVM gives exact profit at each point —
+no formula approximation, no separate gas estimate.
 
-**Cost**: ~15 formula quotes (microseconds) + 1 EVM call = negligible.
+**Cost**: ~15 EVM calls at ~0.1ms each = ~1.5ms. Negligible.
 
 ---
 

@@ -299,13 +299,15 @@ func main() {
 		}
 		phase2Time := time.Since(t2)
 
-		// ── Phase 3: Optimal sizing ──
+		// ── Phase 3: EVM sizing — ternary search on winning cycle ──
 		var finalResult *CycleResult
 		t3 := time.Now()
 		if bestResult != nil {
-			finalResult = OptimalSize(pm, bestResult.Steps, stateWithOverrides, cfg, routerAddr, sender, bestResult.Hub, bestResult.GasUsed, gasPrice, prices)
-			if finalResult == nil || finalResult.Profit.Sign() <= 0 {
-				finalResult = bestResult // fall back to Phase 2 result
+			sized := EVMSizing(bestResult.Steps, stateWithOverrides, cfg, routerAddr, sender, bestResult.Hub, gasPrice)
+			if sized != nil && sized.Profit.Cmp(&bestResult.Profit) > 0 {
+				finalResult = sized
+			} else {
+				finalResult = bestResult
 			}
 		}
 		phase3Time := time.Since(t3)

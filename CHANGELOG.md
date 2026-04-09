@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-09 — Archive split routing to focus on arbitrage
+
+Moved `pathfinder/splitter/` and its benchmark/example/experiment entry points under
+`archive/` and renamed archived `.go` files to `.go.txt` so they cannot affect builds
+or linting. Removed the live `splitter` import from `quoter`; `split=true` now returns
+a soft `"split routing is archived"` error instead of executing split logic.
+
 ## 2026-04-09 — Arb4: replace formula-based sizing with EVM ternary search
 
 Phase 3 (optimal sizing) was using formula quotes to search for the best input amount,

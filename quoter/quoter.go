@@ -8,7 +8,6 @@ import (
 	router "defi-toolbox/contracts"
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
-	"defi-toolbox/pathfinder/splitter"
 	"defi-toolbox/statedb"
 	poolcollector "defi-toolbox/tools/pool-collector"
 
@@ -180,31 +179,15 @@ func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
 		resp.Reverse = q.routeToResult(revRoute, tokenOut, tokenIn, amountIn)
 	}
 
-	// Split routing (forward only)
+	// Split routing is archived for now. Preserve the request/response shape.
 	if req.Split {
-		params := &splitter.Params{
-			PM:         q.pm,
-			BasePM:     q.pm,
-			Adj:        q.adj,
-			Pools:      q.pools,
-			State:      q.stateWithOverrides,
-			EVMConfig:  cfg,
-			RouterAddr: q.routerAddr,
-			Sender:     q.sender,
-			TokenIn:    tokenIn,
-			TokenOut:   tokenOut,
-			MaxHops:    q.maxHops,
-		}
-		splitResult := splitter.Split(params, amountIn)
-		if splitResult != nil {
-			resp.Split = q.splitToResult(splitResult)
-		}
+		resp.Error = "split routing is archived"
 	}
 
 	return resp, nil
 }
 
-// ── Getters for split routing ────────────────────────────────────────
+// ── Getters used by benchmarks/experiments ───────────────────────────
 
 func (q *Quoter) PM() *formulas.PoolManager { return q.pm }
 
@@ -236,13 +219,13 @@ func (q *Quoter) NewPM() *formulas.PoolManager {
 	})
 	return pm
 }
-func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge       { return q.adj }
-func (q *Quoter) Pools() []pf.Pool                            { return q.pools }
-func (q *Quoter) StateWithOverrides() *statedb.StateDB         { return q.stateWithOverrides }
-func (q *Quoter) RouterAddr() common.Address                   { return q.routerAddr }
-func (q *Quoter) Sender() common.Address                      { return q.sender }
-func (q *Quoter) MaxHops() int                                 { return q.maxHops }
-func (q *Quoter) LiveState() *statedb.LiveState                { return q.ls }
+func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge { return q.adj }
+func (q *Quoter) Pools() []pf.Pool                      { return q.pools }
+func (q *Quoter) StateWithOverrides() *statedb.StateDB  { return q.stateWithOverrides }
+func (q *Quoter) RouterAddr() common.Address            { return q.routerAddr }
+func (q *Quoter) Sender() common.Address                { return q.sender }
+func (q *Quoter) MaxHops() int                          { return q.maxHops }
+func (q *Quoter) LiveState() *statedb.LiveState         { return q.ls }
 
 func (q *Quoter) routeToResult(route *pf.Route, tokenIn, tokenOut common.Address, amountIn *uint256.Int) *QuoteResult {
 	if route == nil {
@@ -271,32 +254,5 @@ func (q *Quoter) routeToResult(route *pf.Route, tokenIn, tokenOut common.Address
 		AmountOut: route.AmountOut.Dec(),
 		Path:      steps,
 		GasUsed:   route.GasUsed,
-	}
-}
-
-func (q *Quoter) splitToResult(r *splitter.Result) *SplitResult {
-	legs := make([]SplitLeg, len(r.Legs))
-	for i, leg := range r.Legs {
-		path := make([]PathStep, len(leg.Steps))
-		for j, s := range leg.Steps {
-			path[j] = PathStep{
-				Pool:     s.Pool.Hex(),
-				TokenIn:  s.TokenIn.Hex(),
-				TokenOut: s.TokenOut.Hex(),
-				Dex:      q.dexMap[s.Pool],
-			}
-		}
-		legs[i] = SplitLeg{
-			AmountIn:  leg.Volume.Dec(),
-			AmountOut: leg.Output.Dec(),
-			Path:      path,
-			GasUsed:   leg.GasUsed,
-		}
-	}
-	return &SplitResult{
-		AmountOut: r.Total.Dec(),
-		Legs:      legs,
-		TotalGas:  r.TotalGas,
-		ElapsedUs: r.ElapsedUs,
 	}
 }

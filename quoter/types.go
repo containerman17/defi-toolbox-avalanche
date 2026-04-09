@@ -7,7 +7,7 @@ type QuoteRequest struct {
 	TokenIn  string `json:"tokenIn"`
 	TokenOut string `json:"tokenOut"`
 	AmountIn string `json:"amountIn"`
-	Split    bool   `json:"split,omitempty"` // if true, run split routing via splitter.Split()
+	Split    bool   `json:"split,omitempty"` // archived for now; requests return a soft error
 }
 
 // QuoteResponse contains forward and (optionally) reverse quotes.
@@ -20,7 +20,7 @@ type QuoteResponse struct {
 	Error   string       `json:"error,omitempty"`
 }
 
-// SplitResult is the output of split routing.
+// SplitResult is kept for API compatibility while split routing is archived.
 type SplitResult struct {
 	AmountOut string     `json:"amountOut"`
 	Legs      []SplitLeg `json:"legs"`

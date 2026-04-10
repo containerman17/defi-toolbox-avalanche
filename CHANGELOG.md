@@ -43,6 +43,23 @@ Performance (16-core, non-NVMe storage — storage-bound):
 - on NVMe, expect ~50% faster based on prior testing
 - prefetch stats: p50=143 slots/block fetched during prefetch, p50=0 during exec
 
+### 50k verification: 46935/46936 matched — 1 nonce drift bug remaining
+
+Failed at block 82594196. Address 0xC77Ad0a71008d7094a62cFbD250a2eB2AfdF2776
+had nonce incremented at block 82574762 by something invisible to our execution.
+Nonce went 2133→2134 on chain, we stayed at 2133. ~20k blocks later at 82594196,
+the address sent a tx and our wrong nonce caused different USDC storage writes.
+
+Block 82574762 had NO atomic tx (extraData=62 bytes, fee window only) and NO
+direct EVM tx from this address. Unknown mechanism incremented the nonce.
+
+**To reproduce:** add `--start-block` flag to verify, run:
+`go run ./lightclient/cmd/verify/ --start-block 82574700 --blocks 100`
+Then trace block 82574762 to find what changed the nonce.
+
+**Do NOT fix with RPC reconciliation** — that defeats the purpose of the light
+client. Find and fix the actual root cause in the executor.
+
 ### README + PLAN.md
 README with usage, architecture, performance numbers. PLAN.md updated with
 all findings: 6 bugs found/fixed, trace limitations, design decisions.

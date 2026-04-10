@@ -31,6 +31,10 @@ from the old thin client.
 - Overlay-based diff extraction (not dirty tracker) to handle tx reverts correctly
 - Avalanche-specific: atomic txs, snow context, warp precompile, predicate gas
 
+### PLAN.md
+Updated with all findings: 6 bugs found/fixed, performance percentiles
+(p50=18ms, p90=65ms exec), trace limitations, design decisions.
+
 ### Also in this commit
 - Archived all experiment code (arb1-4, dump-size) to `archive/experiments/`
   with `.go` → `.go.txt` rename

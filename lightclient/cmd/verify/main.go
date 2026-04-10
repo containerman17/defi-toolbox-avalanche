@@ -83,12 +83,15 @@ func main() {
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
 		execStart := time.Now()
-		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash)
+		diff, waitPrefetch, err := lc.ExecuteBlock(block, sv, chainCfg, getHash)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: execute error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
 		execElapsed := time.Since(execStart)
+
+		// Wait for prefetch goroutines before applying diffs and moving to next block.
+		waitPrefetch()
 
 		// Apply diffs to versioned state so subsequent blocks can read them.
 		applyDiff(state, diff, blockNum)

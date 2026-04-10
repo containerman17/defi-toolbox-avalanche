@@ -90,7 +90,7 @@ func runFirstPass(snapPath, rpcURL string, concurrency, numBlocks int) {
 		miss := fetcher.MissCallbacks(state)
 		sv := lightclient.NewStateView(state, blockNum-1, miss)
 
-		diff, err := lightclient.ExecuteBlock(block, sv, chainCfg, func(n uint64) common.Hash {
+		diff, waitPrefetch, err := lightclient.ExecuteBlock(block, sv, chainCfg, func(n uint64) common.Hash {
 			if h, ok := blockHashes[n]; ok {
 				return h
 			}
@@ -103,6 +103,7 @@ func runFirstPass(snapPath, rpcURL string, concurrency, numBlocks int) {
 			os.Exit(1)
 		}
 
+		waitPrefetch()
 		applyDiff(state, diff, blockNum)
 		state.SetLatestBlock(blockNum)
 

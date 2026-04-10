@@ -236,7 +236,8 @@ func (c *LightClient) processBlock(blockNum uint64) error {
 	sv := NewStateView(c.state, blockNum-1, miss)
 
 	// Execute.
-	diff, err := ExecuteBlock(block, sv, c.chainCfg, c.getHashFunc())
+	diff, waitPrefetch, err := ExecuteBlock(block, sv, c.chainCfg, c.getHashFunc())
+	defer waitPrefetch()
 	if err != nil {
 		return fmt.Errorf("execute: %w", err)
 	}

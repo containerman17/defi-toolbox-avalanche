@@ -97,7 +97,7 @@ func runFirstPass(snapPath, rpcURL string, concurrency, numBlocks int) {
 			h, _ := fetcher.GetBlockHash(n)
 			blockHashes[n] = h
 			return h
-		})
+		}, nil)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "snapshot-bench: execute block %d: %v\n", blockNum, err)
 			os.Exit(1)

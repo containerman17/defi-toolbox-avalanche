@@ -31,7 +31,7 @@ from the old thin client.
 - Overlay-based diff extraction (not dirty tracker) to handle tx reverts correctly
 - Avalanche-specific: atomic txs, snow context, warp precompile, predicate gas
 
-### Prefetch optimization (removed — needs dedicated RPC pool)
+### Prefetch optimization (with dedicated RPC pool)
 Parallel approximate execution of all txs in background while real execution
 runs. Warms the cache so real execution hits fewer RPC misses. 3-4x improvement:
 exec p50 dropped from 41ms to 8ms, p90 from 155ms to 35ms.

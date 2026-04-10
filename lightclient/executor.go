@@ -124,6 +124,7 @@ func ExecuteBlock(
 	state *StateView,
 	chainCfg *params.ChainConfig,
 	getHash GetHashFunc,
+	prefetchMiss *MissCallbacks, // optional: separate miss callbacks for prefetch (use dedicated RPC pool)
 ) (*BlockDiff, error) {
 	header := block.Header()
 	baseFee := header.BaseFee
@@ -133,6 +134,27 @@ func ExecuteBlock(
 
 	blockCtx := buildBlockContext(header, chainCfg, getHash)
 	signer := types.MakeSigner(chainCfg, header.Number, header.Time)
+
+	// Prefetch: execute all txs in parallel using a SEPARATE miss callback
+	// (backed by a dedicated RPC pool). This never competes with real execution
+	// for RPC sockets. Fire-and-forget — prefetch writes go to the shared
+	// VersionedState at blockNum-1, real execution's diff gets applied at blockNum,
+	// so stale prefetch writes are shadowed by real values.
+	if prefetchMiss != nil && len(block.Transactions()) > 1 {
+		for _, tx := range block.Transactions() {
+			msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)
+			if err != nil {
+				continue
+			}
+			go func() {
+				defer func() { recover() }()
+				pfState := NewStateView(state.state, state.block, *prefetchMiss)
+				pfGP := new(corethcore.GasPool).AddGas(header.GasLimit)
+				pfEVM := vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), pfState, chainCfg, vm.Config{})
+				corethcore.ApplyMessage(pfEVM, msg, pfGP)
+			}()
+		}
+	}
 
 	gp := new(corethcore.GasPool).AddGas(header.GasLimit)
 

@@ -33,7 +33,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Separate RPC pool for prefetch — never competes with real execution.
+	prefetchPool, err := lc.NewRPCPool(*rpcURL, 8)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "prefetch rpc pool: %v\n", err)
+		os.Exit(1)
+	}
+	defer prefetchPool.Close()
+
 	fetcher := lc.NewBlockFetcher(pool)
+	prefetchFetcher := lc.NewBlockFetcher(prefetchPool)
 	state := lc.NewVersionedState()
 
 	headNum, err := fetchHeadBlock(pool)
@@ -82,8 +91,10 @@ func main() {
 		miss := fetcher.MissCallbacksWithStats(state, &stats)
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
+		pfMiss := prefetchFetcher.MissCallbacks(state)
+
 		execStart := time.Now()
-		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash)
+		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash, &pfMiss)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: execute error: %v\n", blockNum, err)
 			os.Exit(1)

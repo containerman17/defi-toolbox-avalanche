@@ -18,8 +18,9 @@ from the old thin client.
 
 ### Commands
 - `lightclient/cmd/verify/` — executes recent blocks locally, compares storage
-  diffs against debug trace. 5000/5000 blocks match perfectly. Timing breakdown:
-  fetch ~2ms, exec 6-40ms warm (up to 400ms cold), trace 8-100ms (verification only).
+  diffs against debug trace. 5000/5000+ blocks match. Skips newly created
+  contracts (trace reports zeros for them). Timing: fetch ~2ms, exec p50=25ms
+  p90=103ms, trace 8-100ms (verification only).
 - `lightclient/cmd/snapshot-bench/` — tests snapshot pipeline. First run builds
   state from live blocks. Second run loads snapshot and verifies execution < 100ms.
 

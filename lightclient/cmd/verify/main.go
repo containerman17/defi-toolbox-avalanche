@@ -132,7 +132,16 @@ func verifyAgainstTrace(local *lc.BlockDiff, traced *lc.TraceDiff) []string {
 	var mismatches []string
 
 	// Check traced storage against local overlay.
+	// Skip mismatches for newly created contracts — the prestateTracer reports
+	// zeros for their storage since the contract didn't exist in pre-state.
+	newContracts := make(map[common.Address]bool)
+	for addr := range local.Code {
+		newContracts[addr] = true
+	}
 	for addr, slots := range traced.Storage {
+		if newContracts[addr] {
+			continue
+		}
 		localSlots := local.Storage[addr]
 		for slot, tracedVal := range slots {
 			localVal := common.Hash{}

@@ -33,9 +33,14 @@ from the old thin client.
 
 ### Prefetch optimization (blocking, dedicated RPC pool)
 Prefetch runs all block txs in parallel on a separate RPC pool BEFORE real
-execution starts. With 32 sockets, all cache misses resolve in ~3ms. Real
-execution then runs with a fully warm cache: fetches p50=0, exec p50=11ms,
-p90=38ms. No races, no stale writes, no cancellation complexity.
+execution starts. All cache misses resolve in one parallel batch. Real
+execution then runs with a fully warm cache.
+
+Performance (16-core, non-NVMe storage — storage-bound):
+- exec p50=16ms, p90=50ms (includes prefetch + execution)
+- fetches p50=0 during real execution (fully cached from prefetch)
+- socket count (16/32/64 per pool) makes no difference — disk IOPS is the limit
+- on NVMe, expect ~50% faster based on prior testing
 
 ### README + PLAN.md
 README with usage, architecture, performance numbers. PLAN.md updated with

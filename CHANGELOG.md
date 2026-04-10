@@ -43,19 +43,6 @@ Performance (16-core, non-NVMe storage — storage-bound):
 - on NVMe, expect ~50% faster based on prior testing
 - prefetch stats: p50=143 slots/block fetched during prefetch, p50=0 during exec
 
-### 50k verification failure analysis
-46935/46936 blocks matched. Failed at block 82594196 (started from block 82547261).
-Mismatches:
-- storage 0xB97EF9Ef...8734C71904D8002F8b6Bc66Dd9c48a6E (USDC)
-  slot 0xe5a2fa13...7145520cf48d4791d7c92f7e3fbfced26f5d9126272263c6c0316827
-  local=0x0 traced=0x...12ed26dd6
-- nonce 0xC77Ad0a71008d7094a62cFbD250a2eB2AfdF2776: local=2134 traced=2135
-
-Root cause: silent nonce drift from platform-level operation (atomic export or
-staking reward) invisible to prestateTracer. Nonce drifted by 1 over ~46935
-blocks, eventually causing a tx to execute differently (wrong USDC storage).
-Fix: reconcile balances/nonces against RPC after each block.
-
 ### README + PLAN.md
 README with usage, architecture, performance numbers. PLAN.md updated with
 all findings: 6 bugs found/fixed, trace limitations, design decisions.

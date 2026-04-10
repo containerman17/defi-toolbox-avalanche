@@ -34,7 +34,8 @@ func main() {
 	}
 
 	// Separate RPC pool for prefetch — never competes with real execution.
-	prefetchPool, err := lc.NewRPCPool(*rpcURL, 8)
+	// Both pools get 2*NumCPU sockets.
+	prefetchPool, err := lc.NewRPCPool(*rpcURL, *concurrency)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "prefetch rpc pool: %v\n", err)
 		os.Exit(1)

@@ -221,6 +221,61 @@ func (f *BlockFetcher) TraceBlock(blockNum uint64) (*TraceDiff, error) {
 // MissCallbacks returns a MissCallbacks struct wired to this fetcher.
 // Each callback fetches the value from the node, stores it in the
 // VersionedState for future reads, and returns it.
+// FetchStats tracks cache miss RPC fetches per block.
+type FetchStats struct {
+	Storage int
+	Balance int
+	Nonce   int
+	Code    int
+}
+
+// Total returns the total number of cache miss fetches.
+func (s *FetchStats) Total() int {
+	return s.Storage + s.Balance + s.Nonce + s.Code
+}
+
+// MissCallbacksWithStats returns miss callbacks that count fetches into stats.
+func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *FetchStats) MissCallbacks {
+	return MissCallbacks{
+		OnStorage: func(addr common.Address, slot common.Hash, block uint64) common.Hash {
+			stats.Storage++
+			val, err := f.GetStorageAt(addr, slot, block)
+			if err != nil {
+				return common.Hash{}
+			}
+			state.SetStorage(addr, slot, val, block)
+			return val
+		},
+		OnBalance: func(addr common.Address, block uint64) *uint256.Int {
+			stats.Balance++
+			val, err := f.GetBalance(addr, block)
+			if err != nil {
+				return uint256.NewInt(0)
+			}
+			state.SetBalance(addr, val, block)
+			return val
+		},
+		OnNonce: func(addr common.Address, block uint64) uint64 {
+			stats.Nonce++
+			val, err := f.GetNonce(addr, block)
+			if err != nil {
+				return 0
+			}
+			state.SetNonce(addr, val, block)
+			return val
+		},
+		OnCode: func(addr common.Address, block uint64) []byte {
+			stats.Code++
+			val, err := f.GetCode(addr, block)
+			if err != nil {
+				return nil
+			}
+			state.SetCode(addr, val, block)
+			return val
+		},
+	}
+}
+
 func (f *BlockFetcher) MissCallbacks(state *VersionedState) MissCallbacks {
 	return MissCallbacks{
 		OnStorage: func(addr common.Address, slot common.Hash, block uint64) common.Hash {

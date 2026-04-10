@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"time"
 
 	lc "defi-toolbox/lightclient"
@@ -61,22 +62,24 @@ func main() {
 
 	matched := 0
 	total := 0
+	var execTimes []int
+	var fetchCounts []int
+	lastStats := time.Now()
 
 	for blockNum := startBlock; blockNum <= headNum; blockNum++ {
 		total++
 
-		fetchStart := time.Now()
 		bd, err := fetcher.GetBlock(blockNum)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: fetch error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
-		fetchElapsed := time.Since(fetchStart)
 
 		blockHashes[blockNum] = bd.Hash
 		block := lc.BlockDataToTypesBlock(bd)
 
-		miss := fetcher.MissCallbacks(state)
+		var stats lc.FetchStats
+		miss := fetcher.MissCallbacksWithStats(state, &stats)
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
 		execStart := time.Now()
@@ -91,26 +94,41 @@ func main() {
 		applyDiff(state, diff, blockNum)
 		state.SetLatestBlock(blockNum)
 
-		// Trace is only for verification — timed separately, not in the hot path.
-		traceStart := time.Now()
+		// Trace is only for verification — not timed.
 		traced, err := fetcher.TraceBlock(blockNum)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: trace error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
 		mismatches := verifyAgainstTrace(diff, traced)
-		traceElapsed := time.Since(traceStart)
 
 		storageCnt := 0
 		for _, slots := range diff.Storage {
 			storageCnt += len(slots)
 		}
 
+		execMs := int(execElapsed.Milliseconds())
+		execTimes = append(execTimes, execMs)
+		fetchCounts = append(fetchCounts, stats.Total())
+
 		if len(mismatches) == 0 {
 			matched++
-			fmt.Printf("block %d: MATCH (txs=%d, storage=%d, balances=%d, fetch=%s exec=%s trace=%s)\n",
-				blockNum, len(bd.Transactions), storageCnt, len(diff.Balances),
-				fetchElapsed.Round(time.Millisecond), execElapsed.Round(time.Millisecond), traceElapsed.Round(time.Millisecond))
+
+			// Print running percentiles every 5 seconds.
+			if time.Since(lastStats) >= 5*time.Second {
+				sortedExec := make([]int, len(execTimes))
+				copy(sortedExec, execTimes)
+				sort.Ints(sortedExec)
+				sortedFetch := make([]int, len(fetchCounts))
+				copy(sortedFetch, fetchCounts)
+				sort.Ints(sortedFetch)
+				n := len(sortedExec)
+				pe := func(pct int) int { return sortedExec[min(n*pct/100, n-1)] }
+				pf := func(pct int) int { return sortedFetch[min(n*pct/100, n-1)] }
+				fmt.Printf("--- %d blocks | exec p50=%dms p90=%dms p95=%dms p99=%dms p100=%dms | fetches p50=%d p90=%d p99=%d p100=%d\n",
+					n, pe(50), pe(90), pe(95), pe(99), pe(100), pf(50), pf(90), pf(99), pf(100))
+				lastStats = time.Now()
+			}
 		} else {
 			fmt.Printf("block %d: MISMATCH\n", blockNum)
 			for _, m := range mismatches {

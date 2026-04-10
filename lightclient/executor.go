@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 
 	corethcore "github.com/ava-labs/avalanchego/graft/coreth/core"
 	cparams "github.com/ava-labs/avalanchego/graft/coreth/params"
@@ -132,8 +133,35 @@ func ExecuteBlock(
 	}
 
 	blockCtx := buildBlockContext(header, chainCfg, getHash)
-	gp := new(corethcore.GasPool).AddGas(header.GasLimit)
 	signer := types.MakeSigner(chainCfg, header.Number, header.Time)
+
+	// Prefetch: execute all txs in parallel against pre-block state to warm
+	// the cache. Each goroutine creates its own StateView but shares the same
+	// VersionedState — miss callbacks populate it. The real execution below
+	// will mostly hit cache instead of RPC.
+	if len(block.Transactions()) > 1 && state.miss.OnStorage != nil {
+		var wg sync.WaitGroup
+		for _, tx := range block.Transactions() {
+			msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)
+			if err != nil {
+				continue
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer func() { recover() }() // ignore panics in prefetch
+				pfState := NewStateView(state.state, state.block, state.miss)
+				pfGP := new(corethcore.GasPool).AddGas(header.GasLimit)
+				pfEVM := vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), pfState, chainCfg, vm.Config{})
+				corethcore.ApplyMessage(pfEVM, msg, pfGP)
+			}()
+		}
+		// Don't wait — let prefetches run in background while real execution starts.
+		// They populate the shared VersionedState as they go.
+		go func() { wg.Wait() }()
+	}
+
+	gp := new(corethcore.GasPool).AddGas(header.GasLimit)
 
 	for txIndex, tx := range block.Transactions() {
 		msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)

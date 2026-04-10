@@ -31,9 +31,14 @@ from the old thin client.
 - Overlay-based diff extraction (not dirty tracker) to handle tx reverts correctly
 - Avalanche-specific: atomic txs, snow context, warp precompile, predicate gas
 
-### PLAN.md
-Updated with all findings: 6 bugs found/fixed, performance percentiles
-(p50=18ms, p90=65ms exec), trace limitations, design decisions.
+### Prefetch optimization
+Parallel approximate execution of all txs in background while real execution
+runs. Warms the cache so real execution hits fewer RPC misses. 3-4x improvement:
+exec p50 dropped from 41ms to 8ms, p90 from 155ms to 35ms.
+
+### README + PLAN.md
+README with usage, architecture, performance numbers. PLAN.md updated with
+all findings: 6 bugs found/fixed, trace limitations, design decisions.
 
 ### Also in this commit
 - Archived all experiment code (arb1-4, dump-size) to `archive/experiments/`

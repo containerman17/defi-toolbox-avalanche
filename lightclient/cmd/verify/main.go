@@ -64,13 +64,14 @@ func main() {
 
 	for blockNum := startBlock; blockNum <= headNum; blockNum++ {
 		total++
-		start := time.Now()
 
+		fetchStart := time.Now()
 		bd, err := fetcher.GetBlock(blockNum)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: fetch error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
+		fetchElapsed := time.Since(fetchStart)
 
 		blockHashes[blockNum] = bd.Hash
 		block := lc.BlockDataToTypesBlock(bd)
@@ -78,26 +79,27 @@ func main() {
 		miss := fetcher.MissCallbacks(state)
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
+		execStart := time.Now()
 		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: execute error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
+		execElapsed := time.Since(execStart)
 
-		// Trace the block and compare storage diffs against the trace.
-		// Balance comparison uses chain state deltas since trace doesn't capture atomic txs.
+		// Apply diffs to versioned state so subsequent blocks can read them.
+		applyDiff(state, diff, blockNum)
+		state.SetLatestBlock(blockNum)
+
+		// Trace is only for verification — timed separately, not in the hot path.
+		traceStart := time.Now()
 		traced, err := fetcher.TraceBlock(blockNum)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: trace error: %v\n", blockNum, err)
 			os.Exit(1)
 		}
 		mismatches := verifyAgainstTrace(diff, traced)
-
-		// Apply diffs to versioned state so subsequent blocks can read them.
-		applyDiff(state, diff, blockNum)
-		state.SetLatestBlock(blockNum)
-
-		elapsed := time.Since(start)
+		traceElapsed := time.Since(traceStart)
 
 		storageCnt := 0
 		for _, slots := range diff.Storage {
@@ -106,8 +108,9 @@ func main() {
 
 		if len(mismatches) == 0 {
 			matched++
-			fmt.Printf("block %d: MATCH (txs=%d, storage=%d, balances=%d, elapsed=%s)\n",
-				blockNum, len(bd.Transactions), storageCnt, len(diff.Balances), elapsed.Round(time.Millisecond))
+			fmt.Printf("block %d: MATCH (txs=%d, storage=%d, balances=%d, fetch=%s exec=%s trace=%s)\n",
+				blockNum, len(bd.Transactions), storageCnt, len(diff.Balances),
+				fetchElapsed.Round(time.Millisecond), execElapsed.Round(time.Millisecond), traceElapsed.Round(time.Millisecond))
 		} else {
 			fmt.Printf("block %d: MISMATCH\n", blockNum)
 			for _, m := range mismatches {

@@ -62,6 +62,11 @@ type GetHashFunc = vm.GetHashFunc
 
 // ─── Helper: build vm.BlockContext ──────────────────────────────────
 
+// BuildBlockCtx constructs a vm.BlockContext from a block header.
+func BuildBlockCtx(header *types.Header, chainCfg *params.ChainConfig, getHash GetHashFunc) vm.BlockContext {
+	return buildBlockContext(header, chainCfg, getHash)
+}
+
 func buildBlockContext(header *types.Header, chainCfg *params.ChainConfig, getHash GetHashFunc) vm.BlockContext {
 	rules := chainCfg.Rules(header.Number, cparams.IsMergeTODO, header.Time)
 
@@ -142,8 +147,10 @@ func ExecuteBlock(
 		if err != nil {
 			return nil, fmt.Errorf("block %d tx %d: apply failed: %w", header.Number.Uint64(), txIndex, err)
 		}
-		// Reverted transactions are not errors — they still consume gas and
-		// modify nonces. The diff tracker captures final state regardless.
+		// Snapshot the overlay as committed state for the next tx.
+		// This is needed for GetCommittedState to return correct pre-tx values,
+		// which affects SSTORE gas/refund calculations (EIP-2200/EIP-3529).
+		state.CommitTx()
 	}
 
 	// Apply atomic transactions (cross-chain imports/exports from block extra data).

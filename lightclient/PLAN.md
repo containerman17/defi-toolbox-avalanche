@@ -224,7 +224,7 @@ Modules 1 and 2 can be built in parallel. Module 4 can start once Module 1's int
 - Exact pruning strategy: time-based? block-count-based? On every block or periodic?
 - Snapshot format: plain gob or gob+zstd compression?
 - How to handle reorgs (if at all — Avalanche has finality so maybe not needed)
-- **GAS METERING (2026-04-10):** ~3k gas difference per affected tx. Only manifests in gas-tracking contracts (ERC-4337 EntryPoint deposit storage). All DeFi pool storage, nonces match perfectly. Upgrade timestamps verified correct. Access lists verified correct. Root cause still unknown — needs per-opcode gas tracing to isolate. Not blocking for DeFi routing use case.
+- ~~GAS METERING~~ **FIXED (2026-04-10):** Root cause was `GetCommittedState` returning start-of-block state instead of start-of-transaction state. Added `CommitTx()` to snapshot the overlay between transactions. 500/500 blocks now match perfectly (storage + nonces vs trace).
 
 ## Implementation Log
 

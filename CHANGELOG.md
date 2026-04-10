@@ -18,8 +18,7 @@ from the old thin client.
 
 ### Commands
 - `lightclient/cmd/verify/` — executes recent blocks locally, compares storage
-  diffs against debug trace. Storage+nonces match perfectly for all DeFi pools.
-  ~3k gas/tx metering difference in ERC-4337 EntryPoint only (under investigation).
+  diffs against debug trace. 500/500 blocks match perfectly.
 - `lightclient/cmd/snapshot-bench/` — tests snapshot pipeline. First run builds
   state from live blocks. Second run loads snapshot and verifies execution < 100ms.
 

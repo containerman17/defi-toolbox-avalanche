@@ -414,6 +414,10 @@ type StateView struct {
 	journal   []journalEntry
 	snapshots []int // each entry = journal length at snapshot time
 
+	// Committed storage: snapshot of overlay at the end of the previous tx.
+	// Used by GetCommittedState to return the correct pre-tx state.
+	committedStorage map[common.Address]map[common.Hash]common.Hash
+
 	// Dirty storage tracking for diff extraction after block execution
 	dirtyStorage map[common.Address]map[common.Hash]common.Hash
 	dirtyBalance map[common.Address]*uint256.Int
@@ -446,6 +450,21 @@ func NewStateView(state *VersionedState, block uint64, miss MissCallbacks) *Stat
 
 // Block returns the pinned block number.
 func (sv *StateView) Block() uint64 { return sv.block }
+
+// CommitTx snapshots the current overlay as the "committed state" for the
+// next transaction. Must be called between transactions in block execution.
+// This is the equivalent of geth's StateDB.Finalise() for committed state tracking.
+func (sv *StateView) CommitTx() {
+	committed := make(map[common.Address]map[common.Hash]common.Hash, len(sv.storageOverrides))
+	for addr, slots := range sv.storageOverrides {
+		cslots := make(map[common.Hash]common.Hash, len(slots))
+		for k, v := range slots {
+			cslots[k] = v
+		}
+		committed[addr] = cslots
+	}
+	sv.committedStorage = committed
+}
 
 // ─── Journal entries ────────────────────────────────────────────────
 
@@ -608,7 +627,14 @@ func (sv *StateView) GetState(addr common.Address, key common.Hash, _ ...stateco
 }
 
 func (sv *StateView) GetCommittedState(addr common.Address, key common.Hash, _ ...stateconf.StateDBStateOption) common.Hash {
-	// Committed = pre-transaction state, bypass overlay.
+	// Committed = state at the start of the current transaction (after all
+	// previous txs in the block). Check the committed snapshot first, then
+	// fall back to versioned state / miss callback.
+	if slots, ok := sv.committedStorage[addr]; ok {
+		if val, ok := slots[key]; ok {
+			return val
+		}
+	}
 	if val, ok := sv.state.GetStorage(addr, key, sv.block); ok {
 		return val
 	}

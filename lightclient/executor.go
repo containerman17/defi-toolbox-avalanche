@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	corethcore "github.com/ava-labs/avalanchego/graft/coreth/core"
 	cparams "github.com/ava-labs/avalanchego/graft/coreth/params"
@@ -138,29 +137,13 @@ func ExecuteBlock(
 	signer := types.MakeSigner(chainCfg, header.Number, header.Time)
 
 	// Prefetch: execute all txs in parallel using a SEPARATE RPC pool to warm
-	// the cache. After real execution finishes, cancel + wait to prevent stale
-	// prefetch writes from leaking into the next block's state.
-	if prefetchMiss != nil && len(block.Transactions()) > 1 {
-		var cancelled atomic.Bool
+	// the shared VersionedState cache BEFORE real execution starts.
+	// Each prefetch goroutine runs its own EVM against pre-block state. Cache
+	// misses are fetched via the prefetch RPC pool (separate WebSocket connections)
+	// and stored in the shared VersionedState. Once all prefetch goroutines finish,
+	// real execution starts and should hit cache for most slots.
+	if prefetchMiss != nil && len(block.Transactions()) > 0 {
 		var wg sync.WaitGroup
-		wrappedMiss := MissCallbacks{
-			OnStorage: func(addr common.Address, slot common.Hash, blk uint64) common.Hash {
-				if cancelled.Load() { panic("cancelled") }
-				return prefetchMiss.OnStorage(addr, slot, blk)
-			},
-			OnBalance: func(addr common.Address, blk uint64) *uint256.Int {
-				if cancelled.Load() { return uint256.NewInt(0) }
-				return prefetchMiss.OnBalance(addr, blk)
-			},
-			OnNonce: func(addr common.Address, blk uint64) uint64 {
-				if cancelled.Load() { return 0 }
-				return prefetchMiss.OnNonce(addr, blk)
-			},
-			OnCode: func(addr common.Address, blk uint64) []byte {
-				if cancelled.Load() { return nil }
-				return prefetchMiss.OnCode(addr, blk)
-			},
-		}
 		for _, tx := range block.Transactions() {
 			msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)
 			if err != nil {
@@ -170,16 +153,13 @@ func ExecuteBlock(
 			go func() {
 				defer wg.Done()
 				defer func() { recover() }()
-				pfState := NewStateView(state.state, state.block, wrappedMiss)
+				pfState := NewStateView(state.state, state.block, *prefetchMiss)
 				pfGP := new(corethcore.GasPool).AddGas(header.GasLimit)
 				pfEVM := vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), pfState, chainCfg, vm.Config{})
 				corethcore.ApplyMessage(pfEVM, msg, pfGP)
 			}()
 		}
-		defer func() {
-			cancelled.Store(true) // stop new RPC calls
-			wg.Wait()             // wait for in-flight to finish/panic
-		}()
+		wg.Wait() // Block until all prefetch goroutines finish — cache is warm.
 	}
 
 	gp := new(corethcore.GasPool).AddGas(header.GasLimit)

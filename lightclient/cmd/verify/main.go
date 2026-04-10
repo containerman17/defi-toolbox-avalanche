@@ -18,6 +18,7 @@ func main() {
 	rpcURL := flag.String("rpc", "ws://127.0.0.1:9650/ext/bc/C/ws", "WebSocket RPC URL")
 	blocks := flag.Int("blocks", 10, "number of recent blocks to verify")
 	concurrency := flag.Int("concurrency", 2*runtime.NumCPU(), "RPC pool size")
+	prefetch := flag.Bool("prefetch", true, "enable prefetch with separate RPC pool")
 	flag.Parse()
 
 	pool, err := lc.NewRPCPool(*rpcURL, *concurrency)
@@ -33,17 +34,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Separate RPC pool for prefetch — never competes with real execution.
-	// Both pools get 2*NumCPU sockets.
-	prefetchPool, err := lc.NewRPCPool(*rpcURL, *concurrency)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "prefetch rpc pool: %v\n", err)
-		os.Exit(1)
+	var prefetchFetcher *lc.BlockFetcher
+	if *prefetch {
+		prefetchPool, err := lc.NewRPCPool(*rpcURL, *concurrency)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "prefetch rpc pool: %v\n", err)
+			os.Exit(1)
+		}
+		defer prefetchPool.Close()
+		prefetchFetcher = lc.NewBlockFetcher(prefetchPool)
 	}
-	defer prefetchPool.Close()
 
 	fetcher := lc.NewBlockFetcher(pool)
-	prefetchFetcher := lc.NewBlockFetcher(prefetchPool)
 	state := lc.NewVersionedState()
 
 	headNum, err := fetchHeadBlock(pool)
@@ -92,10 +94,14 @@ func main() {
 		miss := fetcher.MissCallbacksWithStats(state, &stats)
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
-		pfMiss := prefetchFetcher.MissCallbacks(state)
+		var pfMiss *lc.MissCallbacks
+		if prefetchFetcher != nil {
+			m := prefetchFetcher.MissCallbacks(state)
+			pfMiss = &m
+		}
 
 		execStart := time.Now()
-		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash, &pfMiss)
+		diff, err := lc.ExecuteBlock(block, sv, chainCfg, getHash, pfMiss)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "block %d: execute error: %v\n", blockNum, err)
 			os.Exit(1)

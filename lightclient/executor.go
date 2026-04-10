@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 
 	corethcore "github.com/ava-labs/avalanchego/graft/coreth/core"
 	cparams "github.com/ava-labs/avalanchego/graft/coreth/params"
-	"github.com/ava-labs/avalanchego/graft/coreth/plugin/evm/atomic"
+	avaxatomic "github.com/ava-labs/avalanchego/graft/coreth/plugin/evm/atomic"
 	ccustomtypes "github.com/ava-labs/avalanchego/graft/coreth/plugin/evm/customtypes"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/snow"
@@ -120,15 +119,12 @@ func buildBlockContext(header *types.Header, chainCfg *params.ChainConfig, getHa
 //   - Providing a GetHashFunc for the BLOCKHASH opcode
 //   - Providing the chain config (fetch via eth_getChainConfig or hardcode)
 
-// ExecuteBlock returns the block diff and a prefetchDone function.
-// The caller MUST call prefetchDone() before starting the next block
-// to ensure prefetch goroutines don't outlive their block.
 func ExecuteBlock(
 	block *types.Block,
 	state *StateView,
 	chainCfg *params.ChainConfig,
 	getHash GetHashFunc,
-) (diff *BlockDiff, waitPrefetch func(), err error) {
+) (*BlockDiff, error) {
 	header := block.Header()
 	baseFee := header.BaseFee
 	if baseFee == nil {
@@ -138,37 +134,12 @@ func ExecuteBlock(
 	blockCtx := buildBlockContext(header, chainCfg, getHash)
 	signer := types.MakeSigner(chainCfg, header.Number, header.Time)
 
-	// Prefetch: execute all txs in parallel against pre-block state to warm
-	// the cache. Each goroutine creates its own StateView but shares the same
-	// VersionedState — miss callbacks populate it. The real execution below
-	// will mostly hit cache instead of RPC.
-	var prefetchDone func()
-	if len(block.Transactions()) > 1 && state.miss.OnStorage != nil {
-		var wg sync.WaitGroup
-		for _, tx := range block.Transactions() {
-			msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)
-			if err != nil {
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { recover() }() // ignore panics in prefetch
-				pfState := NewStateView(state.state, state.block, state.miss)
-				pfGP := new(corethcore.GasPool).AddGas(header.GasLimit)
-				pfEVM := vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), pfState, chainCfg, vm.Config{})
-				corethcore.ApplyMessage(pfEVM, msg, pfGP)
-			}()
-		}
-		prefetchDone = wg.Wait
-	}
-
 	gp := new(corethcore.GasPool).AddGas(header.GasLimit)
 
 	for txIndex, tx := range block.Transactions() {
 		msg, err := corethcore.TransactionToMessage(tx, signer, baseFee)
 		if err != nil {
-			return nil, nil, fmt.Errorf("block %d tx %d: message conversion: %w", header.Number.Uint64(), txIndex, err)
+			return nil, fmt.Errorf("block %d tx %d: message conversion: %w", header.Number.Uint64(), txIndex, err)
 		}
 
 		state.SetTxContext(tx.Hash(), txIndex)
@@ -187,7 +158,7 @@ func ExecuteBlock(
 				_, err = corethcore.ApplyMessage(evm, msg, gp)
 			}
 			if err != nil {
-				return nil, nil, fmt.Errorf("block %d tx %d: apply failed: %w", header.Number.Uint64(), txIndex, err)
+				return nil, fmt.Errorf("block %d tx %d: apply failed: %w", header.Number.Uint64(), txIndex, err)
 			}
 		}
 		// Snapshot the overlay as committed state for the next tx.
@@ -206,14 +177,14 @@ func ExecuteBlock(
 			isAP5 = rulesExtra.AvalancheRules.IsApricotPhase5
 		}
 
-		atomicTxs, err := atomic.ExtractAtomicTxs(extData, isAP5, atomic.Codec)
+		atomicTxs, err := avaxatomic.ExtractAtomicTxs(extData, isAP5, avaxatomic.Codec)
 		if err != nil {
-			return nil, nil, fmt.Errorf("block %d: extract atomic txs: %w", header.Number.Uint64(), err)
+			return nil, fmt.Errorf("block %d: extract atomic txs: %w", header.Number.Uint64(), err)
 		}
 
 		for i, tx := range atomicTxs {
 			if err := tx.UnsignedAtomicTx.EVMStateTransfer(snowCtx, state); err != nil {
-				return nil, nil, fmt.Errorf("block %d atomic tx %d: state transfer: %w", header.Number.Uint64(), i, err)
+				return nil, fmt.Errorf("block %d atomic tx %d: state transfer: %w", header.Number.Uint64(), i, err)
 			}
 		}
 	}
@@ -221,16 +192,12 @@ func ExecuteBlock(
 	// Extract diffs from the StateView's overlay. We use the overlay (not the
 	// dirty tracker) because the dirty tracker doesn't undo on revert — reverted
 	// tx writes would leak into the diff. The overlay IS the final state.
-	noop := func() {}
-	if prefetchDone == nil {
-		prefetchDone = noop
-	}
 	return &BlockDiff{
 		Storage:  state.StorageOverrides(),
 		Balances: state.BalanceOverrides(),
 		Nonces:   state.NonceOverrides(),
 		Code:     state.CodeOverrides(),
-	}, prefetchDone, nil
+	}, nil
 }
 
 // ─── Call ──────────────────────────────────────────────────────────

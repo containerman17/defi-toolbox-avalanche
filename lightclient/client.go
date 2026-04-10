@@ -244,6 +244,11 @@ func (c *LightClient) processBlock(blockNum uint64) error {
 	// Apply diffs to versioned state.
 	c.applyDiff(diff, blockNum)
 
+	// Reconcile balances and nonces against actual chain state. Storage from
+	// our execution is correct, but balances/nonces can drift from platform
+	// operations (staking rewards, atomic exports) invisible to EVM execution.
+	c.reconcileBalancesAndNonces(diff, blockNum)
+
 	// Advance latest block pointer.
 	c.state.SetLatestBlock(blockNum)
 
@@ -276,6 +281,27 @@ func (c *LightClient) applyDiff(diff *BlockDiff, block uint64) {
 	}
 	for addr, code := range diff.Code {
 		c.state.SetCode(addr, code, block)
+	}
+}
+
+// ─── Reconciliation ─────────────────────────────────────────────────
+
+// reconcileBalancesAndNonces fetches the real balance and nonce from the node
+// for every address in the diff and overwrites our computed values. This
+// prevents drift from platform-level operations (staking rewards, atomic
+// exports) that modify balances/nonces outside EVM execution.
+func (c *LightClient) reconcileBalancesAndNonces(diff *BlockDiff, blockNum uint64) {
+	for addr := range diff.Balances {
+		realBal, err := c.fetcher.GetBalance(addr, blockNum)
+		if err == nil {
+			c.state.SetBalance(addr, realBal, blockNum)
+		}
+	}
+	for addr := range diff.Nonces {
+		realNonce, err := c.fetcher.GetNonce(addr, blockNum)
+		if err == nil {
+			c.state.SetNonce(addr, realNonce, blockNum)
+		}
 	}
 }
 

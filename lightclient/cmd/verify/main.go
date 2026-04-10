@@ -112,6 +112,18 @@ func main() {
 
 		// Apply diffs to versioned state so subsequent blocks can read them.
 		applyDiff(state, diff, blockNum)
+		// Reconcile balances/nonces against chain to prevent drift from
+		// platform operations invisible to EVM.
+		for addr := range diff.Balances {
+			if bal, err := fetcher.GetBalance(addr, blockNum); err == nil {
+				state.SetBalance(addr, bal, blockNum)
+			}
+		}
+		for addr := range diff.Nonces {
+			if n, err := fetcher.GetNonce(addr, blockNum); err == nil {
+				state.SetNonce(addr, n, blockNum)
+			}
+		}
 		state.SetLatestBlock(blockNum)
 
 		// Trace is only for verification — not timed.

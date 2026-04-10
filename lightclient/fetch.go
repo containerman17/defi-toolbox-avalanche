@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/common/hexutil"
@@ -221,24 +222,24 @@ func (f *BlockFetcher) TraceBlock(blockNum uint64) (*TraceDiff, error) {
 // MissCallbacks returns a MissCallbacks struct wired to this fetcher.
 // Each callback fetches the value from the node, stores it in the
 // VersionedState for future reads, and returns it.
-// FetchStats tracks cache miss RPC fetches per block.
+// FetchStats tracks cache miss RPC fetches. Thread-safe (atomic counters).
 type FetchStats struct {
-	Storage int
-	Balance int
-	Nonce   int
-	Code    int
+	Storage atomic.Int64
+	Balance atomic.Int64
+	Nonce   atomic.Int64
+	Code    atomic.Int64
 }
 
 // Total returns the total number of cache miss fetches.
 func (s *FetchStats) Total() int {
-	return s.Storage + s.Balance + s.Nonce + s.Code
+	return int(s.Storage.Load() + s.Balance.Load() + s.Nonce.Load() + s.Code.Load())
 }
 
 // MissCallbacksWithStats returns miss callbacks that count fetches into stats.
 func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *FetchStats) MissCallbacks {
 	return MissCallbacks{
 		OnStorage: func(addr common.Address, slot common.Hash, block uint64) common.Hash {
-			stats.Storage++
+			stats.Storage.Add(1)
 			val, err := f.GetStorageAt(addr, slot, block)
 			if err != nil {
 				return common.Hash{}
@@ -247,7 +248,7 @@ func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *Fetc
 			return val
 		},
 		OnBalance: func(addr common.Address, block uint64) *uint256.Int {
-			stats.Balance++
+			stats.Balance.Add(1)
 			val, err := f.GetBalance(addr, block)
 			if err != nil {
 				return uint256.NewInt(0)
@@ -256,7 +257,7 @@ func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *Fetc
 			return val
 		},
 		OnNonce: func(addr common.Address, block uint64) uint64 {
-			stats.Nonce++
+			stats.Nonce.Add(1)
 			val, err := f.GetNonce(addr, block)
 			if err != nil {
 				return 0
@@ -265,7 +266,7 @@ func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *Fetc
 			return val
 		},
 		OnCode: func(addr common.Address, block uint64) []byte {
-			stats.Code++
+			stats.Code.Add(1)
 			val, err := f.GetCode(addr, block)
 			if err != nil {
 				return nil

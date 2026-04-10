@@ -41,6 +41,7 @@ Performance (16-core, non-NVMe storage — storage-bound):
 - fetches p50=0 during real execution (fully cached from prefetch)
 - socket count (16/32/64 per pool) makes no difference — disk IOPS is the limit
 - on NVMe, expect ~50% faster based on prior testing
+- prefetch stats: p50=143 slots/block fetched during prefetch, p50=0 during exec
 
 ### README + PLAN.md
 README with usage, architecture, performance numbers. PLAN.md updated with

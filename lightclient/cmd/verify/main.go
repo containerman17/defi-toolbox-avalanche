@@ -76,6 +76,7 @@ func main() {
 	total := 0
 	var execTimes []int
 	var fetchCounts []int
+	var pfFetchCounts []int
 	lastStats := time.Now()
 
 	for blockNum := startBlock; blockNum <= headNum; blockNum++ {
@@ -95,8 +96,9 @@ func main() {
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
 		var pfMiss *lc.MissCallbacks
+		var pfStats lc.FetchStats
 		if prefetchFetcher != nil {
-			m := prefetchFetcher.MissCallbacks(state)
+			m := prefetchFetcher.MissCallbacksWithStats(state, &pfStats)
 			pfMiss = &m
 		}
 
@@ -128,6 +130,7 @@ func main() {
 		execMs := int(execElapsed.Milliseconds())
 		execTimes = append(execTimes, execMs)
 		fetchCounts = append(fetchCounts, stats.Total())
+		pfFetchCounts = append(pfFetchCounts, pfStats.Total())
 
 		if len(mismatches) == 0 {
 			matched++
@@ -140,11 +143,15 @@ func main() {
 				sortedFetch := make([]int, len(fetchCounts))
 				copy(sortedFetch, fetchCounts)
 				sort.Ints(sortedFetch)
+				sortedPF := make([]int, len(pfFetchCounts))
+				copy(sortedPF, pfFetchCounts)
+				sort.Ints(sortedPF)
 				n := len(sortedExec)
 				pe := func(pct int) int { return sortedExec[min(n*pct/100, n-1)] }
 				pf := func(pct int) int { return sortedFetch[min(n*pct/100, n-1)] }
-				fmt.Printf("--- %d blocks | exec p50=%dms p90=%dms p95=%dms p99=%dms p100=%dms | fetches p50=%d p90=%d p99=%d p100=%d\n",
-					n, pe(50), pe(90), pe(95), pe(99), pe(100), pf(50), pf(90), pf(99), pf(100))
+				pp := func(pct int) int { return sortedPF[min(n*pct/100, n-1)] }
+				fmt.Printf("--- %d blocks | exec p50=%dms p90=%dms p95=%dms p99=%dms | fetches p50=%d p90=%d | prefetch p50=%d p90=%d\n",
+					n, pe(50), pe(90), pe(95), pe(99), pf(50), pf(90), pp(50), pp(90))
 				lastStats = time.Now()
 			}
 		} else {

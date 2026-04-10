@@ -3,6 +3,7 @@ package lightclient
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
 	corethcore "github.com/ava-labs/avalanchego/graft/coreth/core"
 	cparams "github.com/ava-labs/avalanchego/graft/coreth/params"
@@ -145,7 +146,19 @@ func ExecuteBlock(
 		evm := vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), state, chainCfg, vm.Config{})
 		_, err = corethcore.ApplyMessage(evm, msg, gp)
 		if err != nil {
-			return nil, fmt.Errorf("block %d tx %d: apply failed: %w", header.Number.Uint64(), txIndex, err)
+			// Pre-check failures (insufficient funds, nonce mismatch) can happen
+			// when the sender's balance or nonce was modified by a platform-level
+			// operation (staking rewards, atomic txs in prior blocks we missed).
+			// Fetch the real pre-block state from RPC and retry once.
+			if state.miss.OnBalance != nil && (strings.Contains(err.Error(), "insufficient funds") || strings.Contains(err.Error(), "nonce too")) {
+				state.PrimeBalance(msg.From, state.miss.OnBalance(msg.From, state.Block()))
+				state.PrimeNonce(msg.From, state.miss.OnNonce(msg.From, state.Block()))
+				evm = vm.NewEVM(blockCtx, corethcore.NewEVMTxContext(msg), state, chainCfg, vm.Config{})
+				_, err = corethcore.ApplyMessage(evm, msg, gp)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("block %d tx %d: apply failed: %w", header.Number.Uint64(), txIndex, err)
+			}
 		}
 		// Snapshot the overlay as committed state for the next tx.
 		// This is needed for GetCommittedState to return correct pre-tx values,

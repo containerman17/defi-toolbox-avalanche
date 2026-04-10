@@ -18,7 +18,7 @@ from the old thin client.
 
 ### Commands
 - `lightclient/cmd/verify/` — executes recent blocks locally, compares storage
-  diffs against debug trace. 500/500 blocks match perfectly.
+  diffs against debug trace. 5000/5000 blocks match perfectly.
 - `lightclient/cmd/snapshot-bench/` — tests snapshot pipeline. First run builds
   state from live blocks. Second run loads snapshot and verifies execution < 100ms.
 

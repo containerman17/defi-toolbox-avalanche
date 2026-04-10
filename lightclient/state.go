@@ -451,6 +451,18 @@ func NewStateView(state *VersionedState, block uint64, miss MissCallbacks) *Stat
 // Block returns the pinned block number.
 func (sv *StateView) Block() uint64 { return sv.block }
 
+// PrimeBalance sets a balance in the overlay without journaling.
+// Used for pre-block initialization (e.g., applying platform staking rewards
+// that happen outside EVM execution).
+func (sv *StateView) PrimeBalance(addr common.Address, bal *uint256.Int) {
+	sv.balanceOverrides[addr] = new(uint256.Int).Set(bal)
+}
+
+// PrimeNonce sets a nonce in the overlay without journaling.
+func (sv *StateView) PrimeNonce(addr common.Address, nonce uint64) {
+	sv.nonceOverrides[addr] = nonce
+}
+
 // CommitTx snapshots the current overlay as the "committed state" for the
 // next transaction. Must be called between transactions in block execution.
 // This is the equivalent of geth's StateDB.Finalise() for committed state tracking.

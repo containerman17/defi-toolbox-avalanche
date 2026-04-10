@@ -1,0 +1,594 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"os"
+	"strings"
+	"time"
+
+	router "defi-toolbox/contracts"
+	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/statedb"
+	poolcollector "defi-toolbox/tools/pool-collector"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/joho/godotenv"
+	"github.com/holiman/uint256"
+)
+
+// Hub tokens for cyclic arbitrage.
+var (
+	WAVAX = common.HexToAddress("0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7")
+	USDC  = common.HexToAddress("0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E")
+	USDT  = common.HexToAddress("0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7")
+	WETHe = common.HexToAddress("0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB")
+
+	hubs = []common.Address{WAVAX, USDC, USDT, WETHe}
+)
+
+const liveNetProfitGasMultiple = 2
+
+// Probe amounts per hub token (4 orders of magnitude each).
+var probeAmounts = map[common.Address][]*uint256.Int{
+	WAVAX: {
+		toWei(1, 17),   // 0.1 AVAX
+		toWei(1, 18),   // 1 AVAX
+		toWei(10, 18),  // 10 AVAX
+		toWei(100, 18), // 100 AVAX
+	},
+	USDC: {
+		toWei(2, 6),    // 2 USDC
+		toWei(20, 6),   // 20 USDC
+		toWei(200, 6),  // 200 USDC
+		toWei(2000, 6), // 2000 USDC
+	},
+	USDT: {
+		toWei(2, 6),    // 2 USDT
+		toWei(20, 6),   // 20 USDT
+		toWei(200, 6),  // 200 USDT
+		toWei(2000, 6), // 2000 USDT
+	},
+	WETHe: {
+		toWei(1, 14), // 0.0001 ETH
+		toWei(1, 15), // 0.001 ETH
+		toWei(1, 16), // 0.01 ETH
+		toWei(1, 17), // 0.1 ETH
+	},
+}
+
+func toWei(mantissa, decimals uint64) *uint256.Int {
+	base := new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(decimals))
+	return new(uint256.Int).Mul(uint256.NewInt(mantissa), base)
+}
+
+func hubName(hub common.Address) string {
+	switch hub {
+	case WAVAX:
+		return "WAVAX"
+	case USDC:
+		return "USDC"
+	case USDT:
+		return "USDT"
+	case WETHe:
+		return "WETH.e"
+	}
+	return hub.Hex()[:10]
+}
+
+func u256FromBig(b *big.Int) *uint256.Int {
+	if b == nil {
+		return uint256.NewInt(0)
+	}
+	v := new(uint256.Int)
+	v.SetFromBig(b)
+	return v
+}
+
+func minU256(a, b *uint256.Int) *uint256.Int {
+	if a == nil {
+		return new(uint256.Int).Set(b)
+	}
+	if b == nil {
+		return new(uint256.Int).Set(a)
+	}
+	if a.Cmp(b) <= 0 {
+		return new(uint256.Int).Set(a)
+	}
+	return new(uint256.Int).Set(b)
+}
+
+func filterProbeAmounts(amounts []*uint256.Int, max *uint256.Int) []*uint256.Int {
+	if max == nil || max.IsZero() {
+		return nil
+	}
+	filtered := make([]*uint256.Int, 0, len(amounts))
+	for _, amt := range amounts {
+		if amt.Cmp(max) <= 0 {
+			filtered = append(filtered, new(uint256.Int).Set(amt))
+		}
+	}
+	return filtered
+}
+
+func shouldAutoApproveOnStartup(hub common.Address) bool {
+	return hub == WAVAX || hub == USDC
+}
+
+func startupApprovalTarget(balance, allowance *big.Int) *big.Int {
+	if balance == nil || balance.Sign() <= 0 {
+		return nil
+	}
+	switch {
+	case allowance == nil || allowance.Sign() == 0:
+		return new(big.Int).Mul(new(big.Int).Set(balance), big.NewInt(10))
+	case allowance.Cmp(balance) < 0:
+		return new(big.Int).Mul(new(big.Int).Set(balance), big.NewInt(100))
+	default:
+		return nil
+	}
+}
+
+func passesLiveProfitFloor(result *CycleResult, gasPrice uint64, prices map[common.Address]float64) (bool, *uint256.Int) {
+	if result == nil {
+		return false, nil
+	}
+	gasCostHub, ok := GasCostInTokenBig(result.GasUsed, gasPrice, result.Hub, prices)
+	if !ok || gasCostHub == nil {
+		return false, nil
+	}
+	floorBig := new(big.Int).Mul(gasCostHub, big.NewInt(liveNetProfitGasMultiple))
+	floor := new(uint256.Int)
+	floor.SetFromBig(floorBig)
+	return result.Profit.Cmp(floor) >= 0, floor
+}
+
+func main() {
+	_ = godotenv.Load()
+
+	rpcURL := "http://localhost:9650/ext/bc/C/rpc"
+	stateURL := "ws://localhost:7449/live"
+	maxHops := 4
+	poolLimit := 2000
+	dryRun := true
+	debugBlock := uint64(0)
+	analyzeExample := false
+	analyzeTxHash := ""
+
+	for i, arg := range os.Args {
+		switch arg {
+		case "--rpc":
+			if i+1 < len(os.Args) {
+				rpcURL = os.Args[i+1]
+			}
+		case "--max-hops":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &maxHops)
+			}
+		case "--pool-limit":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &poolLimit)
+			}
+		case "--execute":
+			dryRun = false
+		case "--debug-block":
+			if i+1 < len(os.Args) {
+				fmt.Sscanf(os.Args[i+1], "%d", &debugBlock)
+			}
+		case "--analyze-example":
+			analyzeExample = true
+		case "--analyze-tx":
+			if i+1 < len(os.Args) {
+				analyzeTxHash = os.Args[i+1]
+			}
+		}
+	}
+	if maxHops < 2 {
+		maxHops = 2
+	}
+	if maxHops > 4 {
+		maxHops = 4
+	}
+	if debugBlock > 0 {
+		stateURL = fmt.Sprintf("ws://localhost:7449/debug/%d", debugBlock)
+	}
+
+	fmt.Fprintf(os.Stderr, "[arb4] two-phase BFS arbitrage starting...\n")
+	fmt.Fprintf(os.Stderr, "[arb4] max hops: %d, pool limit: %d\n", maxHops, poolLimit)
+	if dryRun {
+		fmt.Fprintf(os.Stderr, "[arb4] mode: DRY RUN (pass --execute --rpc <url> and set ARB_PRIVATE_KEY to go live)\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "[arb4] mode: LIVE EXECUTION\n")
+	}
+
+	// Load formula registry + pools
+	registry := formulas.LoadEmbeddedRegistry()
+	pools := poolcollector.EmbeddedPools(poolLimit)
+	fmt.Fprintf(os.Stderr, "[arb4] loaded %d pools\n", len(pools))
+
+	var analyzeTarget *TxAnalysisTarget
+	if analyzeTxHash != "" {
+		var fetchErr error
+		analyzeTarget, fetchErr = FetchTxAnalysisTarget(rpcURL, analyzeTxHash, pools)
+		if fetchErr != nil {
+			fmt.Fprintf(os.Stderr, "[arb4] failed to load tx analysis target: %v\n", fetchErr)
+			os.Exit(1)
+		}
+		if debugBlock == 0 {
+			debugBlock = analyzeTarget.Parent
+			stateURL = fmt.Sprintf("ws://localhost:7449/debug/%d", debugBlock)
+		}
+		fmt.Fprintf(os.Stderr, "[arb4] analyzing tx %s on parent block %d\n", analyzeTarget.Hash.Hex(), debugBlock)
+	}
+
+	// Connect to state server
+	ls, err := statedb.Connect(stateURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[arb4] failed to connect: %v\n", err)
+		os.Exit(1)
+	}
+	state := ls.State()
+
+	// Create PoolManager
+	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
+		return state.GetState(addr, slot)
+	}
+	pm := formulas.NewPoolManager(registry, stateReader)
+	for i := range pools {
+		p := &pools[i]
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens...)
+		}
+		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+	}
+	pm.SetBlockTimestamp(ls.Timestamp())
+
+	// Build adjacency graph
+	adj := pf.BuildAdjacency(pools, registry)
+	routerAddr := router.DeployedRouter
+	if configuredRouter := strings.TrimSpace(os.Getenv("ARB_ROUTER")); configuredRouter != "" {
+		routerAddr = common.HexToAddress(configuredRouter)
+	}
+	stateWithOverrides := state
+	var walletExecutor *Executor
+	var sender common.Address
+	activeHubs := hubs
+	activeProbeAmounts := probeAmounts
+	hubSpendable := make(map[common.Address]*uint256.Int, len(hubs))
+	privKey := os.Getenv("ARB_PRIVATE_KEY")
+	if privKey != "" {
+		execForWallet, execErr := NewExecutor(privKey, rpcURL, routerAddr)
+		if execErr != nil {
+			fmt.Fprintf(os.Stderr, "[arb4] ERROR: %v\n", execErr)
+			os.Exit(1)
+		}
+		walletExecutor = execForWallet
+		sender = execForWallet.Address()
+		if !dryRun {
+			nonce, nonceErr := walletExecutor.FetchNonce()
+			if nonceErr != nil {
+				fmt.Fprintf(os.Stderr, "[arb4] ERROR fetching nonce: %v\n", nonceErr)
+				os.Exit(1)
+			}
+			walletExecutor.SetNonce(nonce)
+		}
+	}
+	if analyzeTarget != nil {
+		if walletExecutor != nil {
+			sender = walletExecutor.Address()
+			fmt.Fprintf(os.Stderr, "[arb4] analyze sender: wallet=%s router=%s\n", sender.Hex(), routerAddr.Hex())
+		} else {
+			sender = analyzeTarget.From
+			routerAddr = analyzeTarget.Router
+			fmt.Fprintf(os.Stderr, "[arb4] analyze sender: tx-from=%s router=%s\n", sender.Hex(), routerAddr.Hex())
+		}
+	} else {
+		if walletExecutor == nil {
+			fmt.Fprintf(os.Stderr, "[arb4] ERROR: ARB_PRIVATE_KEY env var required for arb4 scanning\n")
+			os.Exit(1)
+		}
+		sender = walletExecutor.Address()
+
+		filteredHubs := make([]common.Address, 0, len(hubs))
+		filteredProbes := make(map[common.Address][]*uint256.Int, len(hubs))
+		for _, hub := range hubs {
+			balBig, balErr := walletExecutor.FetchERC20Balance(hub)
+			if balErr != nil {
+				fmt.Fprintf(os.Stderr, "[arb4] ERROR fetching %s balance: %v\n", hubName(hub), balErr)
+				os.Exit(1)
+			}
+			allowBig, allowErr := walletExecutor.CheckAllowance(hub)
+			if allowErr != nil {
+				fmt.Fprintf(os.Stderr, "[arb4] ERROR fetching %s allowance: %v\n", hubName(hub), allowErr)
+				os.Exit(1)
+			}
+			if !dryRun && shouldAutoApproveOnStartup(hub) {
+				if targetAllowance := startupApprovalTarget(balBig, allowBig); targetAllowance != nil {
+					fmt.Fprintf(os.Stderr, "[arb4] hub %s approving router to %s\n", hubName(hub), targetAllowance.String())
+					txHash, approveErr := walletExecutor.Approve(hub, targetAllowance, ls.BaseFee())
+					if approveErr != nil {
+						fmt.Fprintf(os.Stderr, "[arb4] ERROR approving %s: %v\n", hubName(hub), approveErr)
+						os.Exit(1)
+					}
+					fmt.Fprintf(os.Stderr, "[arb4] hub %s approve tx=%s waiting for receipt\n", hubName(hub), txHash.Hex())
+					if waitErr := walletExecutor.WaitForReceipt(txHash, 30*time.Second); waitErr != nil {
+						fmt.Fprintf(os.Stderr, "[arb4] ERROR waiting for %s approval receipt: %v\n", hubName(hub), waitErr)
+						os.Exit(1)
+					}
+					allowBig, allowErr = walletExecutor.CheckAllowance(hub)
+					if allowErr != nil {
+						fmt.Fprintf(os.Stderr, "[arb4] ERROR refreshing %s allowance: %v\n", hubName(hub), allowErr)
+						os.Exit(1)
+					}
+				}
+			}
+			balance := u256FromBig(balBig)
+			allowance := u256FromBig(allowBig)
+			spendable := minU256(balance, allowance)
+			hubSpendable[hub] = spendable
+
+			switch {
+			case balance.IsZero():
+				fmt.Fprintf(os.Stderr, "[arb4] hub %s disabled: no-balance\n", hubName(hub))
+			case allowance.IsZero():
+				fmt.Fprintf(os.Stderr, "[arb4] hub %s disabled: no-allowance balance=%s\n", hubName(hub), balance.Dec())
+			default:
+				usableProbes := filterProbeAmounts(probeAmounts[hub], spendable)
+				if len(usableProbes) == 0 {
+					fmt.Fprintf(os.Stderr, "[arb4] hub %s disabled: spendable-below-probe-floor balance=%s allowance=%s spendable=%s\n",
+						hubName(hub), balance.Dec(), allowance.Dec(), spendable.Dec())
+					continue
+				}
+				filteredHubs = append(filteredHubs, hub)
+				filteredProbes[hub] = usableProbes
+				fmt.Fprintf(os.Stderr, "[arb4] hub %s enabled: balance=%s allowance=%s spendable=%s probes=%d\n",
+					hubName(hub), balance.Dec(), allowance.Dec(), spendable.Dec(), len(usableProbes))
+			}
+		}
+		if len(filteredHubs) == 0 {
+			fmt.Fprintf(os.Stderr, "[arb4] ERROR: no hubs enabled after balance/allowance filtering\n")
+			os.Exit(1)
+		}
+		activeHubs = filteredHubs
+		activeProbeAmounts = filteredProbes
+	}
+
+	// Set up executor if live mode
+	var executor *Executor
+	if !dryRun {
+		if walletExecutor == nil {
+			fmt.Fprintf(os.Stderr, "[arb4] ERROR: executor unavailable in analyze mode\n")
+			os.Exit(1)
+		}
+		executor = walletExecutor
+		fmt.Fprintf(os.Stderr, "[arb4] executor ready\n")
+	}
+
+	// Warmup: build all pool quoters
+	ls.RLock()
+	for i := range pools {
+		pm.Get(pools[i].Address)
+	}
+	ls.RUnlock()
+	fmt.Fprintf(os.Stderr, "[arb4] ready. Waiting for blocks...\n")
+
+	processBlock := func(block, timestamp, baseFee, gasLimit uint64, dirtyCount int) {
+		cfg := statedb.EVMConfig{
+			BlockNumber: block,
+			Timestamp:   timestamp,
+			ChainID:     43114,
+			BaseFee:     baseFee,
+			GasLimit:    gasLimit,
+		}
+		gasPrice := baseFee
+
+		t0 := time.Now()
+		ls.RLock()
+
+		// ── Phase 1: Formula-only discovery ──
+		t1 := time.Now()
+		discoveredPools := make(map[uint16]bool)
+		pathsDiscovered := 0
+			for _, hub := range activeHubs {
+				discovered := DiscoverPools(pm, adj, pools, hub, activeProbeAmounts[hub], maxHops)
+				if discovered == nil {
+					continue
+				}
+			pathsDiscovered += len(discovered.Paths)
+			for idx := range discovered.PoolSet {
+				discoveredPools[idx] = true
+			}
+		}
+		phase1Time := time.Since(t1)
+
+		if len(discoveredPools) == 0 {
+			ls.RUnlock()
+			fmt.Fprintf(os.Stderr, "[arb4] block=%d dirty=%d | no pools discovered | phase1=%v\n",
+				block, dirtyCount, phase1Time.Round(time.Microsecond))
+			return
+		}
+
+		reducedAdj, reducedPools := buildReducedAdjacency(pools, discoveredPools, registry)
+
+		t15 := time.Now()
+		prices := PricingWave(pm, reducedAdj, reducedPools, WAVAX)
+		pricingTime := time.Since(t15)
+
+		t2 := time.Now()
+		var bestResult *CycleResult
+			for _, hub := range activeHubs {
+				amounts := activeProbeAmounts[hub]
+				for _, amt := range amounts {
+					result := EVMBFS(reducedAdj, reducedPools, stateWithOverrides, cfg, routerAddr, sender, hub, amt, maxHops, gasPrice, prices)
+					if result != nil && result.Profit.Sign() > 0 {
+					if bestResult == nil || result.Profit.Cmp(&bestResult.Profit) > 0 {
+						bestResult = result
+					}
+				}
+			}
+		}
+		phase2Time := time.Since(t2)
+
+			var finalResult *CycleResult
+			t3 := time.Now()
+			if bestResult != nil {
+				sized := EVMSizing(bestResult.Steps, stateWithOverrides, cfg, routerAddr, sender, bestResult.Hub, gasPrice, prices, &bestResult.AmountIn, hubSpendable[bestResult.Hub])
+				if sized != nil && sized.Profit.Cmp(&bestResult.Profit) > 0 {
+					finalResult = sized
+				} else {
+				finalResult = bestResult
+			}
+		}
+		phase3Time := time.Since(t3)
+		ls.RUnlock()
+
+		totalTime := time.Since(t0)
+		fmt.Fprintf(os.Stderr, "[arb4] block=%d dirty=%d paths=%d pools_discovered=%d | phase1=%v pricing=%v phase2=%v phase3=%v total=%v",
+			block, dirtyCount, pathsDiscovered, len(discoveredPools),
+			phase1Time.Round(time.Microsecond),
+			pricingTime.Round(time.Microsecond),
+			phase2Time.Round(time.Microsecond),
+			phase3Time.Round(time.Microsecond),
+			totalTime.Round(time.Microsecond),
+		)
+
+		if finalResult != nil && finalResult.Profit.Sign() > 0 {
+			profitF := float64FromU256(&finalResult.Profit) / 1e18
+			inputF := float64FromU256(&finalResult.AmountIn) / 1e18
+			fmt.Fprintf(os.Stderr, " | %s %d-hop profit=%.6f in=%.4f gas=%d",
+				hubName(finalResult.Hub), len(finalResult.Steps), profitF, inputF, finalResult.GasUsed)
+
+			passesFloor, profitFloor := passesLiveProfitFloor(finalResult, gasPrice, prices)
+			if profitFloor != nil {
+				fmt.Fprintf(os.Stderr, " floor=%s", profitFloor.Dec())
+			}
+
+			if !passesFloor {
+				fmt.Fprintf(os.Stderr, " | SKIP live floor")
+				fmt.Fprintf(os.Stderr, "\n")
+				return
+			}
+
+			poolAddrs := make([]string, len(finalResult.Steps))
+			for i, s := range finalResult.Steps {
+				poolAddrs[i] = s.Pool.Hex()
+			}
+			out, _ := json.Marshal(map[string]interface{}{
+				"type":       "opportunity",
+				"block":      block,
+				"hub":        hubName(finalResult.Hub),
+				"profit_wei": finalResult.Profit.Dec(),
+				"hops":       len(finalResult.Steps),
+				"pools":      poolAddrs,
+				"amount":     finalResult.AmountIn.Dec(),
+				"gas":        finalResult.GasUsed,
+			})
+			fmt.Println(string(out))
+
+			if executor != nil && finalResult.Profit.Sign() > 0 {
+				txHash, err := executor.Execute(finalResult, baseFee)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, " | exec error: %v", err)
+				} else {
+					fmt.Fprintf(os.Stderr, " | EXECUTED tx=%s", txHash.Hex()[:14])
+					execOut, _ := json.Marshal(map[string]interface{}{
+						"type":   "tx_sent",
+						"block":  block,
+						"txHash": txHash.Hex(),
+					})
+					fmt.Println(string(execOut))
+				}
+			}
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	if debugBlock > 0 {
+		if analyzeTarget != nil {
+			if err := AnalyzeTarget(analyzeTarget, rpcURL, pm, adj, pools, stateWithOverrides, ls.EVMConfig(), routerAddr, sender, maxHops); err != nil {
+				fmt.Fprintf(os.Stderr, "[arb4] analyze failed: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if analyzeExample {
+			AnalyzeExample(pm, adj, pools, stateWithOverrides, ls.EVMConfig(), routerAddr, sender, maxHops)
+		}
+		processBlock(ls.Block(), ls.Timestamp(), ls.BaseFee(), ls.GasLimit(), 0)
+		return
+	}
+
+	// Block processing loop
+	type blockEvent struct {
+		block, timestamp, baseFee, gasLimit uint64
+		entries                             [][2]string
+	}
+	blockCh := make(chan blockEvent, 4)
+
+	ls.SetOnBlock(func(ls *statedb.LiveState, entries [][2]string) {
+		select {
+		case blockCh <- blockEvent{ls.Block(), ls.Timestamp(), ls.BaseFee(), ls.GasLimit(), entries}:
+		default:
+			fmt.Fprintf(os.Stderr, "[arb4] WARNING: dropped block %d\n", ls.Block())
+		}
+	})
+
+	for bi := range blockCh {
+		pm.SetBlockTimestamp(bi.timestamp)
+
+		// Identify dirty pools from state diff
+		dirtySet := make(map[common.Address]bool)
+		for _, entry := range bi.entries {
+			key := entry[0]
+			if strings.HasPrefix(key, "s:") {
+				parts := strings.SplitN(key, ":", 3)
+				if len(parts) == 3 {
+					addr := common.HexToAddress(parts[1])
+					slot := common.HexToHash(parts[2])
+					for _, pa := range pm.InvalidateBySlot(addr, slot) {
+						dirtySet[pa] = true
+					}
+				}
+			}
+		}
+
+		if len(dirtySet) == 0 {
+			continue
+		}
+		processBlock(bi.block, bi.timestamp, bi.baseFee, bi.gasLimit, len(dirtySet))
+	}
+}
+
+// buildReducedAdjacency creates a filtered adjacency and pool slice from discovered pool indices.
+func buildReducedAdjacency(allPools []pf.Pool, discovered map[uint16]bool, registry *formulas.Registry) (map[common.Address][]pf.PoolEdge, []pf.Pool) {
+	adj := make(map[common.Address][]pf.PoolEdge)
+	for i := range allPools {
+		if !discovered[uint16(i)] {
+			continue
+		}
+		p := &allPools[i]
+		if len(p.Tokens) < 2 {
+			continue
+		}
+		idx := uint16(i)
+		for ti := range p.Tokens {
+			for tj := range p.Tokens {
+				if ti != tj {
+					adj[p.Tokens[ti]] = append(adj[p.Tokens[ti]], pf.PoolEdge{PoolIdx: idx, TokenOut: p.Tokens[tj], TokenIn: p.Tokens[ti]})
+				}
+			}
+		}
+	}
+	return adj, allPools
+}
+
+func float64FromU256(v *uint256.Int) float64 {
+	if v.IsZero() {
+		return 0
+	}
+	b := v.ToBig()
+	f, _ := new(big.Float).SetInt(b).Float64()
+	return f
+}

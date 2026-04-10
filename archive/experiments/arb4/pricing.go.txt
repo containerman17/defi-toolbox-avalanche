@@ -3,6 +3,7 @@ package main
 import (
 	"defi-toolbox/formulas"
 	pf "defi-toolbox/pathfinder"
+	"math/big"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -106,4 +107,25 @@ func GasCostInToken(gasUsed, gasPrice uint64, token common.Address, prices map[c
 	// gasCostAVAX is in wei. tokenPrice is token-wei per 1 WAVAX (= 1e18 wei).
 	// gas_in_token = gasCostAVAX * tokenPrice / 1e18
 	return gasCostAVAX * tokenPrice / 1e18
+}
+
+func GasCostInTokenBig(gasUsed, gasPrice uint64, token common.Address, prices map[common.Address]float64) (*big.Int, bool) {
+	gasCostWei := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), new(big.Int).SetUint64(gasPrice))
+	if token == WAVAX {
+		return gasCostWei, true
+	}
+	tokenPrice, ok := prices[token]
+	if !ok || tokenPrice <= 0 {
+		return nil, false
+	}
+	gasCostF := new(big.Float).SetPrec(256).SetInt(gasCostWei)
+	priceF := new(big.Float).SetPrec(256).SetFloat64(tokenPrice)
+	denom := new(big.Float).SetPrec(256).SetInt(big.NewInt(1_000_000_000_000_000_000))
+	gasCostF.Mul(gasCostF, priceF)
+	gasCostF.Quo(gasCostF, denom)
+	out, _ := gasCostF.Int(nil)
+	if out == nil {
+		return big.NewInt(0), true
+	}
+	return out, true
 }

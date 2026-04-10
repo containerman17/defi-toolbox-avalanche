@@ -1,0 +1,855 @@
+package main
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"math/big"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+
+	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+	"defi-toolbox/statedb"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+type TxAnalysisTarget struct {
+	Hash         common.Hash
+	From         common.Address
+	Router       common.Address
+	Block        uint64
+	Parent       uint64
+	AmountIn     *uint256.Int
+	Hub          common.Address
+	Steps        []pf.RouteStep
+	MinOutput    *uint256.Int
+	Input        []byte
+	HubBalance   *uint256.Int
+	HubAllowance *uint256.Int
+	HubSpendable *uint256.Int
+}
+
+type rpcTxResult struct {
+	BlockNumber string `json:"blockNumber"`
+	From        string `json:"from"`
+	Hash        string `json:"hash"`
+	Input       string `json:"input"`
+	To          string `json:"to"`
+}
+
+func AnalyzeExample(
+	_ *formulas.PoolManager,
+	_ map[common.Address][]pf.PoolEdge,
+	_ []pf.Pool,
+	_ *statedb.StateDB,
+	_ statedb.EVMConfig,
+	_, _ common.Address,
+	_ int,
+) {
+	fmt.Fprintf(os.Stderr, "[arb4] analyze-example is obsolete; use --analyze-tx <hash>\n")
+}
+
+func FetchTxAnalysisTarget(rpcURL, txHash string, pools []pf.Pool) (*TxAnalysisTarget, error) {
+	reqBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_getTransactionByHash",
+		"params":  []string{txHash},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	respBody, err := rpcCall(rpcURL, reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Result *rpcTxResult    `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("decode tx response: %w", err)
+	}
+	if len(resp.Error) > 0 && !bytes.Equal(resp.Error, []byte("null")) {
+		return nil, fmt.Errorf("rpc error: %s", string(resp.Error))
+	}
+	if resp.Result == nil {
+		return nil, fmt.Errorf("tx not found: %s", txHash)
+	}
+
+	block, err := parseHexUint64(resp.Result.BlockNumber)
+	if err != nil {
+		return nil, fmt.Errorf("bad block number: %w", err)
+	}
+	if block == 0 {
+		return nil, fmt.Errorf("tx has no mined block: %s", txHash)
+	}
+
+	amountIn, minOutput, steps, err := decodeSwapTx(resp.Result.Input, pools)
+	if err != nil {
+		return nil, err
+	}
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("empty route in tx %s", txHash)
+	}
+	rawInput, err := hex.DecodeString(strings.TrimPrefix(resp.Result.Input, "0x"))
+	if err != nil {
+		return nil, fmt.Errorf("decode raw tx input: %w", err)
+	}
+	hub := steps[0].TokenIn
+	fromAddr := common.HexToAddress(resp.Result.From)
+	routerAddr := common.HexToAddress(resp.Result.To)
+	hubBal, err := fetchERC20BalanceAtBlock(rpcURL, hub, fromAddr, block-1)
+	if err != nil {
+		return nil, fmt.Errorf("fetch sender hub balance: %w", err)
+	}
+	hubAllowance, err := fetchERC20AllowanceAtBlock(rpcURL, hub, fromAddr, routerAddr, block-1)
+	if err != nil {
+		return nil, fmt.Errorf("fetch sender hub allowance: %w", err)
+	}
+	hubSpendable := minU256(hubBal, hubAllowance)
+
+	return &TxAnalysisTarget{
+		Hash:         common.HexToHash(resp.Result.Hash),
+		From:         fromAddr,
+		Router:       routerAddr,
+		Block:        block,
+		Parent:       block - 1,
+		AmountIn:     amountIn,
+		Hub:          hub,
+		Steps:        steps,
+		MinOutput:    minOutput,
+		Input:        rawInput,
+		HubBalance:   hubBal,
+		HubAllowance: hubAllowance,
+		HubSpendable: hubSpendable,
+	}, nil
+}
+
+func AnalyzeTarget(
+	target *TxAnalysisTarget,
+	rpcURL string,
+	pm *formulas.PoolManager,
+	adj map[common.Address][]pf.PoolEdge,
+	pools []pf.Pool,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr, sender common.Address,
+	maxHops int,
+) error {
+	fmt.Fprintf(os.Stderr,
+		"[arb4] analyze: tx=%s block=%d parent=%d hub=%s hops=%d in=%s minOut=%s router=%s key=%s\n",
+		target.Hash.Hex(),
+		target.Block,
+		target.Parent,
+		hubName(target.Hub),
+		len(target.Steps),
+		target.AmountIn.Dec(),
+		target.MinOutput.Dec(),
+		target.Router.Hex(),
+		routeKey(target.Steps),
+	)
+	analysisBalance := target.HubBalance
+	analysisAllowance := target.HubAllowance
+	analysisSpendable := target.HubSpendable
+	if sender != target.From || routerAddr != target.Router {
+		var err error
+		analysisBalance, err = fetchERC20BalanceAtBlock(rpcURL, target.Hub, sender, target.Parent)
+		if err != nil {
+			return fmt.Errorf("fetch analysis sender hub balance: %w", err)
+		}
+		analysisAllowance, err = fetchERC20AllowanceAtBlock(rpcURL, target.Hub, sender, routerAddr, target.Parent)
+		if err != nil {
+			return fmt.Errorf("fetch analysis sender hub allowance: %w", err)
+		}
+		analysisSpendable = minU256(analysisBalance, analysisAllowance)
+	}
+	if analysisBalance != nil && analysisAllowance != nil && analysisSpendable != nil {
+		fmt.Fprintf(os.Stderr, "[arb4] analyze: eval sender=%s router=%s %s balance @parent=%s allowance=%s spendable=%s\n",
+			sender.Hex(), routerAddr.Hex(), hubName(target.Hub), analysisBalance.Dec(), analysisAllowance.Dec(), analysisSpendable.Dec())
+	}
+	var maxSizingAmount *uint256.Int
+	skipReason := ""
+	if analysisSpendable != nil {
+		maxSizingAmount = new(uint256.Int).Set(analysisSpendable)
+		if target.AmountIn.Cmp(maxSizingAmount) > 0 {
+			fmt.Fprintf(os.Stderr, "[arb4] analyze: tx amount exceeds sender spendable %s by %s\n",
+				hubName(target.Hub),
+				new(uint256.Int).Sub(new(uint256.Int).Set(target.AmountIn), maxSizingAmount).Dec())
+		}
+		switch {
+		case analysisBalance != nil && target.AmountIn.Cmp(analysisBalance) > 0:
+			skipReason = "insufficient-balance"
+		case analysisAllowance != nil && target.AmountIn.Cmp(analysisAllowance) > 0:
+			skipReason = "insufficient-allowance"
+		}
+	}
+
+	exactOut, exactGas, err := verifyExactTxCheck("tx-exact", rpcURL, target, stateWithOverrides, cfg)
+	if err != nil {
+		return err
+	}
+	prices := PricingWave(pm, adj, pools, WAVAX)
+	fmt.Fprintf(os.Stderr, "[arb4] analyze: tx exact out=%s gas=%d net=%s\n",
+		exactOut.Dec(), exactGas, netAfterGasInHub(&exactOut, target.AmountIn, exactGas, cfg.BaseFee, target.Hub, prices).String())
+	if skipReason != "" {
+		fmt.Fprintf(os.Stderr,
+			"[arb4] analyze: comparison skipped reason=%s tx_in=%s balance=%s allowance=%s spendable=%s\n",
+			skipReason,
+			target.AmountIn.Dec(),
+			u256DecOrZero(analysisBalance),
+			u256DecOrZero(analysisAllowance),
+			u256DecOrZero(analysisSpendable),
+		)
+		return nil
+	}
+	_, txRouteGas, txRouteOK := printRouteEval("tx", target.Steps, pm, stateWithOverrides, cfg, routerAddr, sender, target.Hub, target.AmountIn, prices)
+	compareGasOffset := uint64(0)
+	if txRouteOK && txRouteGas > exactGas {
+		compareGasOffset = txRouteGas - exactGas
+		fmt.Fprintf(os.Stderr, "[arb4] analyze: comparison gas offset=%d\n", compareGasOffset)
+	}
+
+	discoveryProbes := probeAmounts[target.Hub]
+	if maxSizingAmount != nil {
+		discoveryProbes = filterProbeAmounts(discoveryProbes, maxSizingAmount)
+	}
+	discovered := DiscoverPools(pm, adj, pools, target.Hub, discoveryProbes, maxHops)
+	inDiscovered := containsRoute(discovered, target.Steps)
+	fmt.Fprintf(os.Stderr, "[arb4] analyze: discovered on default ladder=%v\n", inDiscovered)
+
+	augmented := append([]*uint256.Int{}, discoveryProbes...)
+	if maxSizingAmount == nil || target.AmountIn.Cmp(maxSizingAmount) <= 0 {
+		augmented = append(augmented, new(uint256.Int).Set(target.AmountIn))
+	}
+	discoveredWithTxSize := DiscoverPools(pm, adj, pools, target.Hub, augmented, maxHops)
+	inAugmented := containsRoute(discoveredWithTxSize, target.Steps)
+	fmt.Fprintf(os.Stderr, "[arb4] analyze: discovered with tx-size probe=%v\n", inAugmented)
+
+	bestAtTx := pf.FindBestFormulaRoute(pm, adj, pools, target.Hub, target.Hub, target.AmountIn, maxHops, pf.FormulaSearchOptions{
+		BeamWidth: discoverBeamWidth,
+	})
+	if bestAtTx != nil {
+		fmt.Fprintf(os.Stderr, "[arb4] analyze: best formula at tx-size key=%s out=%s\n",
+			routeKey(bestAtTx.Steps), bestAtTx.AmountOut.Dec())
+		printRouteEval("best@tx", bestAtTx.Steps, pm, stateWithOverrides, cfg, routerAddr, sender, target.Hub, target.AmountIn, prices)
+		bestCalldata := buildCalldata(bestAtTx.Steps, target.AmountIn)
+		bestOut, bestGas, err := verifyRPCCheck("best@tx-rpc", rpcURL, sender, routerAddr, target.Parent, bestCalldata, stateWithOverrides, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[arb4] analyze: best@tx verification failed: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[arb4] analyze: best@tx verified out=%s gas=%d net=%s compare_net=%s\n",
+				bestOut.Dec(),
+				bestGas,
+				netAfterGasInHub(&bestOut, target.AmountIn, bestGas, cfg.BaseFee, target.Hub, prices).String(),
+				netAfterGasInHubWithOffset(&bestOut, target.AmountIn, bestGas, cfg.BaseFee, target.Hub, prices, compareGasOffset).String(),
+			)
+		}
+	}
+	topAtTx := pf.FindTopFormulaRoutes(pm, adj, pools, target.Hub, target.Hub, target.AmountIn, maxHops, 10, pf.FormulaSearchOptions{
+		BeamWidth: discoverBeamWidth,
+	})
+	txRank := routeRank(topAtTx, target.Steps)
+	fmt.Fprintf(os.Stderr, "[arb4] analyze: tx rank among top10 formula routes at tx-size=%d\n", txRank)
+
+	txSized := EVMSizing(target.Steps, stateWithOverrides, cfg, routerAddr, sender, target.Hub, cfg.BaseFee, prices, target.AmountIn, maxSizingAmount)
+	if txSized != nil {
+		fmt.Fprintf(os.Stderr,
+			"[arb4] analyze: tx sized profit=%s in=%s gas=%d\n",
+			txSized.Profit.Dec(),
+			txSized.AmountIn.Dec(),
+			txSized.GasUsed,
+		)
+	}
+
+	if discovered != nil {
+		topSized := analyzeSizedCandidates(discovered.Paths, target.Steps, stateWithOverrides, cfg, routerAddr, sender, target.Hub, prices, target.AmountIn, maxSizingAmount)
+		if topSized != nil {
+			topCalldata := buildCalldata(topSized.result.Steps, &topSized.result.AmountIn)
+			topOut, topGas, err := verifyRPCCheck("best@sized-rpc", rpcURL, sender, routerAddr, target.Parent, topCalldata, stateWithOverrides, cfg)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[arb4] analyze: best@sized verification failed: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "[arb4] analyze: best@sized verified out=%s gas=%d net=%s compare_net=%s key=%s\n",
+					topOut.Dec(),
+					topGas,
+					netAfterGasInHub(&topOut, &topSized.result.AmountIn, topGas, cfg.BaseFee, target.Hub, prices).String(),
+					netAfterGasInHubWithOffset(&topOut, &topSized.result.AmountIn, topGas, cfg.BaseFee, target.Hub, prices, compareGasOffset).String(),
+					topSized.key,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func u256DecOrZero(v *uint256.Int) string {
+	if v == nil {
+		return "0"
+	}
+	return v.Dec()
+}
+
+func decodeSwapTx(input string, pools []pf.Pool) (*uint256.Int, *uint256.Int, []pf.RouteStep, error) {
+	raw, err := hex.DecodeString(strings.TrimPrefix(input, "0x"))
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode calldata hex: %w", err)
+	}
+	if len(raw) < 4+6*32 {
+		return nil, nil, nil, fmt.Errorf("calldata too short")
+	}
+
+	payload := raw[4:]
+	poolsOff, err := readABIUint64(payload, 0)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode pools offset: %w", err)
+	}
+	typesOff, err := readABIUint64(payload, 32)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode types offset: %w", err)
+	}
+	tokensOff, err := readABIUint64(payload, 64)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode tokens offset: %w", err)
+	}
+
+	poolAddrs, err := readAddressArray(payload, poolsOff)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode pools: %w", err)
+	}
+	poolTypes, err := readUintArray(payload, typesOff)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode pool types: %w", err)
+	}
+	tokens, err := readAddressArray(payload, tokensOff)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("decode tokens: %w", err)
+	}
+
+	var amountIn *uint256.Int
+	var minOutput *uint256.Int
+
+	if looksLikeABIArrayOffset(payload, 96) {
+		amountsOff, err := readABIUint64(payload, 96)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("decode amounts offset: %w", err)
+		}
+		minOutput, err = readABIUint256(payload, 160)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("decode minOutput: %w", err)
+		}
+		amounts, err := readUint256Array(payload, amountsOff)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("decode amounts: %w", err)
+		}
+		if len(amounts) != len(poolAddrs) {
+			return nil, nil, nil, fmt.Errorf("amount length mismatch: %d vs %d", len(amounts), len(poolAddrs))
+		}
+		amountIn = amounts[0]
+	} else {
+		amountIn, err = readABIUint256(payload, 96)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("decode amountIn: %w", err)
+		}
+		minOutput, err = readABIUint256(payload, 128)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("decode minOutput: %w", err)
+		}
+	}
+
+	if len(poolAddrs) == 0 {
+		return nil, nil, nil, fmt.Errorf("empty pool array")
+	}
+	if len(poolTypes) != len(poolAddrs) {
+		return nil, nil, nil, fmt.Errorf("pool/type length mismatch: %d vs %d", len(poolAddrs), len(poolTypes))
+	}
+	if len(tokens) != len(poolAddrs)*2 && len(tokens) != len(poolAddrs)+1 {
+		return nil, nil, nil, fmt.Errorf("token path length mismatch: got %d for %d pools", len(tokens), len(poolAddrs))
+	}
+
+	poolByAddr := make(map[common.Address]pf.Pool, len(pools))
+	for _, p := range pools {
+		poolByAddr[p.Address] = p
+	}
+
+	steps := make([]pf.RouteStep, len(poolAddrs))
+	for i := range poolAddrs {
+		var tokenIn common.Address
+		var tokenOut common.Address
+		if len(tokens) == len(poolAddrs)+1 {
+			tokenIn = tokens[i]
+			tokenOut = tokens[i+1]
+		} else {
+			tokenIn = tokens[2*i]
+			tokenOut = tokens[2*i+1]
+		}
+		step := pf.RouteStep{
+			Pool:     poolAddrs[i],
+			PoolType: int(poolTypes[i]),
+			TokenIn:  tokenIn,
+			TokenOut: tokenOut,
+		}
+		if p, ok := poolByAddr[step.Pool]; ok {
+			step.ExtraData = p.ExtraData
+		}
+		steps[i] = step
+	}
+
+	return amountIn, minOutput, steps, nil
+}
+
+func readAddressArray(payload []byte, offset uint64) ([]common.Address, error) {
+	start := int(offset)
+	n, err := readABIUint64(payload, start)
+	if err != nil {
+		return nil, err
+	}
+	base := start + 32
+	if base+int(n)*32 > len(payload) {
+		return nil, fmt.Errorf("address array out of bounds")
+	}
+	out := make([]common.Address, int(n))
+	for i := 0; i < int(n); i++ {
+		word := payload[base+i*32 : base+(i+1)*32]
+		out[i] = common.BytesToAddress(word[12:])
+	}
+	return out, nil
+}
+
+func readUintArray(payload []byte, offset uint64) ([]uint64, error) {
+	start := int(offset)
+	n, err := readABIUint64(payload, start)
+	if err != nil {
+		return nil, err
+	}
+	base := start + 32
+	if base+int(n)*32 > len(payload) {
+		return nil, fmt.Errorf("uint array out of bounds")
+	}
+	out := make([]uint64, int(n))
+	for i := 0; i < int(n); i++ {
+		v, err := readABIUint64(payload, base+i*32)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+func readUint256Array(payload []byte, offset uint64) ([]*uint256.Int, error) {
+	start := int(offset)
+	n, err := readABIUint64(payload, start)
+	if err != nil {
+		return nil, err
+	}
+	base := start + 32
+	if base+int(n)*32 > len(payload) {
+		return nil, fmt.Errorf("uint256 array out of bounds")
+	}
+	out := make([]*uint256.Int, int(n))
+	for i := 0; i < int(n); i++ {
+		v, err := readABIUint256(payload, base+i*32)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+func readABIUint64(payload []byte, offset int) (uint64, error) {
+	if offset < 0 || offset+32 > len(payload) {
+		return 0, fmt.Errorf("word out of bounds")
+	}
+	word := payload[offset : offset+32]
+	for _, b := range word[:24] {
+		if b != 0 {
+			return 0, fmt.Errorf("uint64 overflow")
+		}
+	}
+	return new(big.Int).SetBytes(word).Uint64(), nil
+}
+
+func readABIUint256(payload []byte, offset int) (*uint256.Int, error) {
+	if offset < 0 || offset+32 > len(payload) {
+		return nil, fmt.Errorf("word out of bounds")
+	}
+	v := new(uint256.Int)
+	v.SetBytes(payload[offset : offset+32])
+	return v, nil
+}
+
+func looksLikeABIArrayOffset(payload []byte, offset int) bool {
+	v, err := readABIUint64(payload, offset)
+	if err != nil {
+		return false
+	}
+	return int(v) >= 32 && int(v)+32 <= len(payload) && v%32 == 0
+}
+
+func rpcCall(rpcURL string, body []byte) ([]byte, error) {
+	resp, err := http.Post(rpcURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("rpc status %s", resp.Status)
+	}
+	var out bytes.Buffer
+	if _, err := out.ReadFrom(resp.Body); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func writeWordU64(buf []byte, pos int, v uint64) {
+	for i := 0; i < 8; i++ {
+		buf[pos+31-i] = byte(v)
+		v >>= 8
+	}
+}
+
+func writeAddress(buf []byte, pos int, addr common.Address) {
+	copy(buf[pos+12:pos+32], addr[:])
+}
+
+func rpcEthCall(rpcURL string, from, to common.Address, calldata []byte, block uint64) ([]byte, error) {
+	reqBody, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "eth_call",
+		"params": []any{
+			map[string]string{
+				"from": from.Hex(),
+				"to":   to.Hex(),
+				"data": "0x" + hex.EncodeToString(calldata),
+			},
+			fmt.Sprintf("0x%x", block),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	respBody, err := rpcCall(rpcURL, reqBody)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result string `json:"result"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return nil, fmt.Errorf("decode eth_call response: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("rpc: %s", resp.Error.Message)
+	}
+	if resp.Result == "" || resp.Result == "0x" {
+		return nil, fmt.Errorf("empty result")
+	}
+	ret, err := hex.DecodeString(strings.TrimPrefix(resp.Result, "0x"))
+	if err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func fetchERC20BalanceAtBlock(rpcURL string, token, holder common.Address, block uint64) (*uint256.Int, error) {
+	calldata := make([]byte, 4+32)
+	calldata[0], calldata[1], calldata[2], calldata[3] = 0x70, 0xa0, 0x82, 0x31
+	copy(calldata[16:], holder[:])
+	ret, err := rpcEthCall(rpcURL, common.Address{}, token, calldata, block)
+	if err != nil {
+		return nil, err
+	}
+	bal, ok := parsePositiveOrZeroReturn(ret)
+	if !ok {
+		return nil, fmt.Errorf("bad balanceOf return")
+	}
+	return &bal, nil
+}
+
+func fetchERC20AllowanceAtBlock(rpcURL string, token, holder, spender common.Address, block uint64) (*uint256.Int, error) {
+	calldata := make([]byte, 4+32+32)
+	calldata[0], calldata[1], calldata[2], calldata[3] = 0xdd, 0x62, 0xed, 0x3e
+	copy(calldata[16:], holder[:])
+	copy(calldata[48:], spender[:])
+	ret, err := rpcEthCall(rpcURL, common.Address{}, token, calldata, block)
+	if err != nil {
+		return nil, err
+	}
+	allow, ok := parsePositiveOrZeroReturn(ret)
+	if !ok {
+		return nil, fmt.Errorf("bad allowance return")
+	}
+	return &allow, nil
+}
+
+func parseHexUint64(s string) (uint64, error) {
+	bi, ok := new(big.Int).SetString(strings.TrimPrefix(s, "0x"), 16)
+	if !ok {
+		return 0, fmt.Errorf("bad hex %q", s)
+	}
+	return bi.Uint64(), nil
+}
+
+func verifyExactTxCheck(
+	label string,
+	rpcURL string,
+	target *TxAnalysisTarget,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+) (uint256.Int, uint64, error) {
+	localOut, gasUsed, ok := evalCallLocal(target.From, target.Router, target.Input, stateWithOverrides, cfg)
+	if !ok {
+		return uint256.Int{}, 0, fmt.Errorf("%s local execution failed", label)
+	}
+	rpcOut, err := rpcEthCall(rpcURL, target.From, target.Router, target.Input, target.Parent)
+	if err != nil {
+		return uint256.Int{}, 0, fmt.Errorf("%s rpc eth_call failed: %w", label, err)
+	}
+	nodeOut, ok := parsePositiveSwapReturn(rpcOut)
+	if !ok {
+		return uint256.Int{}, 0, fmt.Errorf("%s rpc returned negative/short result", label)
+	}
+	if !nodeOut.Eq(&localOut) {
+		return uint256.Int{}, 0, fmt.Errorf("%s local/rpc mismatch: local=%s rpc=%s gas=%d", label, localOut.Dec(), nodeOut.Dec(), gasUsed)
+	}
+	return localOut, gasUsed, nil
+}
+
+func verifyRPCCheck(
+	label string,
+	rpcURL string,
+	from, to common.Address,
+	block uint64,
+	calldata []byte,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+) (uint256.Int, uint64, error) {
+	localOut, gasUsed, ok := evalCallLocal(from, to, calldata, stateWithOverrides, cfg)
+	if !ok {
+		return uint256.Int{}, 0, fmt.Errorf("%s local execution failed", label)
+	}
+	rpcOut, err := rpcEthCall(rpcURL, from, to, calldata, block)
+	if err != nil {
+		return uint256.Int{}, 0, fmt.Errorf("%s rpc eth_call failed: %w", label, err)
+	}
+	nodeOut, ok := parsePositiveSwapReturn(rpcOut)
+	if !ok {
+		return uint256.Int{}, 0, fmt.Errorf("%s rpc returned negative/short result", label)
+	}
+	if !nodeOut.Eq(&localOut) {
+		return uint256.Int{}, 0, fmt.Errorf("%s local/rpc mismatch: local=%s rpc=%s gas=%d", label, localOut.Dec(), nodeOut.Dec(), gasUsed)
+	}
+	return localOut, gasUsed, nil
+}
+
+func printRouteEval(
+	label string,
+	steps []pf.RouteStep,
+	pm *formulas.PoolManager,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr, sender common.Address,
+	hub common.Address,
+	amountIn *uint256.Int,
+	prices map[common.Address]float64,
+) (uint256.Int, uint64, bool) {
+	formulaOut := pf.QuotePath(pm, steps, amountIn)
+	evmOut, gasUsed, ok := evalRouteEVM(steps, stateWithOverrides, cfg, routerAddr, sender, amountIn)
+	fmt.Fprintf(os.Stderr, "[arb4] analyze: %s route amount=%s formula=%s", label, amountIn.Dec(), formulaOut.Dec())
+	if ok {
+		net := netAfterGasInHub(&evmOut, amountIn, gasUsed, cfg.BaseFee, hub, prices)
+		fmt.Fprintf(os.Stderr, " evm=%s gas=%d net=%s", evmOut.Dec(), gasUsed, net.String())
+	} else {
+		fmt.Fprintf(os.Stderr, " evm=FAIL")
+	}
+	fmt.Fprintf(os.Stderr, "\n")
+	return evmOut, gasUsed, ok
+}
+
+type sizedCandidate struct {
+	label  string
+	key    string
+	result *CycleResult
+}
+
+func analyzeSizedCandidates(
+	discovered []*pf.Route,
+	txSteps []pf.RouteStep,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr, sender common.Address,
+	hub common.Address,
+	prices map[common.Address]float64,
+	txAmountIn *uint256.Int,
+	maxAmountIn *uint256.Int,
+) *sizedCandidate {
+	var sized []sizedCandidate
+	seen := make(map[string]bool)
+
+	add := func(label string, steps []pf.RouteStep) {
+		key := routeKey(steps)
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		var seedAmount *uint256.Int
+		if label == "tx" && txAmountIn != nil {
+			seedAmount = txAmountIn
+		}
+		res := EVMSizing(steps, stateWithOverrides, cfg, routerAddr, sender, hub, cfg.BaseFee, prices, seedAmount, maxAmountIn)
+		if res != nil {
+			sized = append(sized, sizedCandidate{label: label, key: key, result: res})
+		}
+	}
+
+	add("tx", txSteps)
+	for _, path := range discovered {
+		add("disc", path.Steps)
+	}
+
+	sort.Slice(sized, func(i, j int) bool {
+		return sized[i].result.Profit.Cmp(&sized[j].result.Profit) > 0
+	})
+
+	top := 5
+	if top > len(sized) {
+		top = len(sized)
+	}
+	for i := 0; i < top; i++ {
+		c := sized[i]
+		fmt.Fprintf(os.Stderr,
+			"[arb4] analyze: sized rank=%d label=%s profit=%s in=%s gas=%d key=%s\n",
+			i+1,
+			c.label,
+			c.result.Profit.Dec(),
+			c.result.AmountIn.Dec(),
+			c.result.GasUsed,
+			c.key,
+		)
+	}
+	if len(sized) == 0 {
+		return nil
+	}
+	best := sized[0]
+	return &best
+}
+
+func containsRoute(r *DiscoverResult, steps []pf.RouteStep) bool {
+	if r == nil {
+		return false
+	}
+	key := routeKey(steps)
+	for _, path := range r.Paths {
+		if routeKey(path.Steps) == key {
+			return true
+		}
+	}
+	return false
+}
+
+func routeRank(routes []*pf.Route, steps []pf.RouteStep) int {
+	key := routeKey(steps)
+	for i, route := range routes {
+		if routeKey(route.Steps) == key {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func evalRouteEVM(
+	steps []pf.RouteStep,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+	routerAddr, sender common.Address,
+	amountIn *uint256.Int,
+) (uint256.Int, uint64, bool) {
+	evmCtx := statedb.GetCachedContext(cfg)
+	cs := statedb.NewCallState(stateWithOverrides)
+	ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, sender, routerAddr, buildCalldata(steps, amountIn))
+	if err != nil || len(ret) < 32 {
+		return uint256.Int{}, 0, false
+	}
+	var out uint256.Int
+	out.SetBytes(ret[:32])
+	if out.Bytes32()[0]&0x80 != 0 || out.IsZero() {
+		return uint256.Int{}, 0, false
+	}
+	return out, gasUsed, true
+}
+
+func evalCallLocal(
+	from, to common.Address,
+	calldata []byte,
+	stateWithOverrides *statedb.StateDB,
+	cfg statedb.EVMConfig,
+) (uint256.Int, uint64, bool) {
+	evmCtx := statedb.GetCachedContext(cfg)
+	cs := statedb.NewCallState(stateWithOverrides)
+	ret, gasUsed, err := evmCtx.ExecuteWithCallState(cs, from, to, calldata)
+	if err != nil {
+		return uint256.Int{}, 0, false
+	}
+	out, ok := parsePositiveSwapReturn(ret)
+	return out, gasUsed, ok
+}
+
+func parsePositiveSwapReturn(ret []byte) (uint256.Int, bool) {
+	if len(ret) < 32 {
+		return uint256.Int{}, false
+	}
+	var out uint256.Int
+	out.SetBytes(ret[:32])
+	if out.Bytes32()[0]&0x80 != 0 || out.IsZero() {
+		return uint256.Int{}, false
+	}
+	return out, true
+}
+
+func parsePositiveOrZeroReturn(ret []byte) (uint256.Int, bool) {
+	if len(ret) < 32 {
+		return uint256.Int{}, false
+	}
+	var out uint256.Int
+	out.SetBytes(ret[:32])
+	if out.Bytes32()[0]&0x80 != 0 {
+		return uint256.Int{}, false
+	}
+	return out, true
+}
+
+func netAfterGasInHub(out, amountIn *uint256.Int, gasUsed, gasPrice uint64, hub common.Address, prices map[common.Address]float64) *big.Int {
+	net := new(big.Int).Set(out.ToBig())
+	net.Sub(net, amountIn.ToBig())
+	gasCost, ok := GasCostInTokenBig(gasUsed, gasPrice, hub, prices)
+	if !ok {
+		return net
+	}
+	net.Sub(net, gasCost)
+	return net
+}
+
+func netAfterGasInHubWithOffset(out, amountIn *uint256.Int, gasUsed, gasPrice uint64, hub common.Address, prices map[common.Address]float64, gasOffset uint64) *big.Int {
+	adjustedGas := gasUsed
+	if gasOffset >= adjustedGas {
+		adjustedGas = 0
+	} else {
+		adjustedGas -= gasOffset
+	}
+	return netAfterGasInHub(out, amountIn, adjustedGas, gasPrice, hub, prices)
+}

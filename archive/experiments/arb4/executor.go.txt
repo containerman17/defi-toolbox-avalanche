@@ -142,12 +142,14 @@ func buildSwapCalldata(steps []pf.RouteStep, amountIn *uint256.Int) []byte {
 }
 
 // Approve sends an ERC-20 approve transaction.
-func (e *Executor) Approve(token common.Address, baseFee uint64) (common.Hash, error) {
+func (e *Executor) Approve(token common.Address, amount *big.Int, baseFee uint64) (common.Hash, error) {
 	data := make([]byte, 68)
 	data[0], data[1], data[2], data[3] = 0x09, 0x5e, 0xa7, 0xb3
 	copy(data[4+12:4+32], e.routerAddr[:])
-	approveAmt := new(big.Int).Mul(big.NewInt(1_000_000), new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil))
-	amtBytes := approveAmt.Bytes()
+	if amount == nil || amount.Sign() <= 0 {
+		return common.Hash{}, fmt.Errorf("approve amount must be positive")
+	}
+	amtBytes := amount.Bytes()
 	copy(data[68-len(amtBytes):68], amtBytes)
 
 	maxPriorityFee := new(big.Int).SetUint64(e.PriorityFee)
@@ -182,6 +184,47 @@ func (e *Executor) Approve(token common.Address, baseFee uint64) (common.Hash, e
 		return common.Hash{}, err
 	}
 	return signedTx.Hash(), nil
+}
+
+func (e *Executor) WaitForReceipt(txHash common.Hash, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		reqBody, _ := json.Marshal(map[string]interface{}{
+			"jsonrpc": "2.0", "id": 1,
+			"method": "eth_getTransactionReceipt",
+			"params": []interface{}{txHash.Hex()},
+		})
+		resp, err := e.rpcCall(reqBody)
+		if err != nil {
+			return err
+		}
+		var rpcResp struct {
+			Result *struct {
+				Status string `json:"status"`
+			} `json:"result"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(resp, &rpcResp); err != nil {
+			return fmt.Errorf("decode receipt: %w", err)
+		}
+		if rpcResp.Error != nil {
+			return fmt.Errorf("rpc: %s", rpcResp.Error.Message)
+		}
+		if rpcResp.Result != nil {
+			switch rpcResp.Result.Status {
+			case "0x1":
+				return nil
+			case "0x0":
+				return fmt.Errorf("transaction reverted")
+			default:
+				return nil
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for receipt")
 }
 
 func (e *Executor) FetchNonce() (uint64, error) {

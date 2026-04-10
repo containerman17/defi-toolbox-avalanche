@@ -1,5 +1,80 @@
 # Changelog
 
+## 2026-04-10 — Light client package + archive experiments
+
+New `lightclient/` package — Avalanche C-Chain light client that syncs state
+from a live node and provides local EVM execution. Fresh rewrite, not ported
+from the old thin client.
+
+### Architecture (6 modules, ~3200 lines)
+- **state.go** — versioned linked-list state storage with lock-free reads,
+  vm.StateDB implementation (`StateView`), journal-based snapshot/revert
+- **rpc.go** — blocking-workers WebSocket RPC pool with natural backpressure
+- **fetch.go** — block fetching, state cache-miss fetching, trace diffing
+- **executor.go** — block execution with atomic tx support (cross-chain
+  imports/exports), user call simulation
+- **snapshot.go** — gob-encoded snapshot save/load with atomic writes
+- **client.go** — top-level coordinator wiring everything together
+
+### Commands
+- `lightclient/cmd/verify/` — executes recent blocks locally, compares storage
+  diffs against debug trace. Storage+nonces match perfectly for all DeFi pools.
+  ~3k gas/tx metering difference in ERC-4337 EntryPoint only (under investigation).
+- `lightclient/cmd/snapshot-bench/` — tests snapshot pipeline. First run builds
+  state from live blocks. Second run loads snapshot and verifies execution < 100ms.
+
+### Key decisions
+- Versioned state with per-key linked lists for lock-free concurrent reads
+- Atomic block number resolution (no split-brain reads)
+- Blocking RPC workers pattern (socket count = concurrency limit)
+- Overlay-based diff extraction (not dirty tracker) to handle tx reverts correctly
+- Avalanche-specific: atomic txs, snow context, warp precompile, predicate gas
+
+### Also in this commit
+- Archived all experiment code (arb1-4, dump-size) to `archive/experiments/`
+  with `.go` → `.go.txt` rename
+
+Also exported `BlockDataToTypesBlock` and `FetchChainConfig` from the lightclient
+package so cmd/ code can use them directly.
+
+## 2026-04-10 — Arb4: add a live profit floor before send
+
+Live `arb4` no longer sends every positive-net candidate. Before emitting an
+`opportunity` or calling `Execute()`, it now computes gas cost in hub-token units and
+requires `net profit >= 2 * gas cost`. Search and sizing are unchanged; only the final
+live send gate is stricter.
+
+## 2026-04-09 — Arb4: harden live wallet handling and tx analysis
+
+Refined `arb4` around the real executor wallet instead of synthetic replay state:
+- `godotenv.Load()` now pulls `ARB_PRIVATE_KEY` / `ARB_ROUTER` from repo `.env`.
+- live startup auto-approves `WAVAX` and `USDC` to wallet-sized limits (`10x` balance
+  when allowance is zero, `100x` when allowance is below balance).
+- `--analyze-tx` now replays against raw parent-block state with the configured
+  wallet/router context instead of dummy-sender overrides.
+- tx analysis now stops early with `comparison skipped reason=...` when the historical
+  input exceeds the wallet's parent-block balance or allowance, and the stdin harness
+  reports that as a non-comparison verdict.
+
+## 2026-04-09 — Arb4: tighten analysis, verification, and sizing
+
+Grouped a set of replay and tooling fixes:
+- `--analyze-tx` now RPC-verifies the top sized candidate, not just the tx itself.
+- removed the legacy analysis-only calldata encoder so replay always uses the normal
+  `EncodeSwapMulti()` path.
+- replaced the old sizing search with a 2-pass logarithmic grid and anchored sizing to
+  the known-good seed amount so it cannot regress below an already-verified input.
+- added `experiments/arb4/analyze_from_stdin.sh` plus
+  `experiments/arb4/biglabs_sender_checked.txt` to batch-check sender streams.
+
+## 2026-04-09 — Arb4: fix non-WAVAX gas accounting and replay stability
+
+Fixed a units bug where `arb4` was subtracting raw AVAX gas wei directly from
+non-`WAVAX` hub amounts in final scoring paths. Final cycle profit, sizing profit, and
+analysis net output now convert gas into the hub token first. Also added a defensive
+`safeGetRulesExtra()` wrapper in `statedb` to avoid a libevm nil-accessor panic during
+historical replay.
+
 ## 2026-04-09 — Archive split routing to focus on arbitrage
 
 Moved `pathfinder/splitter/` and its benchmark/example/experiment entry points under

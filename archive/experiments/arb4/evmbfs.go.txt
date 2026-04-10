@@ -3,6 +3,7 @@ package main
 import (
 	pf "defi-toolbox/pathfinder"
 	"defi-toolbox/statedb"
+	"math/big"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -94,20 +95,25 @@ func EVMBFS(
 
 				// Cycle candidate: back to hub at hop >= 1
 				if tok == hub && hop >= 1 {
-					gasCostWei := gasUsed * gasPrice
-					gasCostU := new(uint256.Int).SetUint64(gasCostWei)
-					totalCost := new(uint256.Int).Add(probeAmount, gasCostU)
-					if evmOut.Gt(totalCost) {
-						profit := new(uint256.Int).Sub(&evmOut, totalCost)
+					gasCostHub, ok := GasCostInTokenBig(gasUsed, gasPrice, hub, prices)
+					if !ok {
+						continue
+					}
+					profitBig := new(big.Int).Set(evmOut.ToBig())
+					profitBig.Sub(profitBig, probeAmount.ToBig())
+					profitBig.Sub(profitBig, gasCostHub)
+					if profitBig.Sign() > 0 {
+						profit := new(uint256.Int)
+						profit.SetFromBig(profitBig)
 						if bestCycle == nil || profit.Cmp(&bestCycle.Profit) > 0 {
 							bestCycle = &CycleResult{
-								Hub:      hub,
-								Steps:    newSteps,
-								AmountIn: *probeAmount,
+								Hub:       hub,
+								Steps:     newSteps,
+								AmountIn:  *probeAmount,
 								AmountOut: evmOut,
-								Profit:   *profit,
-								GasUsed:  gasUsed,
-								Calldata: calldata,
+								Profit:    *profit,
+								GasUsed:   gasUsed,
+								Calldata:  calldata,
 							}
 						}
 					}

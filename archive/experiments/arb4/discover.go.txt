@@ -1,0 +1,107 @@
+package main
+
+import (
+	"defi-toolbox/formulas"
+	pf "defi-toolbox/pathfinder"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+const discoverBeamWidth = 3
+
+// DiscoverResult is the output of formula-only discovery for one hub.
+type DiscoverResult struct {
+	PoolSet map[uint16]bool
+	Paths   []*pf.Route
+}
+
+// DiscoverPools runs pure formula BFS over a size ladder, then branches once
+// per pool in each winning path by blacklisting that pool and rerunning BFS.
+//
+// A path is kept when formula output is at least the input at one probe size.
+func DiscoverPools(
+	pm *formulas.PoolManager,
+	adj map[common.Address][]pf.PoolEdge,
+	pools []pf.Pool,
+	hub common.Address,
+	probeAmounts []*uint256.Int,
+	maxHops int,
+) *DiscoverResult {
+	result := &DiscoverResult{
+		PoolSet: make(map[uint16]bool),
+	}
+	seenPaths := make(map[string]bool)
+
+	keep := func(route *pf.Route) {
+		if route == nil || len(route.Steps) == 0 {
+			return
+		}
+		key := routeKey(route.Steps)
+		if seenPaths[key] {
+			return
+		}
+		seenPaths[key] = true
+		result.Paths = append(result.Paths, route)
+		for _, step := range route.Steps {
+			idx := poolIndex(pools, step.Pool)
+			if idx >= 0 {
+				result.PoolSet[uint16(idx)] = true
+			}
+		}
+	}
+
+	for _, amt := range probeAmounts {
+		base := pf.FindBestFormulaRoute(pm, adj, pools, hub, hub, amt, maxHops, pf.FormulaSearchOptions{
+			BeamWidth: discoverBeamWidth,
+		})
+		if !routeProfitable(base, amt) {
+			continue
+		}
+		keep(base)
+
+		for _, step := range base.Steps {
+			idx := poolIndex(pools, step.Pool)
+			if idx < 0 {
+				continue
+			}
+			alt := pf.FindBestFormulaRoute(pm, adj, pools, hub, hub, amt, maxHops, pf.FormulaSearchOptions{
+				BeamWidth: discoverBeamWidth,
+				Blacklist: map[uint16]bool{uint16(idx): true},
+			})
+			if routeProfitable(alt, amt) {
+				keep(alt)
+			}
+		}
+	}
+
+	if len(result.PoolSet) == 0 {
+		return nil
+	}
+	return result
+}
+
+func routeProfitable(route *pf.Route, amountIn *uint256.Int) bool {
+	return route != nil && route.AmountOut.Cmp(amountIn) >= 0
+}
+
+func routeKey(steps []pf.RouteStep) string {
+	if len(steps) == 0 {
+		return ""
+	}
+	key := steps[0].Pool.Hex()
+	for i := 1; i < len(steps); i++ {
+		key += "|" + steps[i].Pool.Hex()
+	}
+	return key
+}
+
+// poolIndex finds the index of a pool by address. Returns -1 if not found.
+func poolIndex(pools []pf.Pool, addr common.Address) int {
+	for i := range pools {
+		if pools[i].Address == addr {
+			return i
+		}
+	}
+	return -1
+}

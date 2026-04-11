@@ -2,6 +2,10 @@
 
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
+### Formula-only BFS
+- Added `FindBestFormulaRoute` / `FindTopFormulaRoutes` to pathfinder — BFS
+  without EVM verification, used by the new quoter
+
 ### Quoter rewrite
 - Wiped old quoter (was coupled to state-server's LiveState)
 - New quoter takes `*lightclient.StateView` directly — no interfaces, no

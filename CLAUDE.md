@@ -44,3 +44,23 @@ Full refactors and API changes are welcome — prioritize keeping the codebase c
 **Never use `go build`** unless you need a binary for external use (e.g. WASM for JS integration). Only two commands:
 - `go vet ./path/` — check compilation without producing artifacts
 - `go run ./path/` — run (includes building), no leftover binaries
+
+## Verification Standard
+
+Do not say a task is done unless it has been verified in the way the task actually matters.
+`go vet` or a successful compile is not enough when the change affects runtime behavior.
+If the work is supposed to function through a real script, pipeline, replay, or live startup
+path, run that path and confirm the practical result before closing it out.
+
+## Useful API Spells
+
+Biglabs Avalanche arbitrages, filtered by sender and showing only block number + tx hash:
+
+```bash
+curl -s 'https://gateway.biglabs.eu/api/avalanche/arbitrages?per_page=2000&sortBy=-created_at' \
+| jq -r '
+  .[]
+  | select((.sender | ascii_downcase) == "0x977a8afb38d7dfdc4aa438e883ca899d56dfabaa")
+  | "\(.blockNumber)\t\(.hash)"
+'
+```

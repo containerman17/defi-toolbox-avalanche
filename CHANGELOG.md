@@ -2,6 +2,10 @@
 
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
+### Cleanup
+- Archived `cmd/thin-client/`, `examples/go/thin-client/`, `statedb/callstate_test.go`
+  — superseded by lightclient. Removed `AGENTS.md` symlink.
+
 ### Formula-only BFS
 - Added `FindBestFormulaRoute` / `FindTopFormulaRoutes` to pathfinder — BFS
   without EVM verification, used by the new quoter

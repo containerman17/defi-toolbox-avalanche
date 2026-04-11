@@ -1,0 +1,27 @@
+package main
+
+import (
+	"flag"
+	"log"
+
+	"defi-toolbox/statedb"
+)
+
+func main() {
+	cfg := statedb.DefaultThinClientConfig()
+	maxBlocks := flag.Uint64("max-blocks", 0, "stop after processing this many live blocks")
+	flag.StringVar(&cfg.RPCURL, "rpc", cfg.RPCURL, "upstream node WebSocket RPC URL")
+	flag.IntVar(&cfg.PoolSize, "pool-size", cfg.PoolSize, "number of RPC worker sockets")
+	flag.StringVar(&cfg.SnapshotPath, "snapshot", "snapshots/live.snapshot", "path to the live sparse-state snapshot")
+	flag.Uint64Var(&cfg.SnapshotEveryBlocks, "snapshot-every-blocks", cfg.SnapshotEveryBlocks, "autosave the live snapshot every N processed blocks")
+	flag.Uint64Var(&cfg.MaxSnapshotStaleness, "max-snapshot-staleness", cfg.MaxSnapshotStaleness, "ignore snapshot if it is more than N blocks behind the node")
+	flag.Parse()
+
+	client, err := statedb.NewThinClient(cfg)
+	if err != nil {
+		log.Fatalf("thin client startup failed: %v", err)
+	}
+	if err := client.RunLive(*maxBlocks); err != nil {
+		log.Fatalf("thin client failed: %v", err)
+	}
+}

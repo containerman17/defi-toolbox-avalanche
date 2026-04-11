@@ -1,0 +1,60 @@
+package statedb
+
+import (
+	"testing"
+
+	"github.com/ava-labs/libevm/common"
+	"github.com/holiman/uint256"
+)
+
+func TestCallStateCommitToBase(t *testing.T) {
+	addr := common.HexToAddress("0x0100000000000000000000000000000000000001")
+	slot := common.HexToHash("0x01")
+	base := NewStateDB(nil)
+
+	base.SetState(addr, slot, common.HexToHash("0x11"))
+	base.SetNonce(addr, 3)
+	base.SetCode(addr, []byte{0xaa})
+	base.AddBalance(addr, uint256.NewInt(7))
+
+	cs := NewCallState(base)
+	cs.SetState(addr, slot, common.HexToHash("0x22"))
+	cs.SetNonce(addr, 9)
+	cs.SetCode(addr, []byte{0xbb, 0xcc})
+	cs.AddBalance(addr, uint256.NewInt(5))
+
+	cs.CommitToBase()
+
+	if got := base.GetState(addr, slot); got != common.HexToHash("0x22") {
+		t.Fatalf("storage mismatch: got %s", got.Hex())
+	}
+	if got := base.GetNonce(addr); got != 9 {
+		t.Fatalf("nonce mismatch: got %d", got)
+	}
+	if got := base.GetCode(addr); len(got) != 2 || got[0] != 0xbb || got[1] != 0xcc {
+		t.Fatalf("code mismatch: got %x", got)
+	}
+	if got := base.GetBalance(addr); got.Cmp(uint256.NewInt(12)) != 0 {
+		t.Fatalf("balance mismatch: got %s", got.Dec())
+	}
+}
+
+func TestCallStateSnapshotRevertsNonceAndCode(t *testing.T) {
+	addr := common.HexToAddress("0x0200000000000000000000000000000000000002")
+	base := NewStateDB(nil)
+	base.SetNonce(addr, 1)
+	base.SetCode(addr, []byte{0xaa})
+
+	cs := NewCallState(base)
+	snap := cs.Snapshot()
+	cs.SetNonce(addr, 5)
+	cs.SetCode(addr, []byte{0xbb})
+	cs.RevertToSnapshot(snap)
+
+	if got := cs.GetNonce(addr); got != 1 {
+		t.Fatalf("nonce after revert: got %d", got)
+	}
+	if got := cs.GetCode(addr); len(got) != 1 || got[0] != 0xaa {
+		t.Fatalf("code after revert: got %x", got)
+	}
+}

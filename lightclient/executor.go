@@ -25,8 +25,13 @@ const mainnetAVAXAssetID = "FvwEAhmxKfeiG8SnEvq42hc6whRyY3EFYAvebMqDNDGCgxN5Z"
 var snowCtx *snow.Context
 
 func init() {
-	cparams.RegisterExtras()
-	ccustomtypes.Register()
+	// Guard against double registration when both lightclient and statedb
+	// are imported in the same binary.
+	func() {
+		defer func() { recover() }()
+		cparams.RegisterExtras()
+		ccustomtypes.Register()
+	}()
 
 	avaxAssetID, err := ids.FromString(mainnetAVAXAssetID)
 	if err != nil {

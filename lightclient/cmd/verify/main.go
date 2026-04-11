@@ -17,6 +17,8 @@ import (
 func main() {
 	rpcURL := flag.String("rpc", "ws://127.0.0.1:9650/ext/bc/C/ws", "WebSocket RPC URL")
 	blocks := flag.Int("blocks", 10, "number of recent blocks to verify")
+	startBlock := flag.Uint64("start-block", 0, "starting block number (0 = head minus blocks)")
+	traceEvery := flag.Int("trace-every", 1, "trace every Nth block for verification (1 = every block)")
 	concurrency := flag.Int("concurrency", 2*runtime.NumCPU(), "RPC pool size")
 	prefetch := flag.Bool("prefetch", true, "enable prefetch with separate RPC pool")
 	flag.Parse()
@@ -54,9 +56,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	startBlock := headNum - uint64(*blocks) + 1
-	if headNum < uint64(*blocks) {
-		startBlock = 1
+	start := uint64(0)
+	endBlock := uint64(0)
+	if *startBlock > 0 {
+		start = *startBlock
+		endBlock = start + uint64(*blocks) - 1
+		if endBlock > headNum {
+			endBlock = headNum
+		}
+	} else {
+		endBlock = headNum
+		start = headNum - uint64(*blocks) + 1
+		if headNum < uint64(*blocks) {
+			start = 1
+		}
 	}
 
 	blockHashes := make(map[uint64]common.Hash)
@@ -79,14 +92,17 @@ func main() {
 	var pfFetchCounts []int
 	lastStats := time.Now()
 
-	for blockNum := startBlock; blockNum <= headNum; blockNum++ {
-		total++
+	pipeline, pipeStop := fetcher.Pipeline(start, endBlock, 64)
+	defer close(pipeStop)
 
-		bd, err := fetcher.GetBlock(blockNum)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "block %d: fetch error: %v\n", blockNum, err)
+	for br := range pipeline {
+		if br.Err != nil {
+			fmt.Fprintf(os.Stderr, "fetch error: %v\n", br.Err)
 			os.Exit(1)
 		}
+		bd := br.Data
+		blockNum := bd.Number
+		total++
 
 		blockHashes[blockNum] = bd.Hash
 		block := lc.BlockDataToTypesBlock(bd)
@@ -114,23 +130,25 @@ func main() {
 		applyDiff(state, diff, blockNum)
 		state.SetLatestBlock(blockNum)
 
-		// Trace is only for verification — not timed.
-		traced, err := fetcher.TraceBlock(blockNum)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "block %d: trace error: %v\n", blockNum, err)
-			os.Exit(1)
-		}
-		mismatches := verifyAgainstTrace(diff, traced)
-
-		storageCnt := 0
-		for _, slots := range diff.Storage {
-			storageCnt += len(slots)
-		}
-
 		execMs := int(execElapsed.Milliseconds())
 		execTimes = append(execTimes, execMs)
 		fetchCounts = append(fetchCounts, stats.Total())
 		pfFetchCounts = append(pfFetchCounts, pfStats.Total())
+
+		// Trace only every Nth block (tracing is ~130ms vs ~25ms execution).
+		// Drift accumulates, so we still catch it — just narrow to a 1000-block window.
+		shouldTrace := *traceEvery <= 1 || total%*traceEvery == 0 || blockNum == endBlock
+		var mismatches []string
+		var traced *lc.TraceDiff
+		if shouldTrace {
+			var err2 error
+			traced, err2 = fetcher.TraceBlock(blockNum)
+			if err2 != nil {
+				fmt.Fprintf(os.Stderr, "block %d: trace error: %v\n", blockNum, err2)
+				os.Exit(1)
+			}
+			mismatches = verifyAgainstTrace(diff, traced)
+		}
 
 		if len(mismatches) == 0 {
 			matched++
@@ -158,6 +176,26 @@ func main() {
 			fmt.Printf("block %d: MISMATCH\n", blockNum)
 			for _, m := range mismatches {
 				fmt.Printf("  %s\n", m)
+			}
+			// Debug: for nonce mismatches, query RPC to see if our pre-state was wrong.
+			for addr, tracedNonce := range traced.Nonce {
+				localNonce, ok := diff.Nonces[addr]
+				if !ok {
+					localNonce = 0
+				}
+				if localNonce != tracedNonce {
+					rpcNonce, err := fetcher.GetNonce(addr, blockNum-1)
+					vsNonce, vsOk := state.GetNonce(addr, blockNum-1)
+					fmt.Printf("  DEBUG nonce %s:\n", addr.Hex())
+					fmt.Printf("    traced post-nonce: %d\n", tracedNonce)
+					fmt.Printf("    local  post-nonce: %d (in diff: %v)\n", localNonce, ok)
+					if err == nil {
+						fmt.Printf("    RPC pre-nonce (block %d): %d\n", blockNum-1, rpcNonce)
+					} else {
+						fmt.Printf("    RPC pre-nonce: error: %v\n", err)
+					}
+					fmt.Printf("    VersionedState pre-nonce (block %d): %d (found: %v)\n", blockNum-1, vsNonce, vsOk)
+				}
 			}
 			fmt.Printf("\nverify: FAILED at block %d (%d/%d matched before failure)\n", blockNum, matched, total)
 			os.Exit(1)

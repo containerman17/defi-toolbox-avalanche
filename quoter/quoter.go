@@ -1,204 +1,111 @@
 package quoter
 
 import (
-	"fmt"
-	"math/big"
-	"strings"
+	"defi-toolbox/formulas"
+	lc "defi-toolbox/lightclient"
+	pf "defi-toolbox/pathfinder"
+	poolcollector "defi-toolbox/tools/pool-collector"
 
 	router "defi-toolbox/contracts"
-	"defi-toolbox/formulas"
-	pf "defi-toolbox/pathfinder"
-	"defi-toolbox/statedb"
-	poolcollector "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
 )
 
-// Quoter wraps the formula engine + EVM verification behind a simple Quote API.
+// Quoter finds optimal swap routes using formula-based BFS over DEX pools.
+// State is provided per-call via lightclient.StateView — the quoter itself
+// holds only the static pool graph and registry.
 type Quoter struct {
-	ls                 *statedb.LiveState
-	pm                 *formulas.PoolManager
-	adj                map[common.Address][]pf.PoolEdge
-	pools              []pf.Pool
-	registry           *formulas.Registry
-	routerAddr         common.Address
-	sender             common.Address
-	stateWithOverrides *statedb.StateDB // persistent overlay with token overrides
-	maxHops            int
-	dexMap             map[common.Address]string
-	onBlock            func(block, timestamp uint64) // called after each block is processed
+	pools    []pf.Pool
+	adj      map[common.Address][]pf.PoolEdge
+	registry *formulas.Registry
+	Router   common.Address
+	MaxHops  int
 }
 
-// SetOnBlock registers a callback fired after each block_diff is applied
-// and pool invalidation is complete. Safe to call Quote from the callback.
-func (q *Quoter) SetOnBlock(fn func(block, timestamp uint64)) {
-	q.onBlock = fn
+// Quote is the result of a pathfinding search.
+type Quote struct {
+	Route    *pf.Route
+	Block    uint64
+	BaseFee  uint64
+	AmountIn *uint256.Int
+	TokenIn  common.Address
+	TokenOut common.Address
 }
 
-// NewQuoter creates a Quoter connected to the given LiveState.
-// Loads pools, builds adjacency, warms up formula quoters.
-func NewQuoter(ls *statedb.LiveState, poolLimit, maxHops int) *Quoter {
+// New creates a quoter with the embedded pool list and formula registry.
+func New(maxHops int) *Quoter {
 	if maxHops <= 0 || maxHops > 4 {
 		maxHops = 4
 	}
-
 	registry := formulas.LoadEmbeddedRegistry()
-	pools := poolcollector.EmbeddedPools(poolLimit)
-	state := ls.State()
-
-	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
-		return state.GetState(addr, slot)
-	}
-	pm := formulas.NewPoolManager(registry, stateReader)
-
-	dexMap := make(map[common.Address]string, len(pools))
-	for i := range pools {
-		p := &pools[i]
-		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens...)
-		}
-		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
-		dexMap[p.Address] = p.Dex
-	}
-	pm.SetBlockTimestamp(ls.Timestamp())
-
-	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
-		cs := statedb.NewCallState(state)
-		cfg := statedb.EVMConfig{
-			BlockNumber: ls.Block(), Timestamp: ls.Timestamp(),
-			ChainID: 43114, BaseFee: ls.BaseFee(), GasLimit: ls.GasLimit(),
-		}
-		ctx := statedb.GetCachedContext(cfg)
-		ret, _, err := ctx.ExecuteWithCallState(cs, common.Address{}, to, data)
-		return ret, err == nil
-	})
-
+	pools := poolcollector.EmbeddedPools(0) // 0 = all pools
 	adj := pf.BuildAdjacency(pools, registry)
-	routerAddr := router.DeployedRouter
-	sender := pf.DUMMY_SENDER
-
-	// Build persistent overlay with sender overrides only.
-	// swap() uses transferFrom (sender→router), so only the sender needs balance + allowance.
-	// Router starts with zero balance — it gets tokens via transferFrom.
-	// Created once, reused across Quote() calls so code hash caches persist.
-	senderOverrides := router.BuildSenderOverrides(sender, routerAddr, pools)
-	stateWithOverrides := pf.ApplyOverridesFlat(state, senderOverrides)
-
-	// Warmup: build all pool quoters
-	ls.RLock()
-	for i := range pools {
-		pm.Get(pools[i].Address)
-	}
-	ls.RUnlock()
 
 	return &Quoter{
-		ls:                 ls,
-		pm:                 pm,
-		adj:                adj,
-		pools:              pools,
-		registry:           registry,
-		routerAddr:         routerAddr,
-		sender:             sender,
-		stateWithOverrides: stateWithOverrides,
-		maxHops:            maxHops,
-		dexMap:             dexMap,
+		pools:    pools,
+		adj:      adj,
+		registry: registry,
+		Router:   router.DeployedRouter,
+		MaxHops:  maxHops,
 	}
 }
 
-// StartBlockLoop runs the block invalidation loop in a goroutine.
-// Call this once after NewQuoter.
-func (q *Quoter) StartBlockLoop() {
-	type blockEvent struct {
-		timestamp uint64
-		entries   [][2]string
+// Quote finds the best cyclic route: tokenIn → ... → tokenIn (arbitrage).
+// The StateView is read-only — the quoter reads storage slots via the
+// light client's VersionedState, transparently fetching from RPC on miss.
+func (q *Quoter) Quote(sv *lc.StateView, blockTimestamp uint64, tokenIn common.Address, amountIn *uint256.Int) *Quote {
+	pm := q.buildPM(sv, blockTimestamp)
+
+	route := pf.FindBestFormulaRoute(
+		pm, q.adj, q.pools,
+		tokenIn, tokenIn, // cyclic: same token in and out
+		amountIn,
+		q.MaxHops,
+		pf.FormulaSearchOptions{BeamWidth: 3},
+	)
+
+	return &Quote{
+		Route:    route,
+		Block:    sv.Block(),
+		AmountIn: amountIn,
+		TokenIn:  tokenIn,
+		TokenOut: tokenIn,
 	}
-	blockCh := make(chan blockEvent, 4)
-
-	q.ls.SetOnBlock(func(ls *statedb.LiveState, entries [][2]string) {
-		select {
-		case blockCh <- blockEvent{ls.Timestamp(), entries}:
-		default:
-		}
-	})
-
-	go func() {
-		for bi := range blockCh {
-			q.pm.SetBlockTimestamp(bi.timestamp)
-			for _, entry := range bi.entries {
-				key := entry[0]
-				if strings.HasPrefix(key, "s:") {
-					parts := strings.SplitN(key, ":", 3)
-					if len(parts) == 3 {
-						addr := common.HexToAddress(parts[1])
-						slot := common.HexToHash(parts[2])
-						q.pm.InvalidateBySlot(addr, slot)
-					}
-				}
-			}
-			if q.onBlock != nil {
-				q.onBlock(q.ls.Block(), bi.timestamp)
-			}
-		}
-	}()
 }
 
-// Quote runs a two-way quote. Returns forward (tokenIn→tokenOut) and reverse
-// (tokenOut→tokenIn) results. Reverse is nil when tokenIn == tokenOut.
-func (q *Quoter) Quote(req QuoteRequest) (*QuoteResponse, error) {
-	tokenIn := common.HexToAddress(req.TokenIn)
-	tokenOut := common.HexToAddress(req.TokenOut)
+// QuotePair finds the best route from tokenIn to tokenOut (non-cyclic).
+func (q *Quoter) QuotePair(sv *lc.StateView, blockTimestamp uint64, tokenIn, tokenOut common.Address, amountIn *uint256.Int) *Quote {
+	pm := q.buildPM(sv, blockTimestamp)
 
-	amountIn := new(uint256.Int)
-	bi, ok := new(big.Int).SetString(req.AmountIn, 10)
-	if !ok || bi.Sign() <= 0 {
-		return nil, fmt.Errorf("invalid amountIn: %s", req.AmountIn)
+	route := pf.FindBestFormulaRoute(
+		pm, q.adj, q.pools,
+		tokenIn, tokenOut,
+		amountIn,
+		q.MaxHops,
+		pf.FormulaSearchOptions{BeamWidth: 3},
+	)
+
+	return &Quote{
+		Route:    route,
+		Block:    sv.Block(),
+		AmountIn: amountIn,
+		TokenIn:  tokenIn,
+		TokenOut: tokenOut,
 	}
-	if amountIn.SetFromBig(bi) {
-		return nil, fmt.Errorf("amountIn overflow: %s", req.AmountIn)
-	}
-
-	q.ls.RLock()
-	defer q.ls.RUnlock()
-
-	cfg := q.ls.EVMConfig()
-
-	// Forward: tokenIn → tokenOut
-	fwdRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, q.stateWithOverrides, cfg, q.routerAddr, q.sender,
-		tokenIn, tokenOut, amountIn, q.maxHops)
-
-	resp := &QuoteResponse{
-		Forward: q.routeToResult(fwdRoute, tokenIn, tokenOut, amountIn),
-	}
-
-	// Reverse: tokenOut → tokenIn (skip for cyclic)
-	cyclic := tokenIn == tokenOut
-	if !cyclic {
-		revRoute := pf.FindBestRoute(q.pm, q.adj, q.pools, q.stateWithOverrides, cfg, q.routerAddr, q.sender,
-			tokenOut, tokenIn, amountIn, q.maxHops)
-		resp.Reverse = q.routeToResult(revRoute, tokenOut, tokenIn, amountIn)
-	}
-
-	// Split routing is archived for now. Preserve the request/response shape.
-	if req.Split {
-		resp.Error = "split routing is archived"
-	}
-
-	return resp, nil
 }
 
-// ── Getters used by benchmarks/experiments ───────────────────────────
+// Pools returns the pool list.
+func (q *Quoter) Pools() []pf.Pool { return q.pools }
 
-func (q *Quoter) PM() *formulas.PoolManager { return q.pm }
+// Adj returns the adjacency graph.
+func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge { return q.adj }
 
-// NewPM creates a fresh PoolManager with empty caches but the same pool/token
-// setup as the original. Used by benchmarks to avoid cache warming bias.
-func (q *Quoter) NewPM() *formulas.PoolManager {
-	state := q.ls.State()
-	stateReader := func(addr common.Address, slot common.Hash) common.Hash {
-		return state.GetState(addr, slot)
+func (q *Quoter) buildPM(sv *lc.StateView, blockTimestamp uint64) *formulas.PoolManager {
+	reader := func(addr common.Address, slot common.Hash) common.Hash {
+		return sv.GetState(addr, slot)
 	}
-	pm := formulas.NewPoolManager(q.registry, stateReader)
+	pm := formulas.NewPoolManager(q.registry, reader)
 	for i := range q.pools {
 		p := &q.pools[i]
 		if len(p.Tokens) >= 2 {
@@ -206,53 +113,6 @@ func (q *Quoter) NewPM() *formulas.PoolManager {
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
-	pm.SetBlockTimestamp(q.ls.Timestamp())
-	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
-		cs := statedb.NewCallState(state)
-		cfg := statedb.EVMConfig{
-			BlockNumber: q.ls.Block(), Timestamp: q.ls.Timestamp(),
-			ChainID: 43114, BaseFee: q.ls.BaseFee(), GasLimit: q.ls.GasLimit(),
-		}
-		ctx := statedb.GetCachedContext(cfg)
-		ret, _, err := ctx.ExecuteWithCallState(cs, common.Address{}, to, data)
-		return ret, err == nil
-	})
+	pm.SetBlockTimestamp(blockTimestamp)
 	return pm
-}
-func (q *Quoter) Adj() map[common.Address][]pf.PoolEdge { return q.adj }
-func (q *Quoter) Pools() []pf.Pool                      { return q.pools }
-func (q *Quoter) StateWithOverrides() *statedb.StateDB  { return q.stateWithOverrides }
-func (q *Quoter) RouterAddr() common.Address            { return q.routerAddr }
-func (q *Quoter) Sender() common.Address                { return q.sender }
-func (q *Quoter) MaxHops() int                          { return q.maxHops }
-func (q *Quoter) LiveState() *statedb.LiveState         { return q.ls }
-
-func (q *Quoter) routeToResult(route *pf.Route, tokenIn, tokenOut common.Address, amountIn *uint256.Int) *QuoteResult {
-	if route == nil {
-		return &QuoteResult{
-			TokenIn:   tokenIn.Hex(),
-			TokenOut:  tokenOut.Hex(),
-			AmountIn:  amountIn.Dec(),
-			AmountOut: "0",
-		}
-	}
-
-	steps := make([]PathStep, len(route.Steps))
-	for i, s := range route.Steps {
-		steps[i] = PathStep{
-			Pool:     s.Pool.Hex(),
-			TokenIn:  s.TokenIn.Hex(),
-			TokenOut: s.TokenOut.Hex(),
-			Dex:      q.dexMap[s.Pool],
-		}
-	}
-
-	return &QuoteResult{
-		TokenIn:   tokenIn.Hex(),
-		TokenOut:  tokenOut.Hex(),
-		AmountIn:  amountIn.Dec(),
-		AmountOut: route.AmountOut.Dec(),
-		Path:      steps,
-		GasUsed:   route.GasUsed,
-	}
 }

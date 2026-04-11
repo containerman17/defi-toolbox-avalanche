@@ -314,6 +314,35 @@ func (f *BlockFetcher) MissCallbacks(state *VersionedState) MissCallbacks {
 	}
 }
 
+// ─── Block pipeline ─────────────────────────────────────────────────
+
+// BlockResult is a block fetch result delivered through a pipeline channel.
+type BlockResult struct {
+	Data *BlockData
+	Err  error
+}
+
+// Pipeline fetches blocks [start, end] ahead of time into a buffered channel.
+// The consumer reads blocks in order; the fetcher stays up to `buffer` blocks
+// ahead. Backpressure is automatic: if the consumer is slow, the channel fills
+// and the fetcher blocks. Close the returned stop channel to abort early.
+func (f *BlockFetcher) Pipeline(start, end uint64, buffer int) (<-chan BlockResult, chan<- struct{}) {
+	ch := make(chan BlockResult, buffer)
+	stop := make(chan struct{})
+	go func() {
+		defer close(ch)
+		for n := start; n <= end; n++ {
+			bd, err := f.GetBlock(n)
+			select {
+			case ch <- BlockResult{bd, err}:
+			case <-stop:
+				return
+			}
+		}
+	}()
+	return ch, stop
+}
+
 // ─── Internal helpers ───────────────────────────────────────────────
 
 // blockHex formats a block number as a 0x-prefixed hex string.

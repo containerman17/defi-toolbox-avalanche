@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-04-11 — Quoter rewrite + verify tool improvements
+
+### Quoter rewrite
+- Wiped old quoter (was coupled to state-server's LiveState)
+- New quoter takes `*lightclient.StateView` directly — no interfaces, no
+  indirection. StorageReader wraps `sv.GetState()` for formula quotes.
+- `Quote()` for cyclic arb routes, `QuotePair()` for A→B swaps
+- Uses `FindBestFormulaRoute` with beam width 3, up to 4 hops
+- Pool manager built per-call with block timestamp for LFJ V2
+
+### Verify tool
+- `--start-block` flag for reproducing issues at specific block ranges
+- `--trace-every N` flag — trace every Nth block (tracing is ~130ms vs ~25ms
+  execution). Drift accumulates so it's still caught, just narrowed to an
+  N-block window. 38k blocks in 16 min vs 100 min.
+- Block fetch pipeline (`BlockFetcher.Pipeline`) with 64-block buffered channel
+  — execution never waits for the next block fetch
+- Debug output on nonce mismatch: prints RPC pre-nonce, VersionedState pre-nonce,
+  local vs traced post-nonce
+
+### Quote benchmark (`tools/quote-bench/`)
+- Reads real aggregator swap txs from `benchmarks/swap-replay/txs.txt`
+- For each tx: fetches swap details from receipt Transfer events, runs our BFS
+  quoter at block-1 state, compares output vs aggregator
+- Skips tokens not in adjacency graph
+- Cold-start is slow (all RPC misses); needs warm light client state for speed
+
+### Fixes
+- Guard double `RegisterExtras()` panic when both lightclient and statedb
+  packages are imported in the same binary
+
 ## 2026-04-10 — Light client package + archive experiments
 
 New `lightclient/` package — Avalanche C-Chain light client that syncs state

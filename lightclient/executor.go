@@ -233,6 +233,49 @@ func ExecuteBlock(
 	}, nil
 }
 
+// EVMCall executes a simulated call (like eth_call) against a fresh StateView
+// at the given block. Each call gets its own overlay so calls don't pollute
+// each other. Returns (returnData, gasUsed, error).
+func EVMCall(
+	vs *VersionedState,
+	block uint64,
+	timestamp uint64,
+	baseFee *big.Int,
+	miss MissCallbacks,
+	chainCfg *params.ChainConfig,
+	from, to common.Address,
+	data []byte,
+) ([]byte, uint64, error) {
+	sv := NewStateView(vs, block, miss)
+
+	if baseFee == nil {
+		baseFee = new(big.Int)
+	}
+
+	blockCtx := vm.BlockContext{
+		BlockNumber: new(big.Int).SetUint64(block),
+		Time:        timestamp,
+		BaseFee:     baseFee,
+		CanTransfer: corethcore.CanTransfer,
+		Transfer:    corethcore.Transfer,
+		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
+		Difficulty:  new(big.Int),
+		GasLimit:    30_000_000,
+		Coinbase:    common.Address{},
+	}
+
+	gasPrice := new(big.Int).Set(baseFee)
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: gasPrice,
+	}
+
+	evm := vm.NewEVM(blockCtx, txCtx, sv, chainCfg, vm.Config{NoBaseFee: true})
+	ret, gasLeft, err := evm.StaticCall(vm.AccountRef(from), to, data, 30_000_000)
+	gasUsed := uint64(30_000_000) - gasLeft
+	return ret, gasUsed, err
+}
+
 // ─── Call ──────────────────────────────────────────────────────────
 // Executes a single call against the provided StateView without modifying
 // the underlying versioned state. The StateView's overlay absorbs all writes.

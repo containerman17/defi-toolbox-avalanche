@@ -2,6 +2,15 @@
 
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
+### Rewrite tools/discover and benchmarks/formula-accuracy
+- Both rewritten to use lightclient (EVMCall + StateView) instead of statedb
+- `tools/discover/`: formula registry discovery — probes formula vs EVM for
+  unregistered pools, multi-amount verification, append-only registry updates
+- `benchmarks/formula-accuracy/`: formula correctness — quotes each registered
+  pool via formula AND EVM, reports match/overquote/underquote per pool type
+- New `lightclient.EVMCall()` helper — runs eth_call equivalent against a
+  fresh StateView (StaticCall, 30M gas, NoBaseFee)
+
 ### Cleanup
 - Archived `statedb/`, `cmd/state-server/`, `cmd/wasm-sdk/`, `examples/`,
   `tools/token-pricer/`, `contracts/overrides.go` — all tied to old state-server

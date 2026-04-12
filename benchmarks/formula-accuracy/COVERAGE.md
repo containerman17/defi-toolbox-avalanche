@@ -1,0 +1,685 @@
+# Formula Coverage Playbook
+
+Living document for investigating and fixing formula coverage gaps.
+**Agents investigating coverage MUST read this section before starting work.**
+
+## Rules (MANDATORY)
+
+1. **NEVER blacklist pools.** Do not set formula ID to -1 to hide mismatches. Fix the formula instead.
+2. **NEVER modify the router.** HayabusaRouter.sol and bytecode.hex are the EVM ground truth. Formulas match the router, not the other way around. Only modify files in `formulas/`, `contracts/token_overrides.json`, or `formulas/data/registry.txt`.
+3. **Everything is deterministic.** Every EVM computation can be replicated in Go from state + source code. There is no magic.
+4. **The only impossible case** is when there is no source code AND the logic is too complex to replicate by tracing. Everything else is fixable.
+5. **Do not leave debug prints.** No `fmt.Printf` or `os.Stderr` debug output in committed code.
+6. **Do not create incomplete files.** If a fix requires complex new math you can't finish, report what's needed — don't leave broken .go files.
+
+## Current State (2026-04-05)
+
+**98.1% correct** — 7016 match, 135 mismatch (3500 pools, 1 block).
+
+Fixed lfj_v1 pool#2060 (`0x02C7D2d1...`, BabyCoq/WAVAX): ~25 PPM DIFF on dir=0.
+BabyCoq (`0x22897cf0...`) is an RFI reflection token (103 bps total: 2 bps reflection +
+100 bps liquidity + 1 bps charity, all /10000). `fotBps(103)` was accurate for the fee
+deduction but missed the reflection bonus on the pool's existing BabyCoq balance (~53.7e18).
+The V2 router measures `balanceOf(pool) after - before`, which includes the `_reflectFee`
+rate-change bonus: pool's `_rOwned / newRate > _rOwned / oldRate`. Moved to
+`reflectionTokenConfigs` and added new `RecipientAwareInputAdjuster` interface that reads
+the pool's `_rOwned` from storage to compute the exact balance increase. Dir=0 now matches
+(0 PPB). Dir=1 residual (~0.6 PPM) is caused by the router's override balance receiving the
+same bonus (EVM simulation artifact). **Technique**: when a reflection token has a DIFF
+mismatch that's proportional to the pool's existing balance (not the transfer amount), the
+pool's `_rOwned` bonus from `_reflectFee` is the cause. Use `RecipientAwareInputAdjuster`
+to compute `balanceOf(pool) after - before` exactly. The `_excluded` array (slot 6 for
+BabyCoq) must also be accounted for in `_getCurrentSupply` rate computation.
+
+Fixed pharaoh_v3 pool#1563 (`0xe8f1e38f...`, evaUSDT/USDC). Two issues: (1) missing
+`v3PoolFees` entry in `v3_registry.go` — added `{100, 1}`. (2) evaUSDT (`0x501ebf66...`)
+missing from `token_overrides.json` — added slot 5. Token is a LayerZero OFT with
+non-standard balance slot. **Technique**: brute-force slots 0-255 with keccak256(abi.encode(knownHolder, slot))
+checking against balanceOf result. Pharaoh_v3 pools need BOTH `pharaoh_v3_registry.go`
+(layout selection) AND `v3_registry.go` (fee/tickSpacing) entries.
+
+Added token overrides for APOW (`0xbde79b2a...`, slot 0) and XPOW (`0xeccb564c...`, slot 0) —
+both standard ERC20 balance mappings. Removed from `inputDeadTokens`. Fixes 8 pools total
+(4 lfj_v1 each). 100% match both directions across 3 blocks.
+
+Fixed MEMOries (`0x136acd46...`) reflection token override: added `shift: 128`. The _rOwned
+mapping is at slot 15, but the reflection rate (~1.75e40) made the default 1e36 override
+produce 0 effective balance. With shift=128, `balanceOf(router)` returns ~1.94e34, sufficient
+for realistic swap amounts. Fixes 11 pools (pangolin_v2, sushiswap_v2, lfj_v1, yetiswap).
+Removed from `inputDeadTokens`.
+
+Fixed TRACTOR JOE (`0x542fa0b2...`) reflection token override: wrong slot (was 2, should be 1
+= _rOwned mapping) and missing `shift: 128`. The reflection rate (~1.07e59) is extremely high.
+With slot=1 and shift=128, `balanceOf(router)` returns ~3.19e15. Fixes 8 pools (lfj_v1,
+pangolin_v2). Removed from `inputDeadTokens`.
+
+**Technique**: for `inputDeadTokens` reflection tokens with existing overrides that still
+fail, check: (1) is `slot` pointing to the correct mapping (_rOwned, not _tOwned or _balances)?
+Probe keccak256(holder, slot) against known holders. (2) Does the rate require `shift`?
+Compute `rate = _rTotal / _tTotal`; if `1e36 / rate < 1`, add shift such that
+`(1e36 << shift) / rate > swap_amount`. Use shift=128 for rates up to ~1e59.
+
+Remaining `inputDeadTokens` investigation: most tokens with "missing override" have zero pool
+liquidity (deUSD, weETH, tGBP, Unity, AUTISM CAPITAL, Treehouse Token, HOUDINI, multiple
+proxy tokens). SHIBAVAX (0x440abbf1, 12 pools) is a reflection token needing slot+shift
+investigation. aAVAXb (0x6c6f910a, 3 pools) is a rebasing token (shares at slot 101, not
+direct balance). USD+ (0xe80772ea, 7 pools) and ROCO (0xb2a85c5e, 22 pools) need reflection
+model fixes. GB (0x90842eb8, 30 pools) needs _rOwned/_rTotal compatible override.
+
+Fixed pharaoh_v3 pool#2815 (`0x64c5279f...`, WAVAX/0xca2e0f72...): formula returned 0,
+EVM returned nonzero. Pool was in `pharaohV3Pools` and `registry.txt` but missing from
+`v3PoolFees` in `v3_registry.go`. Without the fee/tickSpacing entry, `newV3Pool()` returns
+nil before layout detection runs. Added `{500, 10}` (fee=500, tickSpacing=10 from on-chain
+`fee()` and `tickSpacing()` calls). **Technique**: pharaoh_v3 pools need entries in THREE
+registries: `registry.txt` (formula ID), `pharaoh_v3_registry.go` (layout selection),
+AND `v3_registry.go` (fee/tickSpacing). If a pharaoh_v3 pool returns formula=0 despite
+being in pharaohV3Pools, check `v3PoolFees`.
+
+Fixed pharaoh_v3 pool#2536 (`0x612B81fb...`, evaUSDC/USDC): dir=0 formula=890197
+but evm=0. Token0 evaUSDC (`0x741bd193...`) was missing from `token_overrides.json`
+(balance slot 5), so the router had zero balance and transfer reverted during EVM
+simulation. The pool was previously registered (pharaohV3Pools + v3PoolFees) which
+fixed the formula, but the missing token override made the EVM ground truth return 0.
+**Technique**: when a registered pool has formula=nonzero/evm=0 in only one direction,
+check if the input token for the failing direction is in `token_overrides.json`.
+
+Fixed lfj_v1 pool#3429 (`0x117ef430...`, WAVAX/0xc970) DIFF mismatch: token
+`0xc970d70234895dd6033f984fd00909623c666e66` is a 2% FoT token (subtract form:
+`fee = amount * 2 / 100`). Formula overshoot was ~2.04% in both directions. Added to
+`fotCalculators` with `fotCustom`. Also covers pharaoh_v1 pool#3430 and lfj_v1 pool#8328.
+**Technique**: when both formula and EVM return nonzero with a consistent ~N% ratio across
+both directions and multiple blocks, the output/input token is likely FoT. Compute
+`evm/formula` to get the tax complement; verify exact Solidity rounding (subtract form
+`amount - amount*rate/denom` vs complement form `amount*(denom-rate)/denom` — they differ
+by 1 wei when `amount % denom != 0`).
+
+Fixed woofi_v2 (4 mismatches → 0): formula returned nonzero for swaps where tokenOut was
+the native AVAX sentinel (`0xeee...`). The EVM router can't unwrap WAVAX to native AVAX,
+so it returns 0. Fix: return 0 immediately when tokenOut is the native sentinel.
+**Technique**: when a pool uses wrapped/native token pairs, check whether the router
+actually supports unwrapping on output. If not, the formula must return 0 for native
+output direction.
+
+Fixed `deadDirQuoter` blocking output direction for 22 input-dead tokens. These tokens had
+missing/broken overrides, so the router couldn't SEND them. But the formula was incorrectly
+returning 0 even when the token was the OUTPUT (pool sends to router — works fine on-chain).
+Root cause: `brokenTokens` map mixed truly-broken tokens (transfer always reverts) with
+input-only-dead tokens (router can't send due to missing override). Split into two maps:
+`brokenTokens` (both dirs dead) and `inputDeadTokens` (input only). Updated `deadDirQuoter`
+to support `deadAnyDirTokens` (blocks both) and `deadInputTokens` (blocks input only).
+Fixed 35 mismatches across 7 DEX types: lfj_v1 (18→0), pangolin_v2 (7→0), yetiswap (2→0),
+swapsicle (2→0), pharaoh_v1 (1→0), oliveswap (1→0), uniswap_v3 (3→0).
+**Technique**: when a pool has formula=0/evm=nonzero and the output token is in
+`brokenTokens` with comment "transfer reverts in EVM simulation", the token's transfer
+works FROM the pool (which already holds tokens) — only the router→pool direction is dead.
+These should be in `inputDeadTokens`, not `brokenTokens`.
+
+Fixed DZHV token (`0x3419875b...`) diamond proxy dispatch for pool#3440 (uniswap_v3,
+`0x4Da924BC...`), pool#3192 (uniswap_v2), and pool#2540 (lfj_v1). The token uses a
+two-step proxy: STATICCALL to implementation gets handler address, then DELEGATECALL
+to handler executes the function. Neither the implementation nor the handler were in
+the state dump. Added `codeContracts` to `token_overrides.json` deploying: (1) a mock
+implementation that always returns the handler address, (2) a replacement ERC20 handler
+compiled with `--evm-version paris` (no PUSH0) that uses the same storage layout
+(slot 0 = balances, slot 1 = allowances) and returns `bool` from transfer/transferFrom.
+The original on-chain handler doesn't return `bool`, causing the router's Solidity 0.8+
+ABI decoder to revert. **Technique**: when a token uses a diamond/dispatcher proxy,
+deploy mock codeContracts for each link in the proxy chain. If the on-chain handler
+doesn't return `bool` from transfer, compile a replacement with matching storage layout
+that does. Use `--evm-version paris` to avoid PUSH0 (Avalanche C-Chain).
+
+Fixed pharaoh_v1 pool#3445 (`0x13e09b6a...`, PHAR/abcPHAR, stable): Newton-Raphson
+non-convergence at extreme reserve imbalance (r0=4.58e15, r1=363.95e18). The `getY`
+function oscillated with delta=18 after convergence, never meeting the <=1 threshold.
+After 255 iterations it returned the oscillating value, producing output 109.6e18. On-chain,
+the same oscillation causes `getAmountOut()` to return the full reserve, making `swap()`
+revert. Fix: `getY` returns nil when the 255-iteration loop exhausts without convergence.
+**Technique**: when a stable-curve pool has extreme imbalance and the formula returns nonzero
+while EVM returns 0, check if `getY` Newton-Raphson converges. Non-convergence (oscillating
+delta > 1 after many iterations) means the swap is unexecutable on-chain.
+
+Fixed pharaoh_v1 pool#3198 (`0x658f5ef2...`, xPRYM/WAVAX): xPRYM (`0x4596ab7a...`) is a
+P3D-style dividend token (buy/sell/withdraw bonding curve). Its `transfer()` always reverts
+(INVALID opcode), so both swap directions are dead on-chain. Added to `brokenTokens`. Also
+fixed `deadDirQuoter` to check both `tokenIn` and `tokenOut` — previously only blocked the
+input direction, missing output-side reverts. **Technique**: P3D/Hourglass-style tokens have
+`buy(address)`, `sell(uint256)`, `withdraw()`, `myDividends(bool)`, `calculateTokensReceived(uint256)`
+selectors. Their `transfer()` either reverts or applies a large internal tax via the bonding
+curve. When `transfer()` reverts with INVALID opcode, add to `brokenTokens`.
+
+Fixed SLED reflection token (0x1f1fe1ef) mismatch: was fotPct(2) static approximation
+(22 PPM off), moved to reflectionTokenConfigs with exact RFI math. Key finding: the V2 pool
+is in the _excluded array, so after _transfer the sender's _rOwned/_tOwned changes affect
+_getCurrentSupply(). Added SenderAwareOutputAdjuster interface to pass pool address (sender)
+to reflection model. New technique: when a reflection token has 10-100 PPB residual after
+adding to reflectionTokenConfigs, check if the swap sender (V2 pool) is excluded.
+
+Batch registered 505 pangolin_v2 pools missing from `registry.txt` — all assigned
+formula=0 (FormulaV2_30bps). Before: 986/1491 pangolin_v2 registered. After: 1491/1491.
+These were getting `zeroQuoter` and would show formula=0/evm=nonzero at higher --limit.
+The 8 pangolin_v2 pools already visible in the --limit 2000 benchmark were already
+registered; their result=0 mismatches are token-related (missing overrides), not
+registry gaps.
+
+Batch registered 41 pools missing from `registry.txt` — all returned formula=0 while
+EVM returned nonzero. Breakdown: 22 lfj_v1, 9 pangolin_v2, 1 sushiswap_v2, 1 vapordex,
+1 swapsicle, 1 pharaoh_v1, 1 uniswap_v3, 2 pharaoh_v3. One pharaoh_v3 pool
+(`0x33a4b513...`) also needed entries in `v3_registry.go` (fee=250, tickSpacing=5) and
+`pharaoh_v3_registry.go`. All 41 pools now match. formula=0/evm=nonzero count dropped
+from 107 to 61. Remaining 61 are mostly uniswap_v4 (already registered, formula implementation
+gaps) and balancer_v3.
+
+Fixed uniswap_v2 pool#3194 (`0x84185907...`, 0x198dd15f/WAVAX): token0 (`0x198dd15f...`,
+UltimateTokenOwnable) missing from `token_overrides.json`. Token uses ERC-7201 namespaced
+storage (standard OZ `0x52c63247...bace00`). Without override, router had zero balance,
+causing dir=0 revert. Also fixes sibling uniswap_v3 pool#3193 (`0x221d170c...`). 100% match
+both directions across 3 blocks. **Technique**: "CreateMyToken" factory tokens use OZ
+ERC20Upgradeable with Initializable + ERC-7201; balance storage is the standard namespace.
+
+Batch registered 4 lfj_v1 pools missing from `registry.txt` — all returned formula=0 while
+EVM returned nonzero. All use FormulaV2_30bps (formula=0). Token overrides already existed.
+- Pool#1985 (`0x2915c754...`, WAVAX/0xcd59): 100% match both dirs.
+- Pool#1832 (`0x2FFEA1BE...`, USDt/0xd3ac): 100% match both dirs.
+- Pool#1850 (`0x82C39cc3...`, USDC/0xc3e8): 100% match both dirs.
+- Pool#1852 (`0xa1CA4E8C...`, 0xc0c5/0xc3e8): 100% match both dirs.
+**Technique**: when an lfj_v1 pool has formula=0/evm=nonzero in both directions and both
+token overrides exist, the pool is simply missing from `registry.txt`.
+
+Fixed uniswap_v2 pool#3413 (`0x7a8fe1F0...`, WETH.e/USDC): missing from `registry.txt`.
+Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).
+Both tokens (WETH.e, USDC) already had overrides. 100% match across 3 blocks.
+
+Fixed sushiswap_v2 pool#2236 (`0x4c2e615b...`, USDC.e/0xd3ac): missing from `registry.txt`.
+Pool was getting `zeroQuoter` (formula=0, evm=nonzero both dirs). Added as formula 0 (V2).
+100% match across 3 blocks.
+
+Batch registered 13 pools missing from `registry.txt` — these returned formula=0 while
+EVM returned nonzero. Breakdown: 3 V4, 2 pharaoh_v3, 3 DODO, 3 LFJ V1, 1 LFJ V2,
+1 WooFi. Also added LFJ V2 pool 0xb74f to `lfj_v2_registry.go` (binStep=100, decoded
+from bytecode immutables). Removed 0x66a5 from `deadPoolDirs` (one-sided liquidity
+resolved). Remaining formula=0/evm=nonzero gaps: 1 platypus (no asset map), 1 GyroECLP
+(no formula impl), 1 WooFi 14-token (EVM mostly reverts).
+
+Fixed platypus pool#3082 (`0x13329c79...`, YUSD/USDC): missing from both `registry.txt`
+(formula=11) and `platypusAssetMap`. Asset addresses queried on-chain via `assetOf()`:
+YUSD->0xc75b2b90, USDC->0xa551480d. 100% match across 3 blocks.
+
+Fixed platypus pool#2266 (`0x2779ebcD...`, USDC/USDbC): `platypusAssetMap` had USDbC
+(`0xd24c2ad0...`) listed as 6 decimals but the token actually has 18 decimals on-chain.
+The decimal mismatch caused idealToAmount to be off by 1e12 (dir=0: formula=896455 vs
+evm=896455455044890020). Also fixed the same wrong decimals in pool `0x27792000...ff3af`.
+**Technique**: when a platypus formula result is off by an exact power of 10, check the
+token decimals in `platypusAssetMap` against the actual on-chain `decimals()` return value.
+
+Fixed L-Swing (0x556b) reflection token mismatch in pool#2993 and pool#2786. Two bugs:
+(1) `_getRate()` excluded accounts not subtracted from supply — added `getCurrentSupply()`
+to read `_excluded` array and subtract `_rOwned`/`_tOwned`. (2) Zero-amount transfer probe
+false negative — skipped for tokens in `brokenTokens`. Both pools now match at 0 PPB.
+New technique: reflection tokens with excluded accounts need `excludedArraySlot`, `rOwnedSlot`,
+`tOwnedSlot` in their config. Standard RFI layout: slots 5, 1, 2 respectively.
+
+Fixed lfj_v1 pool#2583 (`0xd100bb9a...`, JUNIOR/WAVAX) DIFF mismatch: JUNIOR token
+(`0x214dd1b5...`) is a 1% FoT (subtract form: `fee = amount * 1 / 100`). Token was in
+`token_overrides.json` but missing from `fotCalculators`. Used `fotCustom` (not `fotPct(1)`)
+because complement form `amount * 99 / 100` differs by 1 wei from Solidity's subtract form
+when `amount % 100 != 0`. Also covers sibling pools `0xcf25fba7`, `0x02f51540`, `0xd3e6527c`.
+**Technique**: ~1% DIFF in both directions → 1% FoT. Compute `evm/formula` ratio; if ~0.99,
+check if output token has a 1% tax. Verify subtract vs complement rounding with a concrete
+amount to choose `fotCustom` vs `fotPct`.
+
+Added token override for 0xdc194d03 (pool#2668 arena_v2, also pool#23204 lfj_v2) — standard
+OZ ERC20 with sender-blacklist (slot 6), balance at slot 0. Missing override caused false-positive
+mismatch (formula=99269134076384397, evm=0). Non-proxy, 2710 bytes bytecode.
+
+Fixed pool#2965 (lfj_v1, OXY/WAVAX 0x93b4c1a198a67774): OXY (0x2dd0d1c14586731701706de1abf9b2dc47561645)
+is a tax/node token ("OXG" contract) with anti-whale `maxTx` check in `_transfer()`. The check exempts
+only the registered `uniswapV2Router` (slot 15). Added new `routerAddressSlots` infrastructure to
+`contracts/overrides.go` to overwrite plain slots with the router address at override time. OXY override
+uses balance slot 0, routerAddressSlots [15]. New technique: for tokens with hardcoded router address
+checks, use `routerAddressSlots` to impersonate the registered router.
+
+Added token override for yUTY (Staked UTY, ERC4626 vault at 0x580d5e...) — an ERC20Upgradeable
+proxy using ERC-7201 namespaced storage. Missing override caused 2 false-positive mismatches
+(pools #2064 and #2065, both pharaoh_v3 yUTY/UTY). The formula was correct; the EVM test
+couldn't execute dir=0 swaps because the router had no yUTY balance.
+
+Fixed Ape-X token (`0xd039c9...`) override — RFI reflection token whose `_rOwned` mapping
+(slot 3) requires `shift: 128` so `balanceOf(router)` returns nonzero. Without shift, the
+stored 1e36 divided by the massive rate (~2^183) gives 0 effective balance, causing EVM
+swaps to silently fail. Fixes pool#3264 (partyswap) and pool#3263 (pangolin_v2).
+**Technique**: when a reflection token's override gives `balanceOf = 0` despite writing to
+the correct `_rOwned` slot, add `shift` to the override. Calculate needed shift: find `_rTotal`
+(often at slot 10 or 11), compute `rate = _rTotal / _tTotal`, then choose shift such that
+`(1e36 << shift) / rate > 0` and `1e36 << shift < 2^256`.
+
+Fixed lfj_v1 pool#2570 (`0x16f139fe...`, WAVAX/0xfb8a) DIFF mismatch: token
+`0xfb8a29e67eff2f8ec633771b572b08b7e69c57b4` is a 5.01% FoT token (subtract form:
+`fee = amount * 501 / 10000`). Dir=0 (WAVAX→token): formula overshoot was ~5.01%
+(evm/formula=0.9499). Dir=1 (token→WAVAX): evm=0 because the token is missing from
+`token_overrides.json` so the router can't send it. Added to `fotCalculators` with
+`fotCustom` (complement form `9499/10000` is 1 wei off) and to `inputDeadTokens`.
+Both directions now match.
+**Technique**: ~5% DIFF → 5% FoT. Exact fee fraction found by brute-force search over
+rate/denom pairs (501/10000 matched exactly). When dir=1 also has evm=0 and the FoT
+token is the input, the token likely needs `inputDeadTokens` (missing override).
+
+**Benchmark uses realistic amounts** (~$1 per swap) from `formulas/data/token_amounts.txt`,
+generated by `tools/token-pricer` via multi-wave EVM price discovery at the deploy block.
+Forward direction uses token amount from file; reverse uses EVM forward output.
+
+## Running the Benchmark
+
+```bash
+# Full benchmark (2000 pools, ~10 seconds)
+timeout 300 go run ./benchmarks/formula-accuracy/ --limit 2000 2>&1
+
+# Single pool (< 1 second)
+timeout 30 go run ./benchmarks/formula-accuracy/ --pool 0xADDRESS 2>&1
+
+# With formula cache (faster hot pass)
+timeout 300 go run ./benchmarks/formula-accuracy/ --limit 2000 --cache 2>&1
+
+# Regenerate token amounts (run after deploying new router)
+timeout 300 go run ./tools/token-pricer/ 2>&1
+```
+
+## Recent Fixes
+
+- **Pool#1703** (`0x2562557F...`): uniswap_v2 pool (BYAS/USDC), formula=835225 but evm=0 (dir=0).
+  BYAS (`0x26b13e76...`) is a reflection token (RFI-style) with `_reflectedBalances` at slot 9.
+  Two issues: (1) Reflection rate is ~7.2e48, so transferring even 11 tokens requires
+  rAmount ~7.96e67, exceeding the 1e36 balance override. Added `shift: 128` so stored
+  value = 1e36 << 128 = ~3.4e74. (2) Slot 5 = 2 is a reentrancy guard stuck in ENTERED
+  state, blocking sell-path transfers. Added `disableSlots: [5]`. 100% match both
+  directions across 3 blocks. **Technique**: reflection tokens with high rates
+  (rBalance/balance > 1e48) need `shift` in their override so the raw stored reflected
+  balance exceeds the rate multiplied by the swap amount. Also check for stuck reentrancy
+  guards (slot value = 2 with OZ ReentrancyGuard pattern: 1=NOT_ENTERED, 2=ENTERED).
+
+- **Pool#1272** (`0x70201236...`): lfj_v1 pool (WAVAX/SOCK), formula=98301931271636659 but evm=0
+  (dir=1, SOCK in). SOCK (0xf84be5e3) is a BulletCollection (NFT/ERC20 hybrid) with a 0.5% FoT.
+  Its `_transfer` calls `swapManager().attemptFeeSwap(_to)`, which — when `_to` is a registered AMM
+  pair and accumulated `feesCollected >= swapThreshold` — does a real swap through the JoeRouter
+  using the SAME pair. This modifies the pair's reserves mid-transfer, so the HayabusaRouter's
+  `getReserves()` call (before the transfer) is stale, producing an `amountOut` that fails the K
+  invariant check. Dir=0 (WAVAX in) unaffected because `attemptFeeSwap(_to=router)` has
+  `isAutomatedMarketMakerPair[router]=false`, skipping the fee swap. Fix: added to `deadPoolDirs`.
+  **Technique**: BulletCollection tokens with accumulated fees can trigger re-entrant swaps through
+  the same pair during `_transfer`, corrupting the K check. Check `feesCollected[token]` on the
+  token's swapManager vs `swapThreshold` — if fees exceed threshold, the dir where the token is
+  input to a registered AMM pair is dead.
+
+- **Pool#1566** (`0x672E8a49...`): pangolin_v2 pool (PumpKinsFarm/WAVAX), formula=126061309518754914934
+  but evm=0 (dir=1). Token0 (`0x894aa2d0...`) is PumpKinsFarm — a FoT token (10% fee) with
+  `maxHolding` anti-whale check: `require(balanceOf(recipient) + sendAmount <= getMaxHolding())`.
+  MaxHolding = 5% of totalSupply = 1300 tokens. The router's 1e36 balance override already exceeds
+  maxHolding, so any transfer TO the router reverts. Fix: added `whitelistSlots: [4]` to the token
+  override — slot 4 is the `_isExcludedFromMaxHolding` mapping, which bypasses the holding cap.
+  100% match both directions across 3 blocks. Other pools with the same token (0x9637, 0xec5f,
+  0x2133) unaffected. **Technique**: when a FoT token has a maxHolding/maxWallet check and the
+  router's 1e36 override exceeds it, find the `_isExcludedFromMaxHolding` mapping by probing
+  known-excluded addresses (owner) across mapping slots 0-20, then add to `whitelistSlots`.
+
+- **All Hurricane pools** (including `0xb5A4E700...` pool#3870, `0x0C993764...` pool#6829):
+  Hurricane DEX (HcSwapAvaxPair) has `onlyOwner` modifier on `swap()` — checks
+  `IUniswapV2Factory(factory).owner() == msg.sender`. The router is never the factory
+  owner (`0xd8aa70f7...`), so all Hurricane swaps revert with "HcSwap: NOT OWNER".
+  Fix: `newHurricanePool` now returns nil (zeroQuoter), matching EVM's 0 output.
+  Removed unused hurricane storage slot constants (hurricaneReservesSlot, hurricaneFeeSlot,
+  hurricaneFactor30, hurricaneFactor50). All ~28 hurricane pools now match at 0 across
+  3 blocks. **Technique**: when ALL pools from a DEX return evm=0, check the swap()
+  modifier — some V2 forks restrict swap() to the factory owner or a whitelisted router.
+
+- **Pool#3082** (`0x13329C79...`): platypus pool (YUSD/USDC), formula=0 but evm=nonzero.
+  Missing from both `registry.txt` (added formula=11) and `platypusAssetMap` in platypus.go.
+  Asset addresses queried on-chain via `assetOf(address)`: YUSD asset=0xc75b2b90 (18 dec),
+  USDC asset=0xa551480d (6 dec). Same token pair as pool 0x13320b3e but different asset
+  contracts. 100% match both directions across 3 blocks.
+
+- **Pool#664** (`0xee9BDb33...`): lfj_v1 pool (JPYC/USDC), formula=878555 but evm=0 (dir=0).
+  Token0 JPYC (`0x431d5dff...`) is an EIP-1967 proxy (impl `0xf2fab05f...`, 20KB bytecode)
+  using FiatToken-style storage layout. Balance mapping at slot 516, totalSupply at slot 514.
+  Missing from `token_overrides.json` — added with slot 516. 100% match both directions
+  across 3 blocks. **Technique**: FiatToken V2 style proxies (like JPYC) can have balance
+  mappings at very high slot numbers due to deep inheritance hierarchies; brute-force the
+  slot by checking keccak256(abi.encode(knownHolder, slot)) for slots 0-1000.
+
+- **Pool#1157** (`0x230c4aD1...`): lfj_v1 pool (XCAmple/WAVAX), formula=98452781377607687 but evm=0.
+  Token0 (`0x027dbca0...`) is XCAmple — a rebasing token (AdminUpgradeabilityProxy, impl
+  `0xAe192568...`). Uses internal "gons" accounting: `balanceOf = _gonBalances[addr] / _gonsPerAMPL`.
+  The `_gonBalances` mapping is at slot 108 (proxy shifts layout by ~101 slots). The override
+  wrote 1e36 to the gon slot, but `_gonsPerAMPL` is ~1.7e61, so `balanceOf = 1e36 / 1.7e61 = 0`.
+  Router had zero balance from EVM's perspective, causing TRANSFER_FAILED. Fix: added `shift: 128`
+  to the token override, making raw gons = 1e36 << 128 = 3.4e74, giving balanceOf ~2e13 tokens.
+  100% match both directions across 3 blocks. **Technique**: rebasing tokens that store internal
+  units (gons) need `shift` in their override so the raw stored value exceeds the per-unit divisor.
+
+- **Pool#2598** (`0xE4F24831...`): pharaoh_v1 LINDA/WETH.e. Formula ~0.5% low (both dirs).
+  LINDA token (0x039d2e8f) has different FoT rates for registered vs unregistered AMM pairs.
+  The lfj_v1 pair (0x4925df) is stored at token slot 15 and in the AMM mapping (slot 11
+  base) -- charges buyTotalFees=100 bps. The pharaoh_v1 pair is NOT registered, so the
+  token's _transfer charges only buyMarketingFee=50 bps (slot 21). Added `FotPoolTokenOverrides`
+  mechanism in fot.go for per-(pool, token) FoT rate overrides. **Technique**: when a FoT
+  token mismatch is exactly N bps and the token has both buyTotalFees and component fees
+  (buyMarketingFee, buyDevFee), check whether the pool is in the token's AMM pair mapping
+  (probe mapping[pool] at various base slots on the token contract). Unregistered pools
+  may get a reduced "transfer" fee equal to one component.
+
+- **Pool#1823** (`0x1768642e...`): lfj_v1 pool (BARK/WAVAX), formula=0 but evm=nonzero.
+  Two issues: (1) missing from `registry.txt` — added with formula=0 (FormulaV2_30bps),
+  (2) token0 BARK (`0x70ba1a77...`) missing from `token_overrides.json` — standard ERC20
+  (2832 bytes, not a proxy), balance mapping at slot 0. 100% match both directions across
+  3 blocks.
+
+- **Pool#1378** (`0xd65328f9...`): lfj_v1 pool (GIVE TR YOUR COQ/WAVAX), formula=0 but
+  evm=179153283505199 (dir=1). Three issues: (1) missing from `registry.txt` — added with
+  formula=0, (2) token0 `0xa12dd2e5...` missing from `token_overrides.json` — balance at
+  slot 8 (non-proxy, 13.6KB bytecode), (3) token has 6% fee-on-transfer. Used `fotCustom`
+  (amount*6/100 subtract form) not `fotPct(6)` because Solidity `amount - amount*6/100`
+  differs from `amount*94/100` by 1 wei. 100% match both directions across 3 blocks.
+  **Technique**: when fotPct and fotCustom give different results, always check whether the
+  Solidity code uses `amount * complement / denom` or `amount - amount * rate / denom` —
+  these round differently due to integer division.
+
+- **Pool#1185** (`0xdDd9d913...`): lfj_v1 pool (WAVAX/$TREE), formula=0 but evm=nonzero.
+  Missing from `registry.txt`. Added with formula=0 (FormulaV2_30bps). Token1 $TREE
+  (`0xc110593a...`) also missing from `token_overrides.json` — standard OZ ERC20 (1489 bytes,
+  not a proxy), balance mapping at slot 3. 100% match both directions across 3 blocks.
+
+- **Pool#1480** (`0x08C6C6EA...`): uniswap_v3 pool, fee=100, tickSpacing=1. formula=0 but
+  evm=1691294495517068 (dir=0). Bitmap radius of 200 words (51200 ticks) too narrow for
+  tickSpacing=1 — low-liquidity swap traversed 201+ words before consuming input, hitting
+  outOfRange with non-zero liquidity. Fixed by scaling bitmap radius inversely with
+  tickSpacing: <=2→500, <=5→300, >=6→200. Fixed 19 pools total (all tickSpacing=1).
+  **Technique**: tickSpacing=1 pools need ~2.5x more bitmap words than default because each
+  word covers only 256 ticks vs 15360 for tickSpacing=60.
+
+- **Pool#1065** (`0xd3e5d317...`): lfj_v1 pool (WAVAX/ggAVAX), formula=0 but evm=nonzero.
+  Missing from `registry.txt` entirely. Added with formula 0 (FormulaV2_30bps). Token1
+  (`0xf7d9281e...`) is in `brokenTokens` (ERC1155-backed ERC20, safeTransferFrom reverts),
+  so dir=1 stays dead. Dir=0 now matches. 100% correct across 3 blocks.
+
+- **Pool#18** (`0x4c4AF8DB...`): WooFi V2 Router pool, formula=0 for all 20 directions where
+  EVM returned nonzero. Three root causes: (1) Pool missing from `registry.txt` -- never got
+  FormulaWooFi=12 so PoolManager never created a WooFiPool quoter. (2) Division ordering in
+  `wooCalcQuoteAmountSellBase` and `wooCalcBaseAmountSellQuote` didn't match deployed WooPPV2
+  -- Go divided by baseDec before priceDec, while Solidity divides by priceDec first, applies
+  mulFloor(coef), then divides by baseDec last. Caused off-by-1 and ~1 PPM rounding errors.
+  (3) Missing `tokenIn == tokenOut` guard after mapping native AVAX sentinel to WAVAX.
+  **Technique**: when the formula math has consistent off-by-1 errors, the division ordering
+  likely differs from the Solidity contract. Check mul/div chaining order carefully -- dividing
+  by the smaller denominator first (priceDec=1e8) before the mulFloor preserves more precision
+  than dividing by baseDec (up to 1e18) early. Remaining 4 mismatches are `formula>0, evm=0`
+  from native AVAX sentinel output (benchmark artifact).
+
+- **Pool#73** (`0xf1840b4A...`): lfj_v1 pool (0x88f89b/WAVAX), formula=0 but evm=99394028227151459.
+  Was incorrectly blacklisted (-1) in registry.txt. Both token overrides already existed.
+  Changed to formula 0 (FormulaV2_30bps). 100% match both directions across 3 blocks.
+
+- **Pool#2864** (`0xB7BA3d3B...`): uniswap_v3 pool (WETH.e/wrsETH), formula=424405494334342 but evm=0.
+  Token1 wrsETH (`0x7bfd4ca2...`) is a TransparentUpgradeableProxy (EIP-1967) with
+  RsETHTokenWrapper implementation using OZ ERC20Upgradeable (old gap-based layout).
+  Balance mapping at slot 151. **Technique**: OZ upgradeable proxies using the old
+  `__gap[50]` pattern (pre-ERC-7201) can have balance mappings at high slot numbers;
+  find totalSupply by scanning raw slots, then balance mapping is at totalSupply_slot - 2.
+
+- **Pool#2019** (`0xf56C02ba...`): uniswap_v3 pool, formula=0 but evm=282683701306215736.
+  Missing from both `registry.txt` (formula=2) and `v3_registry.go` (fee=3000, tickSpacing=60).
+  Both token overrides already existed. 100% match both directions after fix.
+
+- **Pool#2946** (`0x0CAE14b9...`): uniswap_v3 pool, formula=0 but evm=375637009825256049399020.
+  Already in `v3_registry.go` (fee=10000, tickSpacing=200) but missing from `registry.txt`.
+  Added registry entry with formula=2. 100% match both directions after fix.
+
+- **Pool#380** (`0xa7548448...`): DODO DSP pool (BTC.b/USDC, impl 0x97d52e), formula=1310 but evm=0
+  in dir=1 (sellQuote). Root cause: DSP pools also enforce `_MIN_QUOTE_SWAP_AMOUNT_` (slot 11)
+  and `_MIN_BASE_SWAP_AMOUNT_` (slot 10), same as DPP pools. This pool has minQuoteSwap=1000000
+  (1 USDC). The reverse-direction input (876846 USDC) was below the minimum, so the on-chain
+  `sellQuote` reverted with `QUOTE_SWAP_AMOUNT_TOO_SMALL`. Fix: gate min-swap slot reads on
+  `DODOLayoutDPP || DODOLayoutDSP` instead of `DODOLayoutDPP` only. DVM pools still excluded
+  (their slots 10/11 hold unrelated cumulative-price data). Verified all other DSP pools
+  (impls 0x89ba40, 0xa7b9c3, 0x77106d) have slots 10/11 = 0, so no false positives.
+
+- **Pool#713** (`0x38d9eb71...`): uniswap_v3 pool (KIVOT/USDC), formula=0 but evm=287733798523160239.
+  Missing from both `registry.txt` (formula=2) and `v3_registry.go` (fee=3000, tickSpacing=60).
+  KIVOT token override already existed from pool#712 fix. 100% match both directions after fix.
+
+- **Pool#712** (`0x0C7170b3...`): uniswap_v3 pool (KIVOT/WAVAX), formula=0 but evm=nonzero.
+  Missing from both `registry.txt` (formula=2) and `v3_registry.go` (fee=3000, tickSpacing=60).
+  Also needed token override for KIVOT (`0x453b68be...`), balance mapping at slot 5.
+  Non-proxy, 12539 bytes bytecode. 100% match both directions after fix.
+
+- **Pool#35** (`0x77a14220...`): uniswap_v3 pool (BTC.b/USDt), formula=0 but evm=876689.
+  Missing from both `registry.txt` and `v3_registry.go`. Added with formula=2, fee=100,
+  tickSpacing=1. 100% match after registration.
+
+- **Pool#1970** (`0x00f0fa74...`): DODO DSP pool (0x3330/WAVAX), formula=0 but evm=55832299049545178.
+  `newDODOPool` unconditionally read slots 10/11 for DPP min-swap amounts, but DSP pools store
+  unrelated data there. Slot 11 contained a huge value that tripped the `amountIn < minQuoteSwap`
+  guard, blocking all quote-selling swaps. Fix: added `Layout` field to `DODOState` (DVM/DSP/DPP),
+  only read min-swap slots for DPP pools. **Technique**: when reusing storage slot reads across
+  pool layout families, always gate on the detected layout — the same slot offset means different
+  things in different layouts.
+
+- **Pool#2308** (`0x835fF7b2...`): pharaoh_v3 pool, formula=893221924067050478 but evm=0.
+  Token0 yUTY (`0x580d5e14...`) is an ERC4626 vault (ERC20Upgradeable proxy, 170-byte
+  EIP-1967 proxy) using ERC-7201 namespaced storage. Was missing from token_overrides.json
+  entirely — COVERAGE.md claimed it was added for pools #2064/#2065 but the entry was
+  never committed. Added with standard OZ 5.x ERC-7201 base `0x52c63247...bace00`.
+
+- **Pool#2981** (`0x8b0c2c19...`): lfj_v1 pool, formula=2672204 but evm=0 (TRANSFER_FAILED).
+  Token0 (`0x323665443...`) is an OptimizedTransparentUpgradeableProxy (LayerZero OFT) using
+  OpenZeppelin 5.x ERC20Upgradeable with ERC-7201 namespaced storage. Override had wrong
+  slot (208, shift 32) instead of ERC-7201 base `0x52c63247...bace00`. Same token also
+  causes mismatch in pool#2 (lfj_v2, 0x2edb382a). Technique: if a proxy's implementation
+  imports OZ 5.x contracts, always check for ERC-7201 storage — the balance mapping is NOT
+  at a sequential slot.
+
+- **Pool#1573** (`0xD18E7B65...`): arena_v2 pool (WAVAX/0xee9797), formula=99280035643344187 but evm=0
+  (dir=1). Token1 (`0xee9797d4...`) missing from `token_overrides.json`. Added with slot 0.
+  Standard OZ ERC20 (2710 bytes bytecode, non-proxy). Same pattern as pool#3028 and pool#3032.
+  100% match both directions across 3 blocks.
+
+- **Pool#1702** (`0x4D2042D4...`): arena_v2 pool (Devs/WAVAX), formula=99260304175448463 but evm=0.
+  Token0 (`0x5ac34610...`) missing from `token_overrides.json`. Standard OZ ERC20 (2710 bytes,
+  non-proxy), balance mapping at slot 0. Same pattern as pool#3028 and pool#3032. 100% match
+  both directions across 3 blocks after fix.
+
+- **Pool#1059** (`0x437705F7...`): vapordex pool (0x88f89b/USDC), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Same pattern as pool#526 and pool#593. Both token overrides already existed.
+  100% match both directions across 3 blocks.
+
+- **Pool#593** (`0x3770Ee18...`): vapordex pool (0x0256b2/0x88f89b), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Same pattern as pool#526. Both token overrides already existed.
+  100% match both directions across 3 blocks.
+
+- **Pool#526** (`0x0DBcB787...`): vapordex pool (0x88f89b/WAVAX), formula=0 but evm=nonzero.
+  Was incorrectly blacklisted (-1) in registry.txt. Changed to formula 0 (FormulaV2_30bps).
+  Vapordex is a V2 fork; the EVM router's custom fee path (feeBps via extraData) is not
+  triggered by the benchmark (extraData is empty for pool type 8), so both EVM and formula
+  use standard 0.3% fee. Token0 override already existed (slot 0, hookContracts).
+  100% match both directions across 3 blocks.
+
+- **Pool#2967** (`0xd998abDE...`): Missing from registry entirely. lfj_v1 pool
+  (TraderJoe V1, V2 fork) with formula ID 0. Token0 (`0x2f13f452...`) is an
+  EIP-1967 proxy with balance mapping at slot 51. Added registry entry + token
+  override. State server debug endpoint times out for this token's storage trie.
+
+- **Pool#3028** (`0x18935db5...`): arena_v2 pool, formula=99250428441901463 but evm=0.
+  Token `0x9ca4ce3f...` missing from token_overrides.json. Added with slot 0.
+  Standard OZ ERC20 (2710 bytes bytecode). Same pattern as pool#3032 and pool#3154.
+
+- **Pool#3032** (`0x2c459F36...`): arena_v2 pool, formula=99265691315558824 but evm=0.
+  Token `0x8088a358...` missing from token_overrides.json. Added with slot 0.
+  Standard OZ ERC20 (ERC20InsufficientBalance error). Same pattern as pool#3154 (BOSS).
+
+- **Pool#2989** (`0x933b19c4...`): Was blacklisted (-1) but is a standard lfj_v1 pool
+  (Uniswap V2 fork). Changed to formula 0. EVM confirms amountIn=635726640767833845561.
+  All lfj_v1 pools use formula 0.
+
+- **Pool#3129** (`0xf119154a...`): Was blacklisted (-1) but is a standard Uniswap V4 pool
+  (no hooks). Changed to formula 6. High fee (978000 = 97.8%) is unusual but valid — EVM
+  confirms it returns 432. Check other blacklisted pools that may be V4 false negatives.
+
+### Arena V2 pool#3170 (PRIUS/WAVAX) — false positive mismatch
+Investigated 0xd7a34c80a2e8f6a225eb0ef1d6c6167c07176fb6. Arena V2 uses the exact
+same storage layout as standard UniswapV2 (reserves at slot 8, 0.3% fee = factor 9970).
+FormulaV2_30bps (formula=0) is correct. Verified at block 82067033:
+reserve0=9.79e27 (PRIUS), reserve1=1.26e20 (WAVAX), both nonzero.
+
+The reported formula=0 mismatch was from a since-reverted `transferProbeOK` that
+marked directions dead on EVM revert. The state server didn't cache the PRIUS token's
+`blacklistedAddresses[0xdEaD]` slot (OZ v5 ERC20, blacklist mapping at slot 6),
+causing EVM timeout -> probe failure -> false-positive dead direction.
+
+**Warning for future transfer probes**: if a transfer probe is re-added, it MUST NOT
+send to 0xdEaD. Some tokens blacklist that address. Use the pool address or router
+address as the recipient. Also, reverts should be treated as "unknown" (not dead),
+since they can be state server timeouts, not real token restrictions.
+
+Remaining benchmark issue: dir=0 (PRIUS->WAVAX) shows formula=99M, evm=0 because
+the router has no PRIUS balance. Adding PRIUS override (balanceOf at slot 0) is
+blocked by the state server not caching PRIUS storage for historical blocks.
+
+## Remaining Gaps (27 mismatches)
+
+| Category | Count | Root Cause |
+|----------|-------|-----------|
+| Blacklisted broken tokens | ~30 | Transfer restrictions, paused, reflect token bugs, max_wallet |
+| WooFi multi-token pairs | ~4 | 10-token oracle pool, no formula (only 2-token pairs had formula) |
+| Platypus multi-token pairs | ~20 | 5-token stableswap, no formula implementation |
+| Wombat | 2 | No formula implementation (spec ready) |
+| Pharaoh V3 one-sided liquidity | 2 | Formula finds ticks but EVM reverts (K-invariant) |
+| Pharaoh V1 fee edge cases | 2 | Non-beacon-proxy pools with different fee mechanisms |
+| LFJ V2 edge cases | 2 | V2.0/V2.1 interaction edge cases |
+| Balancer V3 GyroECLP | 2 | Needs ~781 lines of ellipse math |
+
+## Triage Workflow
+
+Mismatch output shows pool position: `MISMATCH 0x... dir=0 result=X evm=Y (pool#N)`.
+Lower # = more recently traded = higher priority.
+
+```bash
+# Sort mismatches by pool position (most active first)
+timeout 300 go run ./benchmarks/formula-accuracy/ --blocks 1 --limit 2000 2>&1 \
+  | grep "MISMATCH" | sed 's/.*MISMATCH //' \
+  | awk '{addr=$1; pos=$NF; gsub(/[()]/, "", pos); print pos, addr}' \
+  | sort -t'#' -k2 -n
+```
+
+## Mismatch Patterns and Fixes
+
+| Pattern | Typical Cause | Fix |
+|---------|--------------|-----|
+| formula=nonzero, evm=0 | Broken token (paused, blacklist, max_wallet) | Fix token override (disableSlots, hookContracts, routerAddressSlots) |
+| formula=nonzero, evm=0, V4 pool | V4 PM missing ERC20 balance for take() | Fixed: PM balance override added in overrides.go |
+| formula=0, evm=nonzero, not in registry | Missing registration | Add to registry.txt + type-specific registry |
+| formula=0, evm=nonzero, blacklisted | Was incorrectly blacklisted | Change -1 to correct formula ID (we never blacklist) |
+| formula ~0.5-1% off | Stale Pharaoh V1 fee | Fixed: factory fee reads for beacon proxies |
+| formula ~1-2% off | FoT applied when pool not registered LP | Add to FotExemptPools in fot.go |
+| formula ~50-100 PPB off | Reflection token with excluded accounts | Add excludedArraySlot/rOwnedSlot/tOwnedSlot to config |
+
+## Key Fixes Applied This Session
+
+### Router override balance (1e21 → 1e36)
+The biggest single fix: +1038 matches. Meme tokens need millions of tokens for ~$1 swaps.
+The router's EVM override was only 1000 tokens — insufficient for COQINU (9.3M), UNIQOC (41.6B), etc.
+
+### LFJ V2 null bin guard removal
+ActiveId=0x800000 is NOT a null sentinel — it's realId=0 (1:1 parity bin for stablecoins).
+The guard killed all stablecoin LFJ V2 pools at exact parity.
+
+### Pharaoh V1 dynamic factory fees
+Non-packed beacon-proxy pools had hardcoded fees from probe time. The actual fee lives on the
+PairFactory contract (slot 15 `_pairFee` mapping, fallback to slot 8/9 `stableFee`/`volatileFee`).
+Now reads dynamically for beacon-proxy pools (detected via `proxyImplSlot`).
+
+### LFJ V2.0 formula implementation
+6 pools with completely different storage layout from V2.1/V2.2:
+- PairInformation at slot 6 (activeId + reserves), feeParameters at slot 10
+- uint112 bin packing (vs uint128), mapping-based tree level0
+- Separate fee tracking requiring surplus skip
+
+### Token override disableSlots
+Tokens with anti-bot flags (lubricating, restrictionsOn) that trigger because the router's
+large override balance exceeds per-wallet limits. Zeroing the flag slot disables the check.
+
+## Investigation Tools
+
+### Pool info in one command
+```bash
+addr=0x...; lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+grep -i "^${lower}:" tools/pool-collector/data/pools.txt
+grep -i "${lower}" formulas/registry.txt
+grep -i "${lower}" formulas/v3_registry.go
+grep -i "${lower}" formulas/lfj_v2_registry.go
+grep -i "${lower}" formulas/pharaoh_v1_registry.go
+```
+
+### On-chain queries
+```bash
+# V3 fee/tickSpacing
+curl -s -X POST http://localhost:9650/ext/bc/C/rpc -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"POOL","data":"0xddca3f43"},"latest"]}'
+
+# LFJ V2 binStep
+curl -s -X POST http://localhost:9650/ext/bc/C/rpc -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[{"to":"POOL","data":"0x374111b7"},"latest"]}'
+
+# Algebra gas debug
+ALGEBRA_DEBUG=1 timeout 30 go run ./benchmarks/formula-accuracy/ --pool 0x... 2>&1 | grep ALGEBRA
+```
+
+### Token investigation (Routescan)
+Check for: transfer restrictions, blacklists, paused state, max_wallet, fee-on-transfer,
+conditional fees (isLiquidityPool), rebasing. Use `mcp__routescan__get_source_code`.
+
+### Batch dead pool scan
+```bash
+# Find formula=nonzero, evm=0 pools not yet blacklisted
+timeout 300 go run ./benchmarks/formula-accuracy/ --blocks 1 --limit 2000 2>&1 \
+  | grep "MISMATCH" | grep "evm=0" | awk '{print $2}' | sort -u \
+  | while read addr; do
+    lower=$(echo "$addr" | tr '[:upper:]' '[:lower:]')
+    reg=$(grep "$lower" formulas/registry.txt | head -1 | cut -d: -f2)
+    [ "$reg" != "-1" ] && echo "$lower (reg=$reg)"
+  done
+```
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `formulas/registry.txt` | Pool → formula ID mapping (-1=blacklisted) |
+| `formulas/pool_quoter.go` | PoolManager, buildQuoter, deadPoolDirs |
+| `formulas/v3_registry.go` | V3/V4 fee/tickSpacing map |
+| `formulas/lfj_v2_registry.go` | LFJ V2.1 binStep/tokenX map |
+| `formulas/lfj_v2_v20.go` | LFJ V2.0 registry + storage layout |
+| `formulas/pharaoh_v1_registry.go` | Pharaoh V1 storage layout config |
+| `formulas/pharaoh_v3_registry.go` | Pharaoh V3 pool set (ERC-7201 detection) |
+| `formulas/pharaoh_v1.go` | Pharaoh V1 formula + factory fee reads |
+| `formulas/fot.go` | FoT tokens + FotExemptPools |
+| `formulas/algebra.go` | Algebra formula + gas estimation |
+| `formulas/pool_v3.go` | V3 Quote + evmWouldComplete gas prediction |
+| `formulas/v3.go` | V3 layout detection (Pharaoh V2 before V1) |
+| `contracts/token_overrides.json` | Token balance slots + disableSlots |
+| `contracts/overrides.go` | Override application (1e36 balance) |
+| `tools/token-pricer/main.go` | EVM-based token amount discovery |
+| `benchmarks/formula-accuracy/main.go` | Benchmark (realistic amounts, chained fwd→rev) |
+
+## Formula ID Reference
+
+| ID | Constant | Pool Type |
+|----|----------|-----------|
+| -1 | FormulaInvalid | DEPRECATED — do not use. Fix the formula instead. |
+| 0 | FormulaV2_30bps | V2 constant product (0.3% fee) |
+| 1 | FormulaPharaohV1 | Pharaoh V1 (stable/volatile) |
+| 2 | FormulaV3 | Uniswap V3 / Pharaoh V3 |
+| 3 | FormulaLFJV2 | LFJ V2 Liquidity Book (V2.0 + V2.1) |
+| 4 | FormulaAlgebra | Algebra V1 Integral |
+| 5 | FormulaDODO | DODO PMM |
+| 6 | FormulaV4 | Uniswap V4 (+ ArenaHook support) |
+| 7 | FormulaBalancerV3 | Balancer V3 (2-token only) |
+| 8 | FormulaBalancerV2 | Balancer V2 |

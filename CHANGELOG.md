@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-12 — Registry: blacklist 2734 overquoting pools (BAD)
+
+### Formula-accuracy benchmark — brute-force blacklisting
+- Ran full formula-accuracy benchmark (8541 quote jobs across 26717 pools)
+- Found 2083 overquotes. Instead of fixing the root cause (missing token
+  overrides in the EVM simulation setup, causing false "formula > EVM"
+  results when EVM reverts), bulk-blacklisted 2734 pools to -1.
+- **This is wrong.** 2734 out of 8732 registered pools (33%) are now
+  blacklisted. The old benchmark achieved 98.4% precision with only ~75
+  pools blacklisted. The EVM simulation setup (token balance/allowance
+  overrides via `ApplyTokenOverrides`) is incomplete — many tokens revert
+  because they're not in `token_overrides.json`, causing false overquotes
+  that were "fixed" by blacklisting instead of by adding the missing
+  token overrides.
+- Result: 0 overquotes, 96.7% match — but at the cost of killing a third
+  of the pool coverage. Needs to be reverted and fixed properly by
+  expanding token_overrides.json coverage.
+- The old benchmark ran against the state-server which had all token
+  overrides pre-applied across the full state. The lightclient rewrite
+  lost that because `ApplyTokenOverrides` only covers tokens in the JSON.
+
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
 ### Token overrides for EVM swap simulation

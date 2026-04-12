@@ -2,6 +2,13 @@
 
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
+### Token overrides for EVM swap simulation
+- Ported `contracts/overrides.go` to work with lightclient StateView
+- `ApplyTokenOverrides(sv, sender, router, tokens)` sets balance + allowance
+  + hook/whitelist/code overrides directly on StateView storage slots
+- `EVMCallOn(sv, ...)` runs calls against shared StateView with snapshot/revert
+- formula-accuracy: 88/109 match (was 14/109 without overrides)
+
 ### Rewrite tools/discover and benchmarks/formula-accuracy
 - Both rewritten to use lightclient (EVMCall + StateView) instead of statedb
 - `tools/discover/`: formula registry discovery — probes formula vs EVM for

@@ -271,7 +271,88 @@ func EVMCall(
 	}
 
 	evm := vm.NewEVM(blockCtx, txCtx, sv, chainCfg, vm.Config{NoBaseFee: true})
-	ret, gasLeft, err := evm.StaticCall(vm.AccountRef(from), to, data, 30_000_000)
+	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, 30_000_000, new(uint256.Int))
+	gasUsed := uint64(30_000_000) - gasLeft
+	return ret, gasUsed, err
+}
+
+// EVMCallOn executes a call against an existing StateView. The StateView's
+// overlay accumulates changes from the call — use Snapshot/RevertToSnapshot
+// if you need isolation between calls, or accept the pollution.
+func EVMCallOn(
+	sv *StateView,
+	timestamp uint64,
+	baseFee *big.Int,
+	chainCfg *params.ChainConfig,
+	from, to common.Address,
+	data []byte,
+) ([]byte, uint64, error) {
+	if baseFee == nil {
+		baseFee = new(big.Int)
+	}
+	blockCtx := vm.BlockContext{
+		BlockNumber: new(big.Int).SetUint64(sv.Block()),
+		Time:        timestamp,
+		BaseFee:     baseFee,
+		CanTransfer: corethcore.CanTransfer,
+		Transfer:    corethcore.Transfer,
+		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
+		Difficulty:  new(big.Int),
+		GasLimit:    30_000_000,
+		Coinbase:    common.Address{},
+	}
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: new(big.Int).Set(baseFee),
+	}
+	snap := sv.Snapshot()
+	evm := vm.NewEVM(blockCtx, txCtx, sv, chainCfg, vm.Config{NoBaseFee: true})
+	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, 30_000_000, new(uint256.Int))
+	sv.RevertToSnapshot(snap)
+	gasUsed := uint64(30_000_000) - gasLeft
+	return ret, gasUsed, err
+}
+
+// EVMCallWithCode is like EVMCall but injects bytecode at the target address
+// before executing. Used for calling through proxies where the implementation
+// bytecode needs to be set directly (e.g., debugSwapSingle on HayabusaRouter).
+func EVMCallWithCode(
+	vs *VersionedState,
+	block uint64,
+	timestamp uint64,
+	baseFee *big.Int,
+	miss MissCallbacks,
+	chainCfg *params.ChainConfig,
+	from, to common.Address,
+	data []byte,
+	code []byte,
+) ([]byte, uint64, error) {
+	sv := NewStateView(vs, block, miss)
+	sv.SetCode(to, code)
+
+	if baseFee == nil {
+		baseFee = new(big.Int)
+	}
+
+	blockCtx := vm.BlockContext{
+		BlockNumber: new(big.Int).SetUint64(block),
+		Time:        timestamp,
+		BaseFee:     baseFee,
+		CanTransfer: corethcore.CanTransfer,
+		Transfer:    corethcore.Transfer,
+		GetHash:     func(n uint64) common.Hash { return common.Hash{} },
+		Difficulty:  new(big.Int),
+		GasLimit:    30_000_000,
+		Coinbase:    common.Address{},
+	}
+
+	txCtx := vm.TxContext{
+		Origin:   from,
+		GasPrice: new(big.Int).Set(baseFee),
+	}
+
+	evm := vm.NewEVM(blockCtx, txCtx, sv, chainCfg, vm.Config{NoBaseFee: true})
+	ret, gasLeft, err := evm.Call(vm.AccountRef(from), to, data, 30_000_000, new(uint256.Int))
 	gasUsed := uint64(30_000_000) - gasLeft
 	return ret, gasUsed, err
 }

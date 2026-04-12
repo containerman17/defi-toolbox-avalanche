@@ -29,6 +29,7 @@ import (
 )
 
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+var debugEVM = true
 
 var typeNames = map[int]string{
 	0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
@@ -111,9 +112,23 @@ func main() {
 	}
 
 	miss := fetcher.MissCallbacks(vs)
+	sv := lc.NewStateView(vs, headBlock, miss)
+
+	// Apply token overrides so EVM swap calls work (balance + allowance for sender).
+	allTokens := make([]common.Address, 0)
+	tokenSeen := make(map[common.Address]bool)
+	for _, p := range pools {
+		for _, t := range p.Tokens {
+			if !tokenSeen[t] {
+				tokenSeen[t] = true
+				allTokens = append(allTokens, t)
+			}
+		}
+	}
+	router.ApplyTokenOverrides(sv, DUMMY_SENDER, router.DeployedRouter, allTokens)
+	fmt.Fprintf(os.Stderr, "[bench] applied token overrides for %d tokens\n", len(allTokens))
 
 	// Build PoolManager.
-	sv := lc.NewStateView(vs, headBlock, miss)
 	reader := func(addr common.Address, slot common.Hash) common.Hash {
 		return sv.GetState(addr, slot)
 	}
@@ -161,7 +176,7 @@ func main() {
 
 	for i, job := range jobs {
 		// EVM quote.
-		evmOut := evmQuote(vs, headBlock, headTimestamp, baseFee, miss, chainCfg,
+		evmOut := evmQuote(sv, headTimestamp, baseFee, chainCfg,
 			job.pool.Address, job.pool.PoolType, job.tokenIn, job.tokenOut, job.amount, job.pool.ExtraData)
 
 		// Formula quote.
@@ -234,13 +249,20 @@ func main() {
 	}
 }
 
-func evmQuote(vs *lc.VersionedState, block, timestamp uint64, baseFee *big.Int,
-	miss lc.MissCallbacks, chainCfg *params.ChainConfig, poolAddr common.Address,
+func evmQuote(sv *lc.StateView, timestamp uint64, baseFee *big.Int,
+	chainCfg *params.ChainConfig, poolAddr common.Address,
 	poolType int, tokenIn, tokenOut common.Address, amount *uint256.Int, extraData string,
 ) *uint256.Int {
 	calldata := pathfinder.EncodeSwapSingleWithExtra(poolAddr, poolType, tokenIn, tokenOut, amount, extraData)
-	ret, _, err := lc.EVMCall(vs, block, timestamp, baseFee, miss, chainCfg, DUMMY_SENDER, router.DeployedRouter, calldata)
-	if err != nil || len(ret) < 32 {
+	ret, _, err := lc.EVMCallOn(sv, timestamp, baseFee, chainCfg,
+		DUMMY_SENDER, router.DeployedRouter, calldata)
+	if err != nil {
+		if debugEVM {
+			fmt.Fprintf(os.Stderr, "  EVM err: %v (pool=%s)\n", err, poolAddr.Hex()[:10])
+		}
+		return uint256.NewInt(0)
+	}
+	if len(ret) < 32 {
 		return uint256.NewInt(0)
 	}
 	var out uint256.Int

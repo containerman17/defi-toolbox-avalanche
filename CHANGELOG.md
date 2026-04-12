@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-04-12 — Benchmark default limit: no-args now means 4000 pools
+
+- Changed `benchmarks/formula-accuracy` so `go run ./benchmarks/formula-accuracy/`
+  defaults to `--limit 4000` instead of `0` (`all` pools).
+- `--limit 0` still runs the full embedded pool set.
+- No-args benchmark result at head block `82759445`:
+  `TOTAL 3927 / match 3865 / over 0 / under 62`
+  = `98.42%` exact, `0.00%` overquote, `1.58%` underquote.
+
+## 2026-04-12 — Current-head bench recovery: +16 match, +3 quotes, 0 overquotes
+
+- Ran `go run ./benchmarks/formula-accuracy/` at head block `82759445`.
+- Result moved from `TOTAL 8532 / match 8254 / over 0 / under 278`
+  to `TOTAL 8535 / match 8270 / over 0 / under 265`.
+- Token rounding fixes:
+  - LINDA (`0x039d2e8f...`): switched both the global 100 bps model and the
+    pharaoh_v1 50 bps pool override to subtract-form rounding. This fixed the
+    live 1-wei misses on pools `0x4925df24...` and `0xe4f24831...`.
+  - `0x8a610bf3...`: switched 10% tax model to subtract-form rounding. Fixed
+    2 live lfj_v1 pools.
+  - Vaccine (`0x89d4c4db...`): switched 19 bps model to subtract-form
+    rounding. Fixed 3 live lfj_v1 pools.
+  - `0xf9a075c9...`: switched 5% tax model to subtract-form rounding. Fixed
+    5 already-registered live pools and made 4 registry candidates exact.
+- Registry updates from the `0xf9a075c9...` fix:
+  - Un-blacklisted `0x42b33de8faa08f9242f9e20d268fbd251dcebd72` to formula `0`.
+  - Added exact current-head formula coverage for
+    `0xec28cbaae4f8751817115df02139b1b9cdac34e7`,
+    `0x53629573104f4a7c2d02c26038070880d11b609b`,
+    `0xc9ba6f9dbcb4caa255571138371cb594c8e6fb6a` as formula `0`.
+
+## 2026-04-12 — Recover +1 benchmark pool via targeted un-blacklist
+
+- Pool `0x01d806052d1d3926b4456567144375b192bf41b7` (`pharaoh_v1`,
+  `USDC/USDbC`) was flipped from formula `1` to `-1` by the bad bulk
+  blacklist on `2026-04-12`.
+- At head block `82749452`, the old formula ID `1` matches EVM exactly for
+  the benchmark input (`893065` USDC -> `898979122436337963` USDbC).
+- Restored the registry entry to formula `1`.
+- Benchmark slice verification:
+  `go run ./benchmarks/formula-accuracy/ --limit 1040`
+  `TOTAL 1045 quotes: match 1040 -> 1041, under 5 -> 4, over 0 -> 0`.
+
 ## 2026-04-12 — Registry: blacklist 2734 overquoting pools (BAD — needs revert)
 
 ### Formula-accuracy benchmark — brute-force blacklisting

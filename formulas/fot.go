@@ -283,8 +283,13 @@ var fotCalculators = map[string]fotCalc{
 		return fee
 	}),
 
-	// Vaccine: fee = amount * 19 / 10000 (0.19% = covidnineteenFee=19 bps)
-	"0x89d4c4dbcd477345f8fbb083d1194faeafba1522": fotBps(19),
+	// Vaccine: fee = amount * 19 / 10000 (0.19% = covidnineteenFee=19 bps),
+	// with subtract-form rounding.
+	"0x89d4c4dbcd477345f8fbb083d1194faeafba1522": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(19))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}),
 
 	// HOWDY: fee = floor(amount / 14)
 	"0x7b640a60daa4ee5fbc2ce81797c11d174daa3b4f": fotCustom(func(amount *big.Int) *big.Int {
@@ -365,16 +370,27 @@ var fotCalculators = map[string]fotCalc{
 	// 0xc9ac17de — 5% tax (500 bps), seen in sushiswap_v2, lfj_v1
 	"0xc9ac17de0c47129efb09224af75fcaff07608b7a": fotBps(500),
 
-	// 0xf9a075c9 — 5% tax (500 bps), seen in lfj_v1, partyswap
-	"0xf9a075c9647e91410bf6c402bdf166e1540f67f0": fotBps(500),
+	// 0xf9a075c9 — 5% tax (500 bps), seen in lfj_v1, partyswap.
+	// Current live pools match subtract-form rounding.
+	"0xf9a075c9647e91410bf6c402bdf166e1540f67f0": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(500))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}),
 
 	// 0xcc0cbc7a — 1% tax (100 bps), seen in pangolin_v2, lfj_v2
 	"0xcc0cbc7aad6e89ffbe5028dea24dd80ddeb8455b": fotBps(100),
 
 	// 0x039d2e8f (LINDA) — 1% tax (100 bps) on registered AMM pairs (lfj_v1 at slot 15).
 	// Unregistered pairs (e.g., pharaoh_v1) get the transfer fee of 50 bps.
+	// The token subtracts fee from the transfer amount, so use subtract-form
+	// rounding instead of the complement form.
 	// See FotPoolTokenOverrides for per-pool adjustments.
-	"0x039d2e8f097331278bd6c1415d839310e0d5ece4": fotBps(100),
+	"0x039d2e8f097331278bd6c1415d839310e0d5ece4": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(100))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}),
 
 	// 0x0512384c — 1% tax (100 bps)
 	"0x0512384c595ef182f3dacd8414e951c2fa7f6ee9": fotBps(100),
@@ -406,8 +422,12 @@ var fotCalculators = map[string]fotCalc{
 	// 0x4ba16daf — 10% tax (1000 bps)
 	"0x4ba16daf8ed418ded920c66e45cc3eaffde53ac7": fotBps(1000),
 
-	// 0x8a610bf3 — 10% tax (1000 bps)
-	"0x8a610bf3b64099a2bd9ef293838ba35986a3dfbb": fotBps(1000),
+	// 0x8a610bf3 — 10% tax (1000 bps), subtract-form rounding.
+	"0x8a610bf3b64099a2bd9ef293838ba35986a3dfbb": fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(1000))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}),
 
 	// 0x894aa2d0 — 10% tax (1000 bps)
 	"0x894aa2d0d3e63471c5ffbd22a8a95c8476826cf9": fotBps(1000),
@@ -550,7 +570,11 @@ var FotPoolTokenOverrides = map[fotPoolTokenKey]fotCalc{
 	// Pharaoh V1 pool 0xe4f2... is not in the token's AMM pair mapping (slot 11),
 	// so the token charges the transfer fee (buyMarketingFee=50 bps, slot 21) instead
 	// of buyTotalFees (100 bps).
-	{Pool: "0xe4f24831b8e525b7330dffbdb725c16af62847e2", Token: "0x039d2e8f097331278bd6c1415d839310e0d5ece4"}: fotBps(50),
+	{Pool: "0xe4f24831b8e525b7330dffbdb725c16af62847e2", Token: "0x039d2e8f097331278bd6c1415d839310e0d5ece4"}: fotCustom(func(amount *big.Int) *big.Int {
+		fee := new(big.Int).Mul(amount, big.NewInt(50))
+		fee.Div(fee, big.NewInt(10000))
+		return fee
+	}),
 }
 
 // FotRebasingTokens lists tokens that gain value over time (negative "tax"),

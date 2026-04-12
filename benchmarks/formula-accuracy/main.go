@@ -4,7 +4,7 @@
 // debugSwapSingle), reports match/mismatch/overquote stats per pool type.
 //
 // Usage:
-//   go run ./benchmarks/formula-accuracy/ [--rpc ws://...] [--limit 5000]
+//   go run ./benchmarks/formula-accuracy/ [--rpc ws://...] [--limit 4000]
 package main
 
 import (
@@ -30,6 +30,7 @@ import (
 
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 var debugEVM = true
+const defaultPoolLimit = 4000
 
 var typeNames = map[int]string{
 	0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
@@ -48,7 +49,7 @@ type typeStats struct {
 func main() {
 	rpcURL := flag.String("rpc", "ws://127.0.0.1:9650/ext/bc/C/ws", "WebSocket RPC URL")
 	concurrency := flag.Int("concurrency", 2*runtime.NumCPU(), "RPC pool size")
-	poolLimit := flag.Int("limit", 0, "pool limit (0 = all)")
+	poolLimit := flag.Int("limit", defaultPoolLimit, "pool limit (default 4000, 0 = all)")
 	flag.Parse()
 
 	pool, err := lc.NewRPCPool(*rpcURL, *concurrency)

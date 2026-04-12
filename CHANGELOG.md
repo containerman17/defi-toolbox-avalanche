@@ -3,8 +3,14 @@
 ## 2026-04-11 — Quoter rewrite + verify tool improvements
 
 ### Cleanup
-- Archived `cmd/thin-client/`, `examples/go/thin-client/`, `statedb/callstate_test.go`
-  — superseded by lightclient. Removed `AGENTS.md` symlink.
+- Archived `statedb/`, `cmd/state-server/`, `cmd/wasm-sdk/`, `examples/`,
+  `tools/token-pricer/`, `contracts/overrides.go` — all tied to old state-server
+  architecture, replaced by lightclient
+- Archived `benchmarks/formula-accuracy/`, `tools/discover/` — need rewrite to
+  use lightclient (formulas + pool discovery are still needed, just the tooling)
+- Removed statedb import from `pathfinder/bfs.go` — only formula-only BFS
+  remains, EVM-verified routing moved to archive
+- Minimal `contracts/contracts.go` — just DeployedRouter + DeployedBlock
 
 ### Formula-only BFS
 - Added `FindBestFormulaRoute` / `FindTopFormulaRoutes` to pathfinder — BFS

@@ -4,7 +4,8 @@
 // debugSwapSingle), reports match/mismatch/overquote stats per pool type.
 //
 // Usage:
-//   go run ./benchmarks/formula-accuracy/ [--rpc ws://...] [--limit 4000]
+//
+//	go run ./benchmarks/formula-accuracy/ [--rpc ws://...] [--limit 4000]
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,12 +32,31 @@ import (
 
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
 var debugEVM = true
+
 const defaultPoolLimit = 4000
 
 var typeNames = map[int]string{
-	0: "uniswap_v3", 1: "algebra", 2: "lfj_v1", 3: "lfj_v2",
-	4: "dodo", 5: "woofi_v2", 6: "balancer_v3", 7: "pharaoh_v1",
-	8: "v2", 9: "uniswap_v4", 16: "balancer_v2",
+	0:  "uniswap_v3",
+	1:  "algebra",
+	2:  "lfj_v1",
+	3:  "lfj_v2",
+	4:  "dodo",
+	5:  "woofi_v2",
+	6:  "balancer_v3",
+	7:  "pharaoh_v1",
+	8:  "v2",
+	9:  "uniswap_v4",
+	10: "erc4626",
+	11: "balancer_v3_buffered",
+	12: "wombat",
+	13: "platypus",
+	14: "woopp_v2",
+	15: "transfer_from",
+	16: "balancer_v2",
+	17: "cavalre",
+	18: "kyber_dmm",
+	19: "synapse",
+	20: "trident",
 }
 
 type typeStats struct {
@@ -150,6 +171,7 @@ func main() {
 		amount   *uint256.Int
 	}
 	var jobs []quoteJob
+	jobPools := make(map[common.Address]struct{})
 	for _, p := range pools {
 		if _, known := registry.GetFormulaID(p.Address); !known {
 			continue
@@ -157,18 +179,24 @@ func main() {
 		if len(p.Tokens) < 2 {
 			continue
 		}
+		addedJob := false
 		for ti, tok := range p.Tokens {
 			if amt, ok := tokenAmounts[tok]; ok {
 				for tj := range p.Tokens {
 					if ti != tj {
 						jobs = append(jobs, quoteJob{p, tok, p.Tokens[tj], amt})
+						addedJob = true
 					}
 				}
 				break // one direction per pool is enough
 			}
 		}
+		if addedJob {
+			jobPools[p.Address] = struct{}{}
+		}
 	}
-	fmt.Fprintf(os.Stderr, "[bench] %d quote jobs across %d pools\n", len(jobs), len(pools))
+	fmt.Fprintf(os.Stderr, "[bench] %d quote jobs across %d eligible pools (%d input pools)\n",
+		len(jobs), len(jobPools), len(pools))
 
 	// Run quotes.
 	byType := make(map[int]*typeStats)
@@ -225,10 +253,15 @@ func main() {
 	fmt.Fprintf(os.Stderr, "\n[bench] done in %v\n\n", elapsed.Round(time.Millisecond))
 
 	// Print results.
-	totalQuotes, totalMatch, totalOver, totalUnder := 0, 0, 0, 0
+	totalQuotes, totalMatch, totalOver, totalUnder, totalZero := 0, 0, 0, 0, 0
 	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "type", "quotes", "match", "over", "under", "zero")
 	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "----", "------", "-----", "----", "-----", "----")
-	for _, pt := range []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16} {
+	poolTypes := make([]int, 0, len(byType))
+	for pt := range byType {
+		poolTypes = append(poolTypes, pt)
+	}
+	sort.Ints(poolTypes)
+	for _, pt := range poolTypes {
 		st := byType[pt]
 		if st == nil {
 			continue
@@ -242,12 +275,28 @@ func main() {
 		totalMatch += st.Match
 		totalOver += st.Overquote
 		totalUnder += st.Underquote
+		totalZero += st.Zero
 	}
-	fmt.Printf("%-15s %6d %6d %6d %6d\n", "TOTAL", totalQuotes, totalMatch, totalOver, totalUnder)
+	fmt.Printf("%-15s %6d %6d %6d %6d %6d\n", "TOTAL", totalQuotes, totalMatch, totalOver, totalUnder, totalZero)
+	fmt.Printf("\ninput_pools=%d eligible_pools=%d quote_jobs=%d\n", len(pools), len(jobPools), totalQuotes)
+	fmt.Printf("exact=%.2f%% over=%.2f%% under=%.2f%% zero=%.2f%% non_zero=%.2f%%\n",
+		pct(totalMatch, totalQuotes), pct(totalOver, totalQuotes), pct(totalUnder, totalQuotes),
+		pct(totalZero, totalQuotes), pct(totalQuotes-totalZero, totalQuotes))
+
+	if totalQuotes != len(jobs) {
+		fmt.Fprintf(os.Stderr, "\nWARNING: summarized %d jobs, but ran %d jobs\n", totalQuotes, len(jobs))
+	}
 
 	if totalOver > 0 {
 		fmt.Fprintf(os.Stderr, "\nWARNING: %d overquotes detected!\n", totalOver)
 	}
+}
+
+func pct(numer, denom int) float64 {
+	if denom == 0 {
+		return 0
+	}
+	return 100 * float64(numer) / float64(denom)
 }
 
 func evmQuote(sv *lc.StateView, timestamp uint64, baseFee *big.Int,

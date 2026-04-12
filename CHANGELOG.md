@@ -1,13 +1,31 @@
 # Changelog
 
+## 2026-04-12 — Bench: +8 non-zero on the default 4000-pool run
+
+- Added benchmark input amount
+  `0xbc4f2cb9b351ee602be4e2bc966832a59784c412:0xde0b6b3a7640000`
+  (`SaintGermain`, `1e18`) to make more current-head `lfj_v1` pools eligible.
+- Verified with `go run ./benchmarks/formula-accuracy/` at head block `82763169`.
+- Result moved from
+  `TOTAL 3935 / match 3873 / over 0 / under 62 / zero 910`
+  to
+  `TOTAL 3944 / match 3882 / over 0 / under 62 / zero 911`.
+- Derived non-zero coverage moved from `3025` to `3033` quote jobs
+  (`76.87%` -> `76.90%`) with `overquote` held at `0.00%`.
+
 ## 2026-04-12 — Benchmark default limit: no-args now means 4000 pools
 
 - Changed `benchmarks/formula-accuracy` so `go run ./benchmarks/formula-accuracy/`
   defaults to `--limit 4000` instead of `0` (`all` pools).
 - `--limit 0` still runs the full embedded pool set.
-- No-args benchmark result at head block `82759445`:
-  `TOTAL 3927 / match 3865 / over 0 / under 62`
-  = `98.42%` exact, `0.00%` overquote, `1.58%` underquote.
+- Fixed the summary output to aggregate all observed pool types instead of a
+  hard-coded subset. `TOTAL` now equals real `quote_jobs`, and the benchmark
+  prints `input_pools`, `eligible_pools`, `quote_jobs`, `zero`, and `non_zero`
+  explicitly.
+- No-args benchmark result at head block `82762181`:
+  `TOTAL 3935 / match 3873 / over 0 / under 62 / zero 910`
+  across `4000` input pools, `3895` eligible pools, and `3935` quote jobs
+  = `98.42%` exact, `0.00%` overquote, `1.58%` underquote, `76.87%` non-zero.
 
 ## 2026-04-12 — Current-head bench recovery: +16 match, +3 quotes, 0 overquotes
 

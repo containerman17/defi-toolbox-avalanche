@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-04-13 — Swap-replay: archive TS harness, replace with Go log scanner
+
+- Archived the old TypeScript route-reconstruction and payload-based replay
+  harness under `archive/benchmarks/swap-replay-legacy/`.
+- Replaced the live `benchmarks/swap-replay/` benchmark with a minimal Go
+  benchmark that fetches LFJ router swap logs directly from RPC on every run.
+- The live benchmark now filters `eth_getLogs` on LFJ router
+  `0x45a62b090df48243f12a21897e7ed91863e2c86b` and swap topic
+  `0xd9a8cfa901e597f6bbb7ea94478cf9ad6f38d0dc3fd24d493e99cb40692e39f1`,
+  starting from deployment block `80091636`.
+- Removed tx-list inputs and temp tx-list files from the live benchmark; there
+  are no more `txs.txt` / `txs_recent.txt` files in the active swap-replay path.
+- Added on-demand token `symbol()`, `name()`, and `decimals()` fetching with
+  cached pretty-printing for input/output assets and amounts.
+- Verified with `go run ./benchmarks/swap-replay/ --limit 3` at latest block
+  `82806673`.
+
 ## 2026-04-12 — Bench: +8 non-zero on the default 4000-pool run
 
 - Added benchmark input amount

@@ -326,59 +326,69 @@ func main() {
 		}
 
 		origOK++
+		oracleOut := decodePositiveAmountOut(ret)
+
 		routerStatus := "UNSUPPORTED"
 		routerExtra := ""
 		quoteStatus := "UNSUPPORTED"
 		quoteExtra := ""
-		traced, traceErr := traceOriginalSwap(rpc, tx)
-		if traceErr != nil {
+
+		if oracleOut == nil {
 			routerUnsupported++
 			quoteUnsupported++
-			routerExtra = fmt.Sprintf(" routerReason=%s", traceErr.Error())
-			quoteExtra = fmt.Sprintf(" quoteReason=%s", traceErr.Error())
+			routerExtra = fmt.Sprintf(" routerReason=undecoded_return(%d bytes)", len(ret))
+			quoteExtra = fmt.Sprintf(" quoteReason=undecoded_return(%d bytes)", len(ret))
 		} else {
-			outcome, routeErr := replaySingleRoute(rpc, catalog, clients, *wsURL, *dataDir, tx, traced)
-			if routeErr != nil {
+			traced, traceErr := traceOriginalSwap(rpc, tx)
+			if traceErr != nil {
 				routerUnsupported++
-				routerExtra = fmt.Sprintf(" routerReason=%s", routeErr.Error())
+				routerExtra = fmt.Sprintf(" routerReason=%s", traceErr.Error())
 			} else {
-				route := formatRoute(outcome.Steps, rpc)
-				switch outcome.ActualOut.Cmp(outcome.ExpectedOut) {
-				case 0:
-					routerStatus = "MATCH"
-					routerExact++
-				case -1:
-					routerStatus = "UNDER"
-					routerUnder++
-				default:
-					routerStatus = "OVER"
-					routerOver++
+				outcome, routeErr := replaySingleRoute(rpc, catalog, clients, *wsURL, *dataDir, tx, traced, oracleOut)
+				if routeErr != nil {
+					routerUnsupported++
+					routerExtra = fmt.Sprintf(" routerReason=%s", routeErr.Error())
+				} else {
+					route := formatRoute(outcome.Steps, rpc)
+					switch outcome.ActualOut.Cmp(oracleOut) {
+					case 0:
+						routerStatus = "MATCH"
+						routerExact++
+					case -1:
+						routerStatus = "UNDER"
+						routerUnder++
+					default:
+						routerStatus = "OVER"
+						routerOver++
+					}
+					if withinOnePPMOrBetter(outcome.ActualOut, oracleOut) {
+						routerPass1PPM++
+					}
+					routerExtra = fmt.Sprintf(" router=%s expected=%s actual=%s hops=%d route=%s",
+						routerStatus,
+						formatAmount(oracleOut, outMeta),
+						formatAmount(outcome.ActualOut, outMeta),
+						len(outcome.Steps),
+						route,
+					)
 				}
-				if withinOnePPMOrBetter(outcome.ActualOut, outcome.ExpectedOut) {
-					routerPass1PPM++
-				}
-				routerExtra = fmt.Sprintf(" router=%s expected=%s actual=%s hops=%d route=%s",
-					routerStatus,
-					formatAmount(outcome.ExpectedOut, outMeta),
-					formatAmount(outcome.ActualOut, outMeta),
-					len(outcome.Steps),
-					route,
-				)
 			}
 
 			parentBlock := tx.Block - 1
+			inputToken := normalizeRouteToken(tx.Summary.InputToken)
+			outputToken := normalizeRouteToken(tx.Summary.OutputToken)
 			client, err := lightClientForBlock(clients, *wsURL, *dataDir, parentBlock)
 			if err != nil {
 				quoteUnsupported++
 				quoteExtra = fmt.Sprintf(" quoteReason=lightclient: %s", err.Error())
 			} else {
-				quoted, quoteErr := blindQuotePair(q, client, traced.InputToken, traced.OutputToken, tx.Summary.AmountIn)
+				quoted, quoteErr := blindQuotePair(q, client, inputToken, outputToken, tx.Summary.AmountIn)
 				if quoteErr != nil {
 					quoteUnsupported++
 					quoteExtra = fmt.Sprintf(" quoteReason=%s", quoteErr.Error())
 				} else {
 					quoteRoute := formatQuoteRoute(quoted.Route, rpc)
-					switch quoted.ActualOut.Cmp(traced.ExpectedOut) {
+					switch quoted.ActualOut.Cmp(oracleOut) {
 					case 0:
 						quoteStatus = "MATCH"
 						quoteExact++
@@ -389,12 +399,12 @@ func main() {
 						quoteStatus = "OVER"
 						quoteOver++
 					}
-					if withinOnePPMOrBetter(quoted.ActualOut, traced.ExpectedOut) {
+					if withinOnePPMOrBetter(quoted.ActualOut, oracleOut) {
 						quotePass1PPM++
 					}
 					quoteExtra = fmt.Sprintf(" quote=%s expected=%s quoted=%s actual=%s hops=%d route=%s",
 						quoteStatus,
-						formatAmount(traced.ExpectedOut, outMeta),
+						formatAmount(oracleOut, outMeta),
 						formatAmount(quoted.QuotedOut, outMeta),
 						formatAmount(quoted.ActualOut, outMeta),
 						len(quoted.Route.Steps),
@@ -404,26 +414,13 @@ func main() {
 			}
 		}
 
-		if simulatedOut := decodePositiveAmountOut(ret); simulatedOut != nil {
-			fmt.Printf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s%s\n",
-				tx.Hash,
-				tx.Block,
-				tokenLabel(tx.Summary.InputToken, inMeta),
-				formatAmount(tx.Summary.AmountIn, inMeta),
-				tokenLabel(tx.Summary.OutputToken, outMeta),
-				formatAmount(simulatedOut, outMeta),
-				routerExtra,
-				quoteExtra,
-			)
-			continue
-		}
-		fmt.Printf("%s block=%d orig=OK in=%s amountIn=%s out=%s returnBytes=%d%s%s\n",
+		fmt.Printf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s%s\n",
 			tx.Hash,
 			tx.Block,
 			tokenLabel(tx.Summary.InputToken, inMeta),
 			formatAmount(tx.Summary.AmountIn, inMeta),
 			tokenLabel(tx.Summary.OutputToken, outMeta),
-			len(ret),
+			formatAmount(oracleOut, outMeta),
 			routerExtra,
 			quoteExtra,
 		)
@@ -568,7 +565,7 @@ func formatQuoteRoute(route *pf.Route, rpc *rpcClient) string {
 	return strings.Join(parts, " -> ")
 }
 
-func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx, traced *traceReplay) (*replayOutcome, error) {
+func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx, traced *traceReplay, oracleOut *big.Int) (*replayOutcome, error) {
 	parentBlock := tx.Block - 1
 
 	exclude := map[common.Address]bool{
@@ -607,7 +604,7 @@ func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]
 	}
 
 	return &replayOutcome{
-		ExpectedOut: traced.ExpectedOut,
+		ExpectedOut: oracleOut,
 		ActualOut:   actualOut,
 		Steps:       steps,
 	}, nil

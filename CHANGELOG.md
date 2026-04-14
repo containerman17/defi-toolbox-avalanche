@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-04-14 — Swap-replay: score against lightclient replay, not debug_traceCall
+
+- The benchmark previously compared router/quote replay output against the
+  `expectedOut` extracted from `debug_traceCall` transfer logs of the original
+  tx. This was wrong: the trace runs through the original sender/router context,
+  while the router replay runs through Hayabusa with a synthetic sender and
+  token overrides — different execution environments.
+- Now the oracle is the decoded output of `replayOriginalTx`, which runs the
+  original tx calldata through the lightclient at `block - 1` — same execution
+  environment as the router and quote replays.
+- The trace is still used for route reconstruction (extracting pool hops from
+  transfer logs), but no longer for scoring.
+- Verified with `go run ./benchmarks/swap-replay/ --limit 3`:
+  `SUMMARY total=3 orig_ok=3 orig_reverted=0 router_exact=3 router_under=0 router_over=0 router_unsupported=0 router_pass_1ppm=3/3 quote_exact=0 quote_under=3 quote_over=0 quote_unsupported=0 quote_pass_1ppm=0/3`.
+
 ## 2026-04-13 — Archive split search and old quote-bench
 
 - Archived the old split-routing merge implementation from `pathfinder/` under

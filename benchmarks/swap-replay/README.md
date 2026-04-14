@@ -3,14 +3,17 @@
 Go swap-replay benchmark.
 
 Each run fetches LFJ swap logs directly from RPC, starting at the Hayabusa
-router deployment block, then simulates the original transaction payload
+router deployment block, then replays the original transaction payload
 (`from`, `to`, `data`, `value`) at `block - 1` on fixed-block lightclient
-state. It then traces that same `block - 1` simulation, reconstructs a
-single-path route from the trace transfers when possible, and replays the route
-through HayabusaRouter on the same fixed-block state. Finally, it runs the
-no-split BFS pathfinder with only `tokenIn`, `tokenOut`, and `amountIn`,
-replays the found route through HayabusaRouter on the same fixed-block state,
-and compares that executed output against the traced oracle.
+state. The decoded output of that replay is the scoring oracle.
+
+It then traces the original tx at `block - 1` via `debug_traceCall` to
+reconstruct a single-path route from the trace transfers, and replays the
+reconstructed route through HayabusaRouter on the same fixed-block state.
+Finally, it runs the no-split BFS pathfinder with only `tokenIn`, `tokenOut`,
+and `amountIn`, replays the found route through HayabusaRouter on the same
+fixed-block state. Both passes compare their executed output against the
+lightclient replay oracle.
 
 There are no tx list inputs and no mode flags in the live benchmark.
 

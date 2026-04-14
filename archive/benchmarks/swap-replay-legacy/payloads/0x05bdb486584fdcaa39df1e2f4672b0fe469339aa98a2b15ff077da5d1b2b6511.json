@@ -1,0 +1,13 @@
+{
+  "block": 82703776,
+  "txHash": "0x05bdb486584fdcaa39df1e2f4672b0fe469339aa98a2b15ff077da5d1b2b6511",
+  "source": "lfj",
+  "isSplit": false,
+  "inputToken": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+  "outputToken": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+  "amountIn": "5000000000000000000",
+  "expectedOut": "47409898",
+  "gasUsed": 457357,
+  "supported": false,
+  "unsupportedReason": "no swap events detected"
+}

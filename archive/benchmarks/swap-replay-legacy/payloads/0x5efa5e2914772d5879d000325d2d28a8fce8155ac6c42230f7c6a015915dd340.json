@@ -1,0 +1,49 @@
+{
+  "block": 82704118,
+  "txHash": "0x5efa5e2914772d5879d000325d2d28a8fce8155ac6c42230f7c6a015915dd340",
+  "source": "lfj",
+  "isSplit": true,
+  "inputToken": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+  "outputToken": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+  "amountIn": "55000000000000000000",
+  "expectedOut": "522647884",
+  "gasUsed": 315826,
+  "supported": true,
+  "steps": [
+    {
+      "amountIn": "27500000000000000000",
+      "pools": [
+        "0x864d4e5ee7318e97483db7eb0912e09f161516ea"
+      ],
+      "poolTypes": [
+        3
+      ],
+      "tokens": [
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "lfj_v2(WAVAX→USDC)"
+    },
+    {
+      "amountIn": "27500000000000000000",
+      "pools": [
+        "0xfae3f424a0a47706811521e3ee268f00cfb5c45e"
+      ],
+      "poolTypes": [
+        0
+      ],
+      "tokens": [
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "uniswap_v3(WAVAX→USDC)"
+    }
+  ],
+  "route": "SPLIT(2): [27500000000000000000] lfj_v2(WAVAX→USDC) → [27500000000000000000] uniswap_v3(WAVAX→USDC)"
+}

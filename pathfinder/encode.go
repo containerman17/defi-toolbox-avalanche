@@ -51,12 +51,14 @@ func encodeV4ExtraData(extraData string) []byte {
 	fmt.Sscan(parts["ts"], &tickSpacing)
 
 	hooks := common.HexToAddress(parts["hooks"])
+	var wrapNative big.Int
+	fmt.Sscan(parts["wrapNative"], &wrapNative)
 
 	// ABI-encode: 4 words = 128 bytes
 	// word 0: fee (uint256)
 	// word 1: tickSpacing (int256, sign-extended)
 	// word 2: hooks (address, left-padded)
-	// word 3: wrapNative (uint256, always 0 for benchmark)
+	// word 3: wrapNative (uint256)
 	buf := make([]byte, 128)
 	writeWord(buf, 0, &fee)
 	// tickSpacing as int256: if negative, sign-extend to 32 bytes
@@ -69,9 +71,97 @@ func encodeV4ExtraData(extraData string) []byte {
 		writeWord(buf, 32, twos)
 	}
 	writeAddress(buf, 64, hooks)
-	// word 3: wrapNative = 0 (already zeroed)
+	writeWord(buf, 96, &wrapNative)
 
 	return buf
+}
+
+func encodeBufferedExtraData(extraData string) []byte {
+	if strings.HasPrefix(extraData, "0x") {
+		return common.FromHex(extraData)
+	}
+	parts := make(map[string]string)
+	for _, kv := range strings.Split(extraData, ",") {
+		eq := strings.IndexByte(kv, '=')
+		if eq > 0 {
+			parts[kv[:eq]] = kv[eq+1:]
+		}
+	}
+	buf := make([]byte, 96)
+	writeAddress(buf, 0, common.HexToAddress(parts["wi"]))
+	writeAddress(buf, 32, common.HexToAddress(parts["bp"]))
+	writeAddress(buf, 64, common.HexToAddress(parts["wo"]))
+	return buf
+}
+
+func encodeUint256ExtraData(value string) []byte {
+	raw := strings.TrimSpace(value)
+	raw = strings.TrimPrefix(raw, "fee=")
+	n := new(big.Int)
+	fmt.Sscan(raw, n)
+	buf := make([]byte, 32)
+	writeWord(buf, 0, n)
+	return buf
+}
+
+func encodeAddressExtraData(value string) []byte {
+	addr := common.HexToAddress(strings.TrimPrefix(strings.TrimSpace(value), "bento="))
+	buf := make([]byte, 32)
+	writeAddress(buf, 0, addr)
+	return buf
+}
+
+func encodeBytes32ExtraData(value string) []byte {
+	raw := strings.TrimPrefix(strings.TrimSpace(value), "poolId=")
+	hash := common.HexToHash(raw)
+	buf := make([]byte, 32)
+	copy(buf, hash[:])
+	return buf
+}
+
+func encodeSynapseExtraData(extraData string) []byte {
+	parts := make(map[string]string)
+	for _, kv := range strings.Split(extraData, ",") {
+		eq := strings.IndexByte(kv, '=')
+		if eq > 0 {
+			parts[kv[:eq]] = kv[eq+1:]
+		}
+	}
+	var fromIdx, toIdx uint64
+	fmt.Sscan(parts["from"], &fromIdx)
+	fmt.Sscan(parts["to"], &toIdx)
+	buf := make([]byte, 64)
+	writeWordU64(buf, 0, fromIdx)
+	writeWordU64(buf, 32, toIdx)
+	return buf
+}
+
+func encodeStepExtraData(pool common.Address, poolType int, extraData string) ([]byte, common.Address) {
+	if extraData == "" {
+		return nil, pool
+	}
+	switch poolType {
+	case 9:
+		return encodeV4ExtraData(extraData), V4PoolManager
+	case 11:
+		return encodeBufferedExtraData(extraData), pool
+	case 16:
+		return encodeBytes32ExtraData(extraData), pool
+	case 17:
+		return encodeAddressExtraData(extraData), pool
+	case 19:
+		return encodeSynapseExtraData(extraData), pool
+	case 20:
+		return encodeAddressExtraData(extraData), pool
+	default:
+		if strings.HasPrefix(extraData, "0x") {
+			return common.FromHex(extraData), pool
+		}
+		if strings.HasPrefix(extraData, "fee=") {
+			return encodeUint256ExtraData(extraData), pool
+		}
+		return nil, pool
+	}
 }
 
 func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut common.Address, amountIn *uint256.Int, extraData []byte) []byte {
@@ -93,17 +183,17 @@ func encodeSwapSingleInner(pool common.Address, poolType int, tokenIn, tokenOut 
 	copy(data[0:4], debugSwapSingleSelector[:])
 
 	pos := 4
-	writeAddress(data, pos, pool)            // pool
+	writeAddress(data, pos, pool) // pool
 	pos += 32
 	writeWordU64(data, pos, uint64(poolType)) // poolType (uint8)
 	pos += 32
-	writeAddress(data, pos, tokenIn)          // tokenIn
+	writeAddress(data, pos, tokenIn) // tokenIn
 	pos += 32
-	writeAddress(data, pos, tokenOut)         // tokenOut
+	writeAddress(data, pos, tokenOut) // tokenOut
 	pos += 32
-	writeUint256(data, pos, amountIn)         // amountIn
+	writeUint256(data, pos, amountIn) // amountIn
 	pos += 32
-	writeWordU64(data, pos, 192)              // extraData offset (6 * 32 = 192 from start of params)
+	writeWordU64(data, pos, 192) // extraData offset (6 * 32 = 192 from start of params)
 	pos += 32
 	writeWordU64(data, pos, uint64(extraLen)) // extraData length
 	pos += 32
@@ -152,10 +242,7 @@ func encodeSwapMultiInner(
 	copy(addrs, poolAddrs)
 	encodedExtras := make([][]byte, n)
 	for i := range extraDatas {
-		if poolTypes[i] == 9 && extraDatas[i] != "" {
-			encodedExtras[i] = encodeV4ExtraData(extraDatas[i])
-			addrs[i] = V4PoolManager
-		}
+		encodedExtras[i], addrs[i] = encodeStepExtraData(addrs[i], poolTypes[i], extraDatas[i])
 	}
 
 	nTokenPairs := len(tokenPairs)
@@ -318,10 +405,7 @@ func encodeSwapRaw(
 	copy(addrs, poolAddrs)
 	encodedExtras := make([][]byte, n)
 	for i := range extraDatas {
-		if poolTypes[i] == 9 && extraDatas[i] != "" {
-			encodedExtras[i] = encodeV4ExtraData(extraDatas[i])
-			addrs[i] = V4PoolManager
-		}
+		encodedExtras[i], addrs[i] = encodeStepExtraData(addrs[i], poolTypes[i], extraDatas[i])
 	}
 
 	nTokenPairs := len(tokenPairs)

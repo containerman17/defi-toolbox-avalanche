@@ -21,6 +21,7 @@ func main() {
     client, err := lightclient.New(lightclient.Config{
         DataDir: "./data",
         // RPCURL defaults to ws://127.0.0.1:9650/ext/bc/C/ws
+        // FixedBlock defaults to 0 (live-following mode)
         // Concurrency defaults to 2 * NumCPU
     })
     if err != nil {
@@ -42,6 +43,26 @@ func main() {
     fmt.Printf("result=%x gas=%d\n", ret, gas)
 }
 ```
+
+To pin the client to a single block instead of following live head:
+
+```go
+client, err := lightclient.New(lightclient.Config{
+    DataDir:    "./data",
+    FixedBlock: 82067033,
+})
+if err != nil {
+    log.Fatal(err)
+}
+if err := client.Start(context.Background()); err != nil {
+    log.Fatal(err)
+}
+defer client.Close()
+// Start returns immediately in fixed mode. State fills lazily during calls.
+```
+
+In fixed-block mode, snapshots are stored under `DataDir/<block>.snapshot`.
+Live mode continues to use `DataDir/state.snapshot`.
 
 ## Architecture
 

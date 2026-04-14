@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-04-13 — Archive split search and old quote-bench
+
+- Archived the old split-routing merge implementation from `pathfinder/` under
+  `archive/pathfinder/` as `.go.txt` source snapshots.
+- Archived the split-routing tests from `pathfinder/` under `archive/pathfinder/`
+  as `.go.txt`.
+- Archived `tools/quote-bench/main.go` under `archive/tools/quote-bench/`
+  as `main.go.txt`.
+- Replaced active `pathfinder/merge.go` with a simple fallback that returns the
+  first single route unchanged, with no split refinement or merging.
+
+## 2026-04-13 — Swap-replay: add blind pathfinding pass
+
+- Added a third pass to the live Go `swap-replay` benchmark: after tracing the
+  original transaction at `block - 1`, it now runs the no-split BFS quoter from
+  only `tokenIn`, `tokenOut`, and `amountIn`, with no route hints from the trace.
+- The found path is no longer judged by formula output alone. The benchmark now
+  replays the found route through HayabusaRouter on the same fixed-block
+  lightclient state and compares that executed output to the traced oracle.
+- Added blind-quote summary counters to the benchmark output:
+  `quote_exact`, `quote_under`, `quote_over`, `quote_unsupported`,
+  `quote_pass_1ppm=<pass>/<total>`.
+- Verified on a 3-item sample with:
+  `go run ./benchmarks/swap-replay/ --limit 3`
+  -> `SUMMARY total=3 orig_ok=3 orig_reverted=0 router_exact=3 router_under=0 router_over=0 router_unsupported=0 router_pass_1ppm=3/3 quote_exact=0 quote_under=3 quote_over=0 quote_unsupported=0 quote_pass_1ppm=0/3`.
+
+## 2026-04-13 — Swap-replay: single benchmark now simulates original txs at `block-1`
+
+- Changed the live Go `swap-replay` benchmark so it now always simulates the
+  original transaction payload (`from`, `to`, `data`, `value`) at `block - 1`
+  on fixed-block lightclient state.
+- Added a second in-benchmark pass that traces the same `block - 1`
+  simulation via `debug_traceCall`, reconstructs a single-path route from
+  trace transfers, and replays that route through HayabusaRouter on fixed-block
+  lightclient state.
+- Removed the live CLI mode split; there is no `--replay` / `--follow-route`
+  branch in the active benchmark anymore.
+- Moved the default scan start to `contracts/address.json` deployment block
+  `82067033`, which matches the router benchmark window and avoids the node's
+  unavailable historical state before that point.
+- Verified with `go run ./benchmarks/swap-replay/ --limit 50`:
+  `SUMMARY total=50 ok=50 reverted=0`.
+- Verified the new router-replay pass with `go run ./benchmarks/swap-replay/ --limit 10`:
+  `SUMMARY total=10 orig_ok=10 orig_reverted=0 router_exact=5 router_under=0 router_over=2 router_unsupported=3`.
+
+## 2026-04-13 — Lightclient: add fixed-block mode
+
+- Added `Config.FixedBlock uint64` to `lightclient`.
+- `FixedBlock == 0` keeps the current live-following behavior.
+- `FixedBlock != 0` now pins the client to one block:
+  `Start()` skips `newHeads`, loads the block snapshot if present, otherwise
+  pins immediately and fills state lazily on demand during calls.
+- In fixed mode, `Call(..., 0)` resolves to the configured fixed block,
+  and calls targeting any other block now return an error.
+- Snapshot naming is now mode-aware:
+  live mode uses `DataDir/state.snapshot`,
+  fixed mode uses `DataDir/<block>.snapshot`.
+- Added `LightClient.Close()` to persist the current snapshot and close the RPC pool.
+
 ## 2026-04-13 — Swap-replay: archive TS harness, replace with Go log scanner
 
 - Archived the old TypeScript route-reconstruction and payload-based replay

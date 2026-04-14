@@ -1,0 +1,26 @@
+{
+  "block": 82705944,
+  "txHash": "0xaa7baa8e522d17d6747b1f781be5fd3e8da3c4feb0079fa9357a63dce745dda1",
+  "source": "lfj",
+  "isSplit": false,
+  "inputToken": "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+  "outputToken": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+  "amountIn": "10000000000000000000",
+  "expectedOut": "2439123044154903098116",
+  "gasUsed": 566045,
+  "supported": true,
+  "pools": [
+    "0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7"
+  ],
+  "poolTypes": [
+    5
+  ],
+  "tokens": [
+    "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+    "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+  ],
+  "extraDatas": [
+    ""
+  ],
+  "route": "woofi_v2(WETH.e→WAVAX)"
+}

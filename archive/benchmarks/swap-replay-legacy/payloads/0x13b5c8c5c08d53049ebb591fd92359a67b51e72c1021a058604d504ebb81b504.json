@@ -1,0 +1,34 @@
+{
+  "block": 82700526,
+  "txHash": "0x13b5c8c5c08d53049ebb591fd92359a67b51e72c1021a058604d504ebb81b504",
+  "source": "lfj",
+  "isSplit": false,
+  "inputToken": "0x13a466998ce03db73abc2d4df3bbd845ed1f28e7",
+  "outputToken": "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+  "amountIn": "44648958835185689467",
+  "expectedOut": "1109291",
+  "gasUsed": 669179,
+  "supported": true,
+  "pools": [
+    "0xabfc76e5126941ab22858906b9d65e4b09fb3d1a",
+    "0x49f17431f33c640f1e9a8a16bab65103f5748fe3",
+    "0x9bfe3108cc16d17a9ec65545a0f50b2ca1c970c0"
+  ],
+  "poolTypes": [
+    0,
+    0,
+    0
+  ],
+  "tokens": [
+    "0x13a466998ce03db73abc2d4df3bbd845ed1f28e7",
+    "0x26e9dbe75aed331e41272bece932ff1b48926ca9",
+    "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+    "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7"
+  ],
+  "extraDatas": [
+    "",
+    "",
+    ""
+  ],
+  "route": "pharaoh_v3(0x13a46699→0x26e9dbe7) → pharaoh_v3(0x26e9dbe7→USDC) → pharaoh_v3(USDC→USDt)"
+}

@@ -8,6 +8,7 @@ node_modules
 cache/
 archive/quoting-go/quoting-go
 benchmarks/swap-replay/payloads/
+**/.lightclient/
 temp-scripts/
 
 /benchmark

@@ -36,6 +36,12 @@ type Config struct {
 	// DataDir is where snapshots are stored. Required.
 	DataDir string
 
+	// FixedBlock pins the client to a single block. Default: 0 (live mode).
+	// When non-zero, Start loads the block-specific snapshot if present, otherwise
+	// pins immediately and fills state lazily on demand during calls. It does not
+	// subscribe to new heads.
+	FixedBlock uint64
+
 	// Concurrency is the number of RPC worker sockets.
 	// Default: 2 * runtime.NumCPU()
 	Concurrency int
@@ -51,6 +57,10 @@ type Config struct {
 	// OnBlock is called after each block is processed.
 	// Arguments: block number, list of changed (address, slot) pairs.
 	OnBlock func(blockNum uint64)
+
+	// Quiet suppresses informational client logs such as snapshot loads/saves and
+	// catch-up progress. Errors are still logged.
+	Quiet bool
 }
 
 func (cfg *Config) applyDefaults() {
@@ -85,6 +95,13 @@ type LightClient struct {
 	// blockHashes caches recent block hashes for the BLOCKHASH opcode.
 	blockHashes   map[uint64]common.Hash
 	blockHashesMu sync.RWMutex
+}
+
+func (c *LightClient) infof(format string, args ...interface{}) {
+	if c.cfg.Quiet {
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // New creates a new LightClient. Call Start to begin syncing.
@@ -127,7 +144,64 @@ func (c *LightClient) LatestBlock() uint64 {
 // Call executes a simulated call at the given block. If block is 0,
 // it resolves to the latest block atomically.
 func (c *LightClient) Call(msg CallMsg, block uint64) ([]byte, uint64, error) {
+	return c.CallWithState(msg, block, nil)
+}
+
+// StateView returns a fresh pinned StateView for the requested block. In fixed
+// block mode, block 0 resolves to FixedBlock and any other block must match it.
+func (c *LightClient) StateView(block uint64) (*StateView, error) {
+	if c.cfg.FixedBlock != 0 {
+		if block == 0 {
+			block = c.cfg.FixedBlock
+		} else if block != c.cfg.FixedBlock {
+			return nil, fmt.Errorf("lightclient: fixed block mode is pinned to block %d (got %d)", c.cfg.FixedBlock, block)
+		}
+	} else if block == 0 {
+		block = c.state.LatestBlock()
+	}
 	if block == 0 {
+		return nil, fmt.Errorf("lightclient: no blocks processed yet")
+	}
+
+	miss := c.fetcher.MissCallbacks(c.state)
+	return NewStateView(c.state, block, miss), nil
+}
+
+// BlockTimestamp returns the timestamp of the requested block.
+func (c *LightClient) BlockTimestamp(block uint64) (uint64, error) {
+	if c.cfg.FixedBlock != 0 {
+		if block == 0 {
+			block = c.cfg.FixedBlock
+		} else if block != c.cfg.FixedBlock {
+			return 0, fmt.Errorf("lightclient: fixed block mode is pinned to block %d (got %d)", c.cfg.FixedBlock, block)
+		}
+	} else if block == 0 {
+		block = c.state.LatestBlock()
+	}
+	if block == 0 {
+		return 0, fmt.Errorf("lightclient: no blocks processed yet")
+	}
+
+	bd, err := c.fetcher.GetBlock(block)
+	if err != nil {
+		return 0, err
+	}
+	c.cacheBlockHash(block, bd.Hash)
+	return bd.Timestamp, nil
+}
+
+// CallWithState executes a simulated call at the given block after first letting
+// the caller mutate the fresh pinned StateView (for example to inject code or
+// token balance/allowance overrides). If block is 0, it resolves to the latest
+// block atomically, or to FixedBlock when pinned mode is enabled.
+func (c *LightClient) CallWithState(msg CallMsg, block uint64, prepare func(*StateView)) ([]byte, uint64, error) {
+	if c.cfg.FixedBlock != 0 {
+		if block == 0 {
+			block = c.cfg.FixedBlock
+		} else if block != c.cfg.FixedBlock {
+			return nil, 0, fmt.Errorf("lightclient: fixed block mode is pinned to block %d (got %d)", c.cfg.FixedBlock, block)
+		}
+	} else if block == 0 {
 		block = c.state.LatestBlock()
 	}
 	if block == 0 {
@@ -136,6 +210,9 @@ func (c *LightClient) Call(msg CallMsg, block uint64) ([]byte, uint64, error) {
 
 	miss := c.fetcher.MissCallbacks(c.state)
 	sv := NewStateView(c.state, block, miss)
+	if prepare != nil {
+		prepare(sv)
+	}
 
 	header := c.buildHeaderForBlock(block)
 	getHash := c.getHashFunc()
@@ -144,15 +221,70 @@ func (c *LightClient) Call(msg CallMsg, block uint64) ([]byte, uint64, error) {
 	return ret, gas, err
 }
 
-// Start begins the block sync loop. Blocks until the context is cancelled
-// or a fatal error occurs.
+// DirectCallWithState executes an eth_call-style EVM call at the given block
+// after preparing a fresh pinned StateView with any caller-supplied overrides.
+// Unlike CallWithState, this bypasses ApplyMessage and goes straight through
+// EVM.Call, which is closer to the legacy replay benchmark execution model.
+func (c *LightClient) DirectCallWithState(msg CallMsg, block uint64, prepare func(*StateView)) ([]byte, uint64, error) {
+	if c.cfg.FixedBlock != 0 {
+		if block == 0 {
+			block = c.cfg.FixedBlock
+		} else if block != c.cfg.FixedBlock {
+			return nil, 0, fmt.Errorf("lightclient: fixed block mode is pinned to block %d (got %d)", c.cfg.FixedBlock, block)
+		}
+	} else if block == 0 {
+		block = c.state.LatestBlock()
+	}
+	if block == 0 {
+		return nil, 0, fmt.Errorf("lightclient: no blocks processed yet")
+	}
+
+	miss := c.fetcher.MissCallbacks(c.state)
+	sv := NewStateView(c.state, block, miss)
+	if prepare != nil {
+		prepare(sv)
+	}
+
+	header := c.buildHeaderForBlock(block)
+	getHash := c.getHashFunc()
+
+	ret, gas, err := DirectCall(msg, sv, header, c.chainCfg, getHash)
+	return ret, gas, err
+}
+
+// Start begins the block sync loop.
+//
+// Live mode (FixedBlock == 0): loads snapshot, catches up to head, then
+// subscribes to new heads until the context is cancelled.
+//
+// Fixed-block mode (FixedBlock != 0): loads the fixed-block snapshot if present,
+// otherwise pins immediately and fills state lazily on demand during calls.
+// It does not subscribe to new heads and returns immediately.
 func (c *LightClient) Start(ctx context.Context) error {
 	// Load snapshot if available.
 	snapPath := c.snapshotPath()
 	if snap, err := LoadSnapshot(snapPath); err == nil {
 		ApplySnapshot(c.state, snap)
 		c.lastSnapshotBlock = snap.BlockNumber
-		log.Printf("lightclient: loaded snapshot at block %d", snap.BlockNumber)
+		c.infof("lightclient: loaded snapshot at block %d", snap.BlockNumber)
+	}
+
+	if c.cfg.FixedBlock != 0 {
+		targetBlock := c.cfg.FixedBlock
+		loadedBlock := c.state.LatestBlock()
+		if loadedBlock > targetBlock {
+			return fmt.Errorf("lightclient: loaded snapshot at block %d, ahead of fixed block %d", loadedBlock, targetBlock)
+		}
+		if loadedBlock == 0 {
+			c.state.SetLatestBlock(targetBlock)
+			c.infof("lightclient: fixed block pinned at %d (lazy state fetch)", targetBlock)
+			return nil
+		}
+		if loadedBlock != targetBlock {
+			return fmt.Errorf("lightclient: fixed snapshot %s contains block %d, expected %d", snapPath, loadedBlock, targetBlock)
+		}
+		c.infof("lightclient: fixed block ready at %d (snapshot)", targetBlock)
+		return nil
 	}
 
 	// Get current head from node.
@@ -164,7 +296,7 @@ func (c *LightClient) Start(ctx context.Context) error {
 	// Catch up from snapshot to head.
 	startBlock := c.state.LatestBlock() + 1
 	if startBlock <= headNum {
-		log.Printf("lightclient: catching up blocks %d → %d", startBlock, headNum)
+		c.infof("lightclient: catching up blocks %d → %d", startBlock, headNum)
 		for blockNum := startBlock; blockNum <= headNum; blockNum++ {
 			if err := c.processBlock(blockNum); err != nil {
 				return fmt.Errorf("lightclient: catchup block %d: %w", blockNum, err)
@@ -173,7 +305,7 @@ func (c *LightClient) Start(ctx context.Context) error {
 				return ctx.Err()
 			}
 		}
-		log.Printf("lightclient: caught up to block %d", headNum)
+		c.infof("lightclient: caught up to block %d", headNum)
 	}
 
 	// Subscribe to new blocks.
@@ -248,7 +380,7 @@ func (c *LightClient) processBlock(blockNum uint64) error {
 	c.state.SetLatestBlock(blockNum)
 
 	elapsed := time.Since(start)
-	log.Printf("lightclient: block %d  txs=%d  elapsed=%v", blockNum, len(bd.Transactions), elapsed)
+	c.infof("lightclient: block %d  txs=%d  elapsed=%v", blockNum, len(bd.Transactions), elapsed)
 
 	// Periodic snapshot and prune.
 	c.saveSnapshotIfNeeded(false)
@@ -317,11 +449,25 @@ func (c *LightClient) getHashFunc() GetHashFunc {
 // ─── Snapshots ──────────────────────────────────────────────────────
 
 func (c *LightClient) snapshotPath() string {
+	if c.cfg.FixedBlock != 0 {
+		return filepath.Join(c.cfg.DataDir, fmt.Sprintf("%d.snapshot", c.cfg.FixedBlock))
+	}
 	return filepath.Join(c.cfg.DataDir, "state.snapshot")
+}
+
+// Close persists the current snapshot and closes the RPC pool.
+func (c *LightClient) Close() {
+	c.saveSnapshotIfNeeded(true)
+	if c.pool != nil {
+		c.pool.Close()
+	}
 }
 
 func (c *LightClient) saveSnapshotIfNeeded(force bool) {
 	latest := c.state.LatestBlock()
+	if c.cfg.FixedBlock != 0 && latest != c.cfg.FixedBlock {
+		return
+	}
 	if !force && latest-c.lastSnapshotBlock < c.cfg.SnapshotEveryBlocks {
 		return
 	}
@@ -333,7 +479,7 @@ func (c *LightClient) saveSnapshotIfNeeded(force bool) {
 		return
 	}
 	c.lastSnapshotBlock = latest
-	log.Printf("lightclient: saved snapshot at block %d", latest)
+	c.infof("lightclient: saved snapshot at block %d", latest)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────

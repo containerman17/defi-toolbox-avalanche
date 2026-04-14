@@ -1,0 +1,121 @@
+{
+  "block": 82703641,
+  "txHash": "0x2c157b6d2c9d8ad433c1e0f9f05021356ec8507ed318d534a77fc3ae03b0d258",
+  "source": "lfj",
+  "isSplit": true,
+  "inputToken": "0x26debd39d5ed069770406fca10a0e4f8d2c743eb",
+  "outputToken": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+  "amountIn": "53370257959024906450280",
+  "expectedOut": "884977465",
+  "gasUsed": 988376,
+  "supported": true,
+  "steps": [
+    {
+      "amountIn": "48680134737449428477",
+      "pools": [
+        "0x7f89e0db562734afbac3222a51b1f82598bbdfb6"
+      ],
+      "poolTypes": [
+        2
+      ],
+      "tokens": [
+        "0x26debd39d5ed069770406fca10a0e4f8d2c743eb",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "lfj_v1(0x26debd39→WAVAX)"
+    },
+    {
+      "amountIn": "1851368230503054829160",
+      "pools": [
+        "0x000d436a430cf25c4eaaa3eff031d2cefdfaf4b1"
+      ],
+      "poolTypes": [
+        1
+      ],
+      "tokens": [
+        "0x26debd39d5ed069770406fca10a0e4f8d2c743eb",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "algebra(0x26debd39→WAVAX)"
+    },
+    {
+      "amountIn": "39369713299539199324",
+      "pools": [
+        "0x54c173ed8fe6efa8e590ac5864e74fbb035816df"
+      ],
+      "poolTypes": [
+        0
+      ],
+      "tokens": [
+        "0x26debd39d5ed069770406fca10a0e4f8d2c743eb",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "uniswap_v3(0x26debd39→WAVAX)"
+    },
+    {
+      "amountIn": "51430839880484862993319",
+      "pools": [
+        "0xbd26e663281fb35d4757219eb180f02e8a065c09"
+      ],
+      "poolTypes": [
+        3
+      ],
+      "tokens": [
+        "0x26debd39d5ed069770406fca10a0e4f8d2c743eb",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "lfj_v2(0x26debd39→WAVAX)"
+    },
+    {
+      "amountIn": "93422583835477789029",
+      "pools": [
+        "0x5ca009013f6b898d134b6798b336a4592f3b4af2",
+        "0x71bd752508936dea5a032991f4a2997a506b1cde"
+      ],
+      "poolTypes": [
+        0,
+        0
+      ],
+      "tokens": [
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        "0x152b9d0fdc40c096757f570a51e494bd4b943e50",
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      ],
+      "extraDatas": [
+        "",
+        ""
+      ],
+      "route": "pharaoh_v3(WAVAX→0x152b9d0f)→pharaoh_v3(0x152b9d0f→USDC)"
+    },
+    {
+      "amountIn": "1202933",
+      "pools": [
+        "0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7"
+      ],
+      "poolTypes": [
+        5
+      ],
+      "tokens": [
+        "0x152b9d0fdc40c096757f570a51e494bd4b943e50",
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "woofi_v2(0x152b9d0f→USDC)"
+    }
+  ],
+  "route": "SPLIT(6): [48680134737449428477] lfj_v1(0x26debd39→WAVAX) → [1851368230503054829160] algebra(0x26debd39→WAVAX) → [39369713299539199324] uniswap_v3(0x26debd39→WAVAX) → [51430839880484862993319] lfj_v2(0x26debd39→WAVAX) → [93422583835477789029] pharaoh_v3(WAVAX→0x152b9d0f)→pharaoh_v3(0x152b9d0f→USDC) → [1202933] woofi_v2(0x152b9d0f→USDC)"
+}

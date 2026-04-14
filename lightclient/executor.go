@@ -422,3 +422,51 @@ func Call(
 
 	return result.ReturnData, result.UsedGas, nil
 }
+
+// DirectCall executes an eth_call-style EVM call directly, bypassing the full
+// transaction ApplyMessage path. This is useful for benchmarks and router
+// simulation where we want proxy-bytecode injection and state overrides, but do
+// not need nonce/account handling from the transaction layer.
+func DirectCall(
+	msg CallMsg,
+	state *StateView,
+	header *types.Header,
+	chainCfg *params.ChainConfig,
+	getHash GetHashFunc,
+) ([]byte, uint64, error) {
+	if msg.To == nil {
+		return nil, 0, fmt.Errorf("direct call requires To")
+	}
+
+	blockCtx := buildBlockContext(header, chainCfg, getHash)
+
+	gas := msg.Gas
+	if gas == 0 {
+		gas = 50_000_000
+	}
+
+	gasPrice := msg.GasPrice
+	if gasPrice == nil {
+		gasPrice = new(big.Int)
+	}
+
+	value := new(uint256.Int)
+	if msg.Value != nil {
+		if _, overflow := uint256.FromBig(msg.Value); overflow {
+			return nil, 0, fmt.Errorf("direct call value overflow")
+		}
+		value.SetFromBig(msg.Value)
+	}
+
+	txCtx := vm.TxContext{
+		Origin:   msg.From,
+		GasPrice: gasPrice,
+	}
+
+	snap := state.Snapshot()
+	evm := vm.NewEVM(blockCtx, txCtx, state, chainCfg, vm.Config{NoBaseFee: true})
+	ret, gasLeft, err := evm.Call(vm.AccountRef(msg.From), *msg.To, msg.Data, gas, value)
+	state.RevertToSnapshot(snap)
+	gasUsed := gas - gasLeft
+	return ret, gasUsed, err
+}

@@ -1,0 +1,176 @@
+{
+  "block": 82705280,
+  "txHash": "0xf6a3f08f8d170ee98a7b4eb4ed08237a3e8650dd7c3547e5ab67f95b89291a5a",
+  "source": "lfj",
+  "isSplit": true,
+  "inputToken": "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+  "outputToken": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+  "amountIn": "10000000000000000000",
+  "expectedOut": "2433168698983441806948",
+  "gasUsed": 1549377,
+  "supported": true,
+  "steps": [
+    {
+      "amountIn": "11130389757454395",
+      "pools": [
+        "0x737f1cab9cd97c40bbe4d59c85b0d2c1fdbaa37d"
+      ],
+      "poolTypes": [
+        7
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "pharaoh_v1(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "4342876924434016066",
+      "pools": [
+        "0x5e128ebc09c918ddae3ca1668d4ee9527dc00d78"
+      ],
+      "poolTypes": [
+        1
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "algebra(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "343309904715784662",
+      "pools": [
+        "0x7b602f98d71715916e7c963f51bfebc754ade2d0"
+      ],
+      "poolTypes": [
+        0
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "uniswap_v3(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "2423653367292010444",
+      "pools": [
+        "0xff0855a9027f5f5c2bbacc4aac477afbeeefbea9"
+      ],
+      "poolTypes": [
+        0
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "pharaoh_v3(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "46690840424037027",
+      "pools": [
+        "0x840c5f0167e3a335be0938916962c38c16b948df"
+      ],
+      "poolTypes": [
+        0
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "uniswap_v3(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "2754999325175407154",
+      "pools": [
+        "0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7"
+      ],
+      "poolTypes": [
+        5
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "woofi_v2(WETH.e→WAVAX)"
+    },
+    {
+      "amountIn": "6446823373720587",
+      "pools": [
+        "0x6111286604c6fabcd88633f80f4abaea15094f3d",
+        "0x8fef4fe4970a5d6bfa7c65871a2ebfd0f42aa822"
+      ],
+      "poolTypes": [
+        0,
+        1
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0x152b9d0fdc40c096757f570a51e494bd4b943e50",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        "",
+        ""
+      ],
+      "route": "pharaoh_v3(WETH.e→0x152b9d0f)→algebra(0x152b9d0f→WAVAX)"
+    },
+    {
+      "amountIn": "70892424827569665",
+      "pools": [
+        "0xb300709bc56856560cc4cf521d29ac2cd941e041"
+      ],
+      "poolTypes": [
+        4
+      ],
+      "tokens": [
+        "0x49d5c2bdffac6ce2bfdb6640f4f80f226bc10bab",
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "dodo(WETH.e→USDC)"
+    },
+    {
+      "amountIn": "162383707",
+      "pools": [
+        "0x06380c0e0912312b5150364b9dc4542ba0dbbc85",
+        "0xc13fd9599f0bedd2da2c307f35bc03ba54a64332"
+      ],
+      "poolTypes": [
+        9,
+        1
+      ],
+      "tokens": [
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+        "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+      ],
+      "extraDatas": [
+        "id=0xfe74ff9963652d64086e4467e64ceae7847ebf0139cb4046bcbe02c86e48f256,fee=18,ts=1,hooks=0x0000000000000000000000000000000000000000",
+        ""
+      ],
+      "route": "uniswap_v4(USDC→USDt)→algebra(USDt→WAVAX)"
+    }
+  ],
+  "route": "SPLIT(9): [11130389757454395] pharaoh_v1(WETH.e→WAVAX) → [4342876924434016066] algebra(WETH.e→WAVAX) → [343309904715784662] uniswap_v3(WETH.e→WAVAX) → [2423653367292010444] pharaoh_v3(WETH.e→WAVAX) → [46690840424037027] uniswap_v3(WETH.e→WAVAX) → [2754999325175407154] woofi_v2(WETH.e→WAVAX) → [6446823373720587] pharaoh_v3(WETH.e→0x152b9d0f)→algebra(0x152b9d0f→WAVAX) → [70892424827569665] dodo(WETH.e→USDC) → [162383707] uniswap_v4(USDC→USDt)→algebra(USDt→WAVAX)"
+}

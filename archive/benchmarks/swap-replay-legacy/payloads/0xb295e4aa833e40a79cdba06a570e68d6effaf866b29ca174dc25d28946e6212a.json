@@ -1,0 +1,87 @@
+{
+  "block": 82705301,
+  "txHash": "0xb295e4aa833e40a79cdba06a570e68d6effaf866b29ca174dc25d28946e6212a",
+  "source": "lfj",
+  "isSplit": true,
+  "inputToken": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+  "outputToken": "0xd1c3f94de7e5b45fa4edbba472491a9f4b166fc4",
+  "amountIn": "900000000",
+  "expectedOut": "3085151674211299768160",
+  "gasUsed": 1009047,
+  "supported": true,
+  "steps": [
+    {
+      "amountIn": "720000000",
+      "pools": [
+        "0x78e5e1dbb5f663b21af2b6969e1be2892a91297d"
+      ],
+      "poolTypes": [
+        2
+      ],
+      "tokens": [
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+        "0xd1c3f94de7e5b45fa4edbba472491a9f4b166fc4"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "lfj_v1(USDC→0xd1c3f94d)"
+    },
+    {
+      "amountIn": "90000000",
+      "pools": [
+        "0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7"
+      ],
+      "poolTypes": [
+        5
+      ],
+      "tokens": [
+        "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+        "0x152b9d0fdc40c096757f570a51e494bd4b943e50"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "woofi_v2(USDC→0x152b9d0f)"
+    },
+    {
+      "amountIn": "122717",
+      "pools": [
+        "0x8fef4fe4970a5d6bfa7c65871a2ebfd0f42aa822",
+        "0x6079c6c97792c6f90351c166b54a363fd65157c2"
+      ],
+      "poolTypes": [
+        1,
+        3
+      ],
+      "tokens": [
+        "0x152b9d0fdc40c096757f570a51e494bd4b943e50",
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        "0xd1c3f94de7e5b45fa4edbba472491a9f4b166fc4"
+      ],
+      "extraDatas": [
+        "",
+        ""
+      ],
+      "route": "algebra(0x152b9d0f→WAVAX)→lfj_v2(WAVAX→0xd1c3f94d)"
+    },
+    {
+      "amountIn": "9528562663711239710",
+      "pools": [
+        "0x42152bdd72de8d6767fe3b4e17a221d6985e8b25"
+      ],
+      "poolTypes": [
+        8
+      ],
+      "tokens": [
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+        "0xd1c3f94de7e5b45fa4edbba472491a9f4b166fc4"
+      ],
+      "extraDatas": [
+        ""
+      ],
+      "route": "pangolin_v2(WAVAX→0xd1c3f94d)"
+    }
+  ],
+  "route": "SPLIT(4): [720000000] lfj_v1(USDC→0xd1c3f94d) → [90000000] woofi_v2(USDC→0x152b9d0f) → [122717] algebra(0x152b9d0f→WAVAX)→lfj_v2(WAVAX→0xd1c3f94d) → [9528562663711239710] pangolin_v2(WAVAX→0xd1c3f94d)"
+}

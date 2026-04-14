@@ -1,0 +1,26 @@
+{
+  "block": 82705681,
+  "txHash": "0xd3ca5025078de42bcaad0d12ada75675b5b1f5d78e0e32d708ddd12728f4817c",
+  "source": "lfj",
+  "isSplit": false,
+  "inputToken": "0xb8d7710f7d8349a506b75dd184f05777c82dad0c",
+  "outputToken": "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+  "amountIn": "64626340406430295892",
+  "expectedOut": "6249554759135725",
+  "gasUsed": 411988,
+  "supported": true,
+  "pools": [
+    "0x3c5f68d2f72debba4900c60f32eb8629876401f2"
+  ],
+  "poolTypes": [
+    8
+  ],
+  "tokens": [
+    "0xb8d7710f7d8349a506b75dd184f05777c82dad0c",
+    "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7"
+  ],
+  "extraDatas": [
+    ""
+  ],
+  "route": "arena_v2(0xb8d7710f→WAVAX)"
+}

@@ -1,0 +1,30 @@
+{
+  "block": 82706827,
+  "txHash": "0x29b7e34d323cedc0348c1f166b2522eabba1393be7d237cb2fc2ebfbc91b5657",
+  "source": "lfj",
+  "isSplit": false,
+  "inputToken": "0x5e0e90e268bc247cc850c789a0db0d5c7621fb59",
+  "outputToken": "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+  "amountIn": "35884295698459100107",
+  "expectedOut": "10292377",
+  "gasUsed": 270136,
+  "supported": true,
+  "pools": [
+    "0x933befd6941f135e137bb370bc6c4d39d3e88f03",
+    "0x864d4e5ee7318e97483db7eb0912e09f161516ea"
+  ],
+  "poolTypes": [
+    2,
+    3
+  ],
+  "tokens": [
+    "0x5e0e90e268bc247cc850c789a0db0d5c7621fb59",
+    "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",
+    "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e"
+  ],
+  "extraDatas": [
+    "",
+    ""
+  ],
+  "route": "lfj_v1(0x5e0e90e2→WAVAX) → lfj_v2(WAVAX→USDC)"
+}

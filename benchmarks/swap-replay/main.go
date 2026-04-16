@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -263,6 +265,21 @@ type quoteOutcome struct {
 	Route     *pf.Route
 }
 
+type txResult struct {
+	Line             string
+	OrigOK           bool
+	RouterExact      bool
+	RouterUnder      bool
+	RouterOver       bool
+	RouterUnsupported bool
+	QuoteExact       bool
+	QuoteUnder       bool
+	QuoteOver        bool
+	QuoteUnsupported bool
+	RouterPass1PPM   bool
+	QuotePass1PPM    bool
+}
+
 type poolCatalog struct {
 	pools  []pf.Pool
 	byAddr map[common.Address][]pf.Pool
@@ -298,137 +315,221 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "[swap-replay] router=%s start=%d end=%d found=%d\n", lfjRouter.Name, *startBlock, scannedEnd, len(txs))
 
-	clients := make(map[uint64]*lc.LightClient)
-	defer closeLightClients(clients)
 	catalog := newPoolCatalog(poolcollector.EmbeddedPools(0))
-	q := quoter.New(4)
 
+	// Group txs by block — one goroutine per block, one light client per block.
+	type blockGroup struct {
+		block uint64
+		txs   []replayTx
+	}
+	blockOrder := []uint64{}
+	blockMap := map[uint64]*blockGroup{}
+	for _, tx := range txs {
+		bg, ok := blockMap[tx.Block]
+		if !ok {
+			bg = &blockGroup{block: tx.Block}
+			blockMap[tx.Block] = bg
+			blockOrder = append(blockOrder, tx.Block)
+		}
+		bg.txs = append(bg.txs, tx)
+	}
+
+	// Process blocks in parallel.
+	workers := runtime.NumCPU() * 2
+	sem := make(chan struct{}, workers)
+	blockResults := make([][]txResult, len(blockOrder))
+	var wg sync.WaitGroup
+
+	for i, blk := range blockOrder {
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+		go func(idx int, bg *blockGroup) {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+
+			clients := make(map[uint64]*lc.LightClient)
+			defer closeLightClients(clients)
+
+			results := make([]txResult, len(bg.txs))
+			for j, tx := range bg.txs {
+				results[j] = processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+			}
+			blockResults[idx] = results
+		}(i, blockMap[blk])
+	}
+	wg.Wait()
+
+	// Aggregate and print in order.
 	origOK, origReverted := 0, 0
 	routerExact, routerUnder, routerOver, routerUnsupported := 0, 0, 0, 0
 	quoteExact, quoteUnder, quoteOver, quoteUnsupported := 0, 0, 0, 0
 	routerPass1PPM := 0
 	quotePass1PPM := 0
-	for _, tx := range txs {
-		inMeta := rpc.TokenMeta(tx.Summary.InputToken)
-		outMeta := rpc.TokenMeta(tx.Summary.OutputToken)
-		ret, err := replayOriginalTx(rpc, clients, *wsURL, *dataDir, tx)
-		if err != nil {
-			origReverted++
-			fmt.Printf("%s block=%d orig=REVERT in=%s amountIn=%s out=%s reason=%s\n",
+	for _, results := range blockResults {
+		for _, r := range results {
+			fmt.Print(r.Line)
+			if r.OrigOK {
+				origOK++
+			} else {
+				origReverted++
+			}
+			if r.RouterExact {
+				routerExact++
+			}
+			if r.RouterUnder {
+				routerUnder++
+			}
+			if r.RouterOver {
+				routerOver++
+			}
+			if r.RouterUnsupported {
+				routerUnsupported++
+			}
+			if r.QuoteExact {
+				quoteExact++
+			}
+			if r.QuoteUnder {
+				quoteUnder++
+			}
+			if r.QuoteOver {
+				quoteOver++
+			}
+			if r.QuoteUnsupported {
+				quoteUnsupported++
+			}
+			if r.RouterPass1PPM {
+				routerPass1PPM++
+			}
+			if r.QuotePass1PPM {
+				quotePass1PPM++
+			}
+		}
+	}
+
+	total := origOK + origReverted
+	fmt.Printf("SUMMARY total=%d orig_ok=%d orig_reverted=%d router_exact=%d router_under=%d router_over=%d router_unsupported=%d router_pass_1ppm=%d/%d quote_exact=%d quote_under=%d quote_over=%d quote_unsupported=%d quote_pass_1ppm=%d/%d\n",
+		total, origOK, origReverted, routerExact, routerUnder, routerOver, routerUnsupported, routerPass1PPM, total, quoteExact, quoteUnder, quoteOver, quoteUnsupported, quotePass1PPM, total)
+}
+
+func processTx(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx) txResult {
+	inMeta := rpc.TokenMeta(tx.Summary.InputToken)
+	outMeta := rpc.TokenMeta(tx.Summary.OutputToken)
+
+	ret, err := replayOriginalTx(rpc, clients, wsURL, dataDir, tx)
+	if err != nil {
+		return txResult{
+			Line: fmt.Sprintf("%s block=%d orig=REVERT in=%s amountIn=%s out=%s reason=%s\n",
 				tx.Hash,
 				tx.Block,
 				tokenLabel(tx.Summary.InputToken, inMeta),
 				formatAmount(tx.Summary.AmountIn, inMeta),
 				tokenLabel(tx.Summary.OutputToken, outMeta),
 				err.Error(),
-			)
-			continue
+			),
 		}
-
-		origOK++
-		oracleOut := decodePositiveAmountOut(ret)
-
-		routerStatus := "UNSUPPORTED"
-		routerExtra := ""
-		quoteStatus := "UNSUPPORTED"
-		quoteExtra := ""
-
-		if oracleOut == nil {
-			routerUnsupported++
-			quoteUnsupported++
-			routerExtra = fmt.Sprintf(" routerReason=undecoded_return(%d bytes)", len(ret))
-			quoteExtra = fmt.Sprintf(" quoteReason=undecoded_return(%d bytes)", len(ret))
-		} else {
-			traced, traceErr := traceOriginalSwap(rpc, tx)
-			if traceErr != nil {
-				routerUnsupported++
-				routerExtra = fmt.Sprintf(" routerReason=%s", traceErr.Error())
-			} else {
-				outcome, routeErr := replaySingleRoute(rpc, catalog, clients, *wsURL, *dataDir, tx, traced, oracleOut)
-				if routeErr != nil {
-					routerUnsupported++
-					routerExtra = fmt.Sprintf(" routerReason=%s", routeErr.Error())
-				} else {
-					route := formatRoute(outcome.Steps, rpc)
-					switch outcome.ActualOut.Cmp(oracleOut) {
-					case 0:
-						routerStatus = "MATCH"
-						routerExact++
-					case -1:
-						routerStatus = "UNDER"
-						routerUnder++
-					default:
-						routerStatus = "OVER"
-						routerOver++
-					}
-					if withinOnePPMOrBetter(outcome.ActualOut, oracleOut) {
-						routerPass1PPM++
-					}
-					routerExtra = fmt.Sprintf(" router=%s expected=%s actual=%s hops=%d route=%s",
-						routerStatus,
-						formatAmount(oracleOut, outMeta),
-						formatAmount(outcome.ActualOut, outMeta),
-						len(outcome.Steps),
-						route,
-					)
-				}
-			}
-
-			parentBlock := tx.Block - 1
-			inputToken := normalizeRouteToken(tx.Summary.InputToken)
-			outputToken := normalizeRouteToken(tx.Summary.OutputToken)
-			client, err := lightClientForBlock(clients, *wsURL, *dataDir, parentBlock)
-			if err != nil {
-				quoteUnsupported++
-				quoteExtra = fmt.Sprintf(" quoteReason=lightclient: %s", err.Error())
-			} else {
-				quoted, quoteErr := blindQuotePair(q, client, inputToken, outputToken, tx.Summary.AmountIn)
-				if quoteErr != nil {
-					quoteUnsupported++
-					quoteExtra = fmt.Sprintf(" quoteReason=%s", quoteErr.Error())
-				} else {
-					quoteRoute := formatQuoteRoute(quoted.Route, rpc)
-					switch quoted.ActualOut.Cmp(oracleOut) {
-					case 0:
-						quoteStatus = "MATCH"
-						quoteExact++
-					case -1:
-						quoteStatus = "UNDER"
-						quoteUnder++
-					default:
-						quoteStatus = "OVER"
-						quoteOver++
-					}
-					if withinOnePPMOrBetter(quoted.ActualOut, oracleOut) {
-						quotePass1PPM++
-					}
-					quoteExtra = fmt.Sprintf(" quote=%s expected=%s quoted=%s actual=%s hops=%d route=%s",
-						quoteStatus,
-						formatAmount(oracleOut, outMeta),
-						formatAmount(quoted.QuotedOut, outMeta),
-						formatAmount(quoted.ActualOut, outMeta),
-						len(quoted.Route.Steps),
-						quoteRoute,
-					)
-				}
-			}
-		}
-
-		fmt.Printf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s%s\n",
-			tx.Hash,
-			tx.Block,
-			tokenLabel(tx.Summary.InputToken, inMeta),
-			formatAmount(tx.Summary.AmountIn, inMeta),
-			tokenLabel(tx.Summary.OutputToken, outMeta),
-			formatAmount(oracleOut, outMeta),
-			routerExtra,
-			quoteExtra,
-		)
 	}
 
-	total := origOK + origReverted
-	fmt.Printf("SUMMARY total=%d orig_ok=%d orig_reverted=%d router_exact=%d router_under=%d router_over=%d router_unsupported=%d router_pass_1ppm=%d/%d quote_exact=%d quote_under=%d quote_over=%d quote_unsupported=%d quote_pass_1ppm=%d/%d\n",
-		total, origOK, origReverted, routerExact, routerUnder, routerOver, routerUnsupported, routerPass1PPM, total, quoteExact, quoteUnder, quoteOver, quoteUnsupported, quotePass1PPM, total)
+	r := txResult{OrigOK: true}
+	oracleOut := decodePositiveAmountOut(ret)
+
+	routerStatus := "UNSUPPORTED"
+	routerExtra := ""
+	quoteStatus := "UNSUPPORTED"
+	quoteExtra := ""
+
+	if oracleOut == nil {
+		r.RouterUnsupported = true
+		r.QuoteUnsupported = true
+		routerExtra = fmt.Sprintf(" routerReason=undecoded_return(%d bytes)", len(ret))
+		quoteExtra = fmt.Sprintf(" quoteReason=undecoded_return(%d bytes)", len(ret))
+	} else {
+		traced, traceErr := traceOriginalSwap(rpc, tx)
+		if traceErr != nil {
+			r.RouterUnsupported = true
+			routerExtra = fmt.Sprintf(" routerReason=%s", traceErr.Error())
+		} else {
+			outcome, routeErr := replaySingleRoute(rpc, catalog, clients, wsURL, dataDir, tx, traced, oracleOut)
+			if routeErr != nil {
+				r.RouterUnsupported = true
+				routerExtra = fmt.Sprintf(" routerReason=%s", routeErr.Error())
+			} else {
+				route := formatRoute(outcome.Steps, rpc)
+				switch outcome.ActualOut.Cmp(oracleOut) {
+				case 0:
+					routerStatus = "MATCH"
+					r.RouterExact = true
+				case -1:
+					routerStatus = "UNDER"
+					r.RouterUnder = true
+				default:
+					routerStatus = "OVER"
+					r.RouterOver = true
+				}
+				if withinOnePPMOrBetter(outcome.ActualOut, oracleOut) {
+					r.RouterPass1PPM = true
+				}
+				routerExtra = fmt.Sprintf(" router=%s expected=%s actual=%s hops=%d route=%s",
+					routerStatus,
+					formatAmount(oracleOut, outMeta),
+					formatAmount(outcome.ActualOut, outMeta),
+					len(outcome.Steps),
+					route,
+				)
+			}
+		}
+
+		q := quoter.New(4)
+		parentBlock := tx.Block - 1
+		inputToken := normalizeRouteToken(tx.Summary.InputToken)
+		outputToken := normalizeRouteToken(tx.Summary.OutputToken)
+		client, err := lightClientForBlock(clients, wsURL, dataDir, parentBlock)
+		if err != nil {
+			r.QuoteUnsupported = true
+			quoteExtra = fmt.Sprintf(" quoteReason=lightclient: %s", err.Error())
+		} else {
+			quoted, quoteErr := blindQuotePair(q, client, inputToken, outputToken, tx.Summary.AmountIn)
+			if quoteErr != nil {
+				r.QuoteUnsupported = true
+				quoteExtra = fmt.Sprintf(" quoteReason=%s", quoteErr.Error())
+			} else {
+				quoteRoute := formatQuoteRoute(quoted.Route, rpc)
+				switch quoted.ActualOut.Cmp(oracleOut) {
+				case 0:
+					quoteStatus = "MATCH"
+					r.QuoteExact = true
+				case -1:
+					quoteStatus = "UNDER"
+					r.QuoteUnder = true
+				default:
+					quoteStatus = "OVER"
+					r.QuoteOver = true
+				}
+				if withinOnePPMOrBetter(quoted.ActualOut, oracleOut) {
+					r.QuotePass1PPM = true
+				}
+				quoteExtra = fmt.Sprintf(" quote=%s expected=%s quoted=%s actual=%s hops=%d route=%s",
+					quoteStatus,
+					formatAmount(oracleOut, outMeta),
+					formatAmount(quoted.QuotedOut, outMeta),
+					formatAmount(quoted.ActualOut, outMeta),
+					len(quoted.Route.Steps),
+					quoteRoute,
+				)
+			}
+		}
+	}
+
+	r.Line = fmt.Sprintf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s%s\n",
+		tx.Hash,
+		tx.Block,
+		tokenLabel(tx.Summary.InputToken, inMeta),
+		formatAmount(tx.Summary.AmountIn, inMeta),
+		tokenLabel(tx.Summary.OutputToken, outMeta),
+		formatAmount(oracleOut, outMeta),
+		routerExtra,
+		quoteExtra,
+	)
+	return r
 }
 
 func traceOriginalSwap(rpc *rpcClient, tx replayTx) (*traceReplay, error) {
@@ -1398,10 +1499,10 @@ func (c *rpcClient) DebugTraceCall(tx *chainTx, block uint64) (*traceCall, error
 }
 
 func (c *rpcClient) Call(method string, params interface{}) (json.RawMessage, error) {
-	c.nextID++
+	id := atomic.AddInt64(&c.nextID, 1)
 	reqBody, err := json.Marshal(rpcRequest{
 		JSONRPC: "2.0",
-		ID:      c.nextID,
+		ID:      id,
 		Method:  method,
 		Params:  params,
 	})

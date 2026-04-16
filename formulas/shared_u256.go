@@ -390,22 +390,10 @@ func v3GetNextPriceFromInputOverflowU256(sqrtPX96, liquidity, amountIn *uint256.
 // and caches results. This eliminates repeated keccak256 calls for the same
 // (wordPos, mappingSlot) or (tick, mappingSlot) pairs.
 
-// Keccak mapping slot cache — regular map (not sync.Map) since bench is single-threaded.
-// Key: mappingSlot bytes (first 8 bytes, enough to distinguish) + int64 key
-// Uses a compact key to minimize map overhead.
-
-type keccakCacheKey struct {
-	key         int64
-	mappingSlot uint64 // first 8 bytes of mapping slot (sufficient for uniqueness)
-}
-
-// ─── Bytes-based keccak cache (no big.Int) ───
-
-var keccakSlotCacheBytes = make(map[keccakCacheKey][32]byte, 8192)
-
 // keccakSlotCacheFast uses a single uint64 key for faster lookups.
 // Key = mappingSlot_low64 XOR (key * prime) — collision-free for our data.
-var keccakSlotCacheFast = make(map[uint64][32]byte, 8192)
+// sync.Map for concurrent safety: write-once-read-many pattern.
+var keccakSlotCacheFast sync.Map // map[uint64][32]byte
 
 func keccakFastKey(key int64, mappingSlot [32]byte) uint64 {
 	msKey := binary.LittleEndian.Uint64(mappingSlot[24:32])
@@ -416,8 +404,8 @@ func keccakFastKey(key int64, mappingSlot [32]byte) uint64 {
 // using [32]byte throughout — zero big.Int allocations.
 func cachedKeccakSlotBytes(key int64, mappingSlot [32]byte) [32]byte {
 	fk := keccakFastKey(key, mappingSlot)
-	if v, ok := keccakSlotCacheFast[fk]; ok {
-		return v
+	if v, ok := keccakSlotCacheFast.Load(fk); ok {
+		return v.([32]byte)
 	}
 
 	var data [64]byte
@@ -440,7 +428,7 @@ func cachedKeccakSlotBytes(key int64, mappingSlot [32]byte) [32]byte {
 	hash := crypto.Keccak256(data[:])
 	var result [32]byte
 	copy(result[:], hash)
-	keccakSlotCacheFast[keccakFastKey(key, mappingSlot)] = result
+	keccakSlotCacheFast.Store(fk, result)
 	return result
 }
 

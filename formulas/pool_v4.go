@@ -2,6 +2,7 @@ package formulas
 
 import (
 	"math/big"
+	"sync"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/crypto"
@@ -31,10 +32,11 @@ type V4Pool struct {
 func newV4Pool(addr common.Address, reader StorageReader) *V4Pool {
 	poolAddress := poolHex(addr)
 
-	info, ok := v4PoolIds[poolAddress]
+	v, ok := v4PoolIds.Load(poolAddress)
 	if !ok {
 		return nil
 	}
+	info := v.(*v4PoolInfo)
 
 	bytesReader := func(a [20]byte, slot [32]byte) ([32]byte, error) {
 		return reader(common.Address(a), common.Hash(slot)), nil
@@ -296,17 +298,17 @@ type v4PoolInfo struct {
 
 // v4PoolIds maps pool pseudo-address (lowercase hex) to pool parameters.
 // Populated by the pool registry / discovery process.
-var v4PoolIds = map[string]*v4PoolInfo{}
+var v4PoolIds sync.Map // map[string]*v4PoolInfo
 
 // RegisterV4Pool registers a V4 pool's parameters for construction.
 func RegisterV4Pool(poolAddress string, poolId [32]byte, tickSpacing int32, lpFee uint32, hookFeePpm uint32, hooks common.Address) {
-	v4PoolIds[poolAddress] = &v4PoolInfo{
+	v4PoolIds.Store(poolAddress, &v4PoolInfo{
 		poolId:      poolId,
 		tickSpacing: tickSpacing,
 		hookFeePpm:  hookFeePpm,
 		lpFee:       lpFee,
 		hooks:       hooks,
-	}
+	})
 }
 
 // readArenaHookFee reads the ArenaHook's total fee (pool-specific + protocol) from storage.

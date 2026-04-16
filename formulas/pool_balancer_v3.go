@@ -5,6 +5,7 @@ package formulas
 
 import (
 	"math/big"
+	"sync"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/crypto"
@@ -85,11 +86,11 @@ type BalancerV3PoolInfo struct {
 }
 
 // balV3PoolInfos maps pool address (lowercase hex) to its info.
-var balV3PoolInfos = map[string]*BalancerV3PoolInfo{}
+var balV3PoolInfos sync.Map // map[string]*BalancerV3PoolInfo
 
 // RegisterBalancerV3Pool registers a Balancer V3 pool for formula quoting.
 func RegisterBalancerV3Pool(poolAddress string, info *BalancerV3PoolInfo) {
-	balV3PoolInfos[poolAddress] = info
+	balV3PoolInfos.Store(poolAddress, info)
 }
 
 // BalancerV3Pool is the PoolQuoter for Balancer V3 pools.
@@ -116,10 +117,11 @@ var balV3GetRateSelector = [4]byte{0x67, 0x9a, 0xef, 0xce}
 
 func newBalancerV3Pool(addr common.Address, reader StorageReader, caller EVMCaller) *BalancerV3Pool {
 	poolHex := poolHex(addr)
-	info, ok := balV3PoolInfos[poolHex]
+	v, ok := balV3PoolInfos.Load(poolHex)
 	if !ok {
 		return nil
 	}
+	info := v.(*BalancerV3PoolInfo)
 
 	vault := balV3VaultAddr
 

@@ -16,6 +16,7 @@ package formulas
 
 import (
 	"math/big"
+	"sync"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -47,11 +48,11 @@ type BalancerV2PoolInfo struct {
 }
 
 // balV2PoolInfos maps lowercase pool address to its info.
-var balV2PoolInfos = map[string]*BalancerV2PoolInfo{}
+var balV2PoolInfos sync.Map // map[string]*BalancerV2PoolInfo
 
 // RegisterBalancerV2Pool registers a Balancer V2 pool for formula quoting.
 func RegisterBalancerV2Pool(poolAddress string, info *BalancerV2PoolInfo) {
-	balV2PoolInfos[poolAddress] = info
+	balV2PoolInfos.Store(poolAddress, info)
 }
 
 // BalancerV2Pool is the PoolQuoter for Balancer V2 weighted pools.
@@ -62,10 +63,11 @@ type BalancerV2Pool struct {
 }
 
 func newBalancerV2Pool(addr common.Address, reader StorageReader) *BalancerV2Pool {
-	info, ok := balV2PoolInfos[poolHex(addr)]
+	v, ok := balV2PoolInfos.Load(poolHex(addr))
 	if !ok {
 		return nil
 	}
+	info := v.(*BalancerV2PoolInfo)
 	if info.NumTokens < 2 || len(info.Tokens) < 2 || len(info.Weights) < 2 {
 		return nil
 	}

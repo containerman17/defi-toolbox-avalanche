@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-04-16 — Swap-replay: parallelize per-block processing
+
+- Transactions are grouped by block. Each block group runs in its own goroutine
+  (capped at `NumCPU * 2` workers), with a dedicated light client per block.
+  Multiple txs in the same block share the light client — no duplicate snapshot
+  fetches.
+- Fixed concurrent map races in global formula caches that were never an issue
+  under single-threaded use: `keccakSlotCacheFast` and `v3LayoutBytesCache`
+  converted to `sync.Map`; same for `balV2PoolInfos`, `balV3PoolInfos`,
+  `v4PoolIds` registration maps. `rpcClient.nextID` now uses `atomic.AddInt64`.
+- Verified: `--limit 20` produces identical results to sequential run
+  (`router_pass_1ppm=12/20 quote_pass_1ppm=6/20`), wall time dropped from
+  ~8 min (cold) / ~3.4s (cached) sequential to ~4s cached parallel.
+
 ## 2026-04-14 — Swap-replay: score against lightclient replay, not debug_traceCall
 
 - The benchmark previously compared router/quote replay output against the

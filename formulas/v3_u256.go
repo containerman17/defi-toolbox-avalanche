@@ -2,6 +2,7 @@ package formulas
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/holiman/uint256"
 )
@@ -20,13 +21,11 @@ type v3LayoutBytes struct {
 	heavyGas   bool     // true for PangolinV3/PharaohV3 with extra per-tick overhead
 }
 
-var (
-	v3LayoutBytesCache = make(map[string]*v3LayoutBytes)
-)
+var v3LayoutBytesCache sync.Map // map[string]*v3LayoutBytes
 
 func v3GetLayoutBytes(read StateReader, poolAddress string) (*v3LayoutBytes, error) {
-	if lb, ok := v3LayoutBytesCache[poolAddress]; ok {
-		return lb, nil
+	if v, ok := v3LayoutBytesCache.Load(poolAddress); ok {
+		return v.(*v3LayoutBytes), nil
 	}
 	layout, err := v3ResolveLayout(read, poolAddress)
 	if err != nil {
@@ -43,7 +42,7 @@ func v3GetLayoutBytes(read StateReader, poolAddress string) (*v3LayoutBytes, err
 		lb.hasFeeSlot = true
 	}
 	lb.heavyGas = layout.heavyGas
-	v3LayoutBytesCache[poolAddress] = lb
+	v3LayoutBytesCache.Store(poolAddress, lb)
 	return lb, nil
 }
 

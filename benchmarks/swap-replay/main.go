@@ -954,6 +954,13 @@ func replaySplitRoute(catalog *poolCatalog, clients map[uint64]*lc.LightClient, 
 		return nil, fmt.Errorf("split replay: negative output %s", out.String())
 	}
 
+	// If we got <50% of expected, we're missing major split paths — report as unsupported
+	halfExpected := new(big.Int).Div(oracleOut, big.NewInt(2))
+	if out.Cmp(halfExpected) < 0 {
+		return nil, fmt.Errorf("split route (partial: %d/%d paths, got %s of %s expected)",
+			len(paths), len(steps), out.String(), oracleOut.String())
+	}
+
 	// Build resolvedSteps for output formatting
 	var resolved []resolvedStep
 	for _, s := range flatSteps {

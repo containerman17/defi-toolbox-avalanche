@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-16 — Swap-replay: filter partial split replays
+
+- When split replay gets <50% of expected output, the tx is reclassified as
+  unsupported rather than reporting a wildly wrong answer. This covers cases
+  where major split paths go through unknown pool types (WooPP V3 executor).
+
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=44 router_under=25 router_over=21 router_unsupported=10 router_pass_1ppm=67/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
+
 ## 2026-04-16 — Swap-replay: split route replay (v1)
 
 - When `detectSplit` fires, the benchmark now attempts split replay instead

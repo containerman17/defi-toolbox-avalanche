@@ -334,76 +334,82 @@ func main() {
 		bg.txs = append(bg.txs, tx)
 	}
 
-	// Process blocks in parallel.
-	workers := runtime.NumCPU() * 2
-	sem := make(chan struct{}, workers)
-	var printMu sync.Mutex
-	var wg sync.WaitGroup
-	resultsCh := make(chan txResult, len(txs))
-
-	for _, blk := range blockOrder {
-		wg.Add(1)
-		sem <- struct{}{} // acquire slot
-		go func(bg *blockGroup) {
-			defer wg.Done()
-			defer func() { <-sem }() // release slot
-
-			clients := make(map[uint64]*lc.LightClient)
-			defer closeLightClients(clients)
-
-			for _, tx := range bg.txs {
-				r := processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
-				printMu.Lock()
-				fmt.Print(r.Line)
-				printMu.Unlock()
-				resultsCh <- r
-			}
-		}(blockMap[blk])
-	}
-	wg.Wait()
-	close(resultsCh)
-
-	// Aggregate.
+	// Process blocks in batches of NumCPU*2, in order.
+	// Each batch completes before the next starts, so cached snapshots
+	// form a contiguous prefix if interrupted.
+	batchSize := runtime.NumCPU() * 2
 	origOK, origReverted := 0, 0
 	routerExact, routerUnder, routerOver, routerUnsupported := 0, 0, 0, 0
 	quoteExact, quoteUnder, quoteOver, quoteUnsupported := 0, 0, 0, 0
 	routerPass1PPM := 0
 	quotePass1PPM := 0
-	for r := range resultsCh {
-		if r.OrigOK {
-			origOK++
-		} else {
-			origReverted++
+
+	for batchStart := 0; batchStart < len(blockOrder); batchStart += batchSize {
+		batchEnd := batchStart + batchSize
+		if batchEnd > len(blockOrder) {
+			batchEnd = len(blockOrder)
 		}
-		if r.RouterExact {
-			routerExact++
+		batch := blockOrder[batchStart:batchEnd]
+
+		batchResults := make([][]txResult, len(batch))
+		var wg sync.WaitGroup
+		for i, blk := range batch {
+			wg.Add(1)
+			go func(idx int, bg *blockGroup) {
+				defer wg.Done()
+
+				clients := make(map[uint64]*lc.LightClient)
+				defer closeLightClients(clients)
+
+				results := make([]txResult, len(bg.txs))
+				for j, tx := range bg.txs {
+					results[j] = processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+				}
+				batchResults[idx] = results
+			}(i, blockMap[blk])
 		}
-		if r.RouterUnder {
-			routerUnder++
-		}
-		if r.RouterOver {
-			routerOver++
-		}
-		if r.RouterUnsupported {
-			routerUnsupported++
-		}
-		if r.QuoteExact {
-			quoteExact++
-		}
-		if r.QuoteUnder {
-			quoteUnder++
-		}
-		if r.QuoteOver {
-			quoteOver++
-		}
-		if r.QuoteUnsupported {
-			quoteUnsupported++
-		}
-		if r.RouterPass1PPM {
-			routerPass1PPM++
-		}
-		if r.QuotePass1PPM {
-			quotePass1PPM++
+		wg.Wait()
+
+		// Print batch results in block order, then aggregate.
+		for _, results := range batchResults {
+			for _, r := range results {
+				fmt.Print(r.Line)
+				if r.OrigOK {
+					origOK++
+				} else {
+					origReverted++
+				}
+				if r.RouterExact {
+					routerExact++
+				}
+				if r.RouterUnder {
+					routerUnder++
+				}
+				if r.RouterOver {
+					routerOver++
+				}
+				if r.RouterUnsupported {
+					routerUnsupported++
+				}
+				if r.QuoteExact {
+					quoteExact++
+				}
+				if r.QuoteUnder {
+					quoteUnder++
+				}
+				if r.QuoteOver {
+					quoteOver++
+				}
+				if r.QuoteUnsupported {
+					quoteUnsupported++
+				}
+				if r.RouterPass1PPM {
+					routerPass1PPM++
+				}
+				if r.QuotePass1PPM {
+					quotePass1PPM++
+				}
+			}
 		}
 	}
 

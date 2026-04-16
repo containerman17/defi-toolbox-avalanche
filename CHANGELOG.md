@@ -1,5 +1,7 @@
 # Changelog
 
+Baseline: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=38 router_under=12 router_over=7 router_unsupported=43 router_pass_1ppm=46/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
+
 ## 2026-04-16 — Swap-replay: head/tail route repair
 
 - When `extractPoolHops` returns a hop chain that doesn't start at the input
@@ -8,8 +10,6 @@
   USDt↔USDC and USDC↔WAVAX bridges that the trace parser misses.
 - Added `findStepByTokens(tokenIn, tokenOut)` on `poolCatalog` — scans all
   pools for one supporting the pair, regardless of address.
-- Before: `router_unsupported=43 router_pass_1ppm=46/100`
-- After:  `router_unsupported=39 router_pass_1ppm=49/100`
 - 4 previously unsupported txs now replayable (1 head bridge, 3 tail bridge).
   1 exotic case remains (pyreAVAX, no pool in catalog).
 

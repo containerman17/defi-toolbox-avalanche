@@ -1,7 +1,5 @@
 # Changelog
 
-Baseline: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=38 router_under=12 router_over=7 router_unsupported=43 router_pass_1ppm=46/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
-
 ## 2026-04-16 — Swap-replay: head/tail route repair
 
 - When `extractPoolHops` returns a hop chain that doesn't start at the input
@@ -31,6 +29,10 @@ Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=39 router_und
 - Verified: `--limit 20` produces identical results to sequential run
   (`router_pass_1ppm=12/20 quote_pass_1ppm=6/20`), wall time dropped from
   ~8 min (cold) / ~3.4s (cached) sequential to ~4s cached parallel.
+
+## 2026-04-16 — Swap-replay benchmark baseline
+
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=38 router_under=12 router_over=7 router_unsupported=43 router_pass_1ppm=46/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
 
 ## 2026-04-14 — Swap-replay: score against lightclient replay, not debug_traceCall
 

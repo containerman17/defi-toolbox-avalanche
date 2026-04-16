@@ -679,10 +679,19 @@ func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]
 		return nil, fmt.Errorf("no pool hops")
 	}
 	if normalizeRouteToken(hops[0].TokenIn) != traced.InputToken {
-		return nil, fmt.Errorf("missing head bridge: %s->%s", traced.InputToken.Hex()[:10], hops[0].TokenIn.Hex()[:10])
+		if rs, ok := catalog.findStepByTokens(traced.InputToken, normalizeRouteToken(hops[0].TokenIn)); ok {
+			hops = append([]poolHop{{Pool: rs.Step.Pool, TokenIn: traced.InputToken, TokenOut: normalizeRouteToken(hops[0].TokenIn)}}, hops...)
+		} else {
+			return nil, fmt.Errorf("missing head bridge: %s->%s", traced.InputToken.Hex()[:10], hops[0].TokenIn.Hex()[:10])
+		}
 	}
 	if normalizeRouteToken(hops[len(hops)-1].TokenOut) != traced.OutputToken {
-		return nil, fmt.Errorf("route ends at %s", hops[len(hops)-1].TokenOut.Hex()[:10])
+		lastOut := normalizeRouteToken(hops[len(hops)-1].TokenOut)
+		if rs, ok := catalog.findStepByTokens(lastOut, traced.OutputToken); ok {
+			hops = append(hops, poolHop{Pool: rs.Step.Pool, TokenIn: lastOut, TokenOut: traced.OutputToken})
+		} else {
+			return nil, fmt.Errorf("route ends at %s", hops[len(hops)-1].TokenOut.Hex()[:10])
+		}
 	}
 
 	steps, err := resolveSteps(catalog, hops)
@@ -1112,6 +1121,33 @@ func poolHasTokens(pool pf.Pool, tokenIn, tokenOut common.Address) bool {
 		}
 	}
 	return hasIn && hasOut
+}
+
+// findStepByTokens scans all pools for one that supports the given token pair,
+// regardless of pool address. Used for head/tail route repair.
+func (c *poolCatalog) findStepByTokens(tokenIn, tokenOut common.Address) (resolvedStep, bool) {
+	for _, pool := range c.pools {
+		if !poolHasTokens(pool, tokenIn, tokenOut) {
+			continue
+		}
+		extra := pool.ExtraData
+		if pool.PoolType == 8 && extra == "" {
+			if fee, ok := customFeeProviders[pool.Dex]; ok {
+				extra = fee
+			}
+		}
+		return resolvedStep{
+			Step: pf.RouteStep{
+				Pool:      pool.Address,
+				PoolType:  pool.PoolType,
+				TokenIn:   tokenIn,
+				TokenOut:  tokenOut,
+				ExtraData: extra,
+			},
+			Provider: pool.Dex,
+		}, true
+	}
+	return resolvedStep{}, false
 }
 
 func normalizeRouteToken(token common.Address) common.Address {

@@ -13,9 +13,7 @@
 - 4 previously unsupported txs now replayable (1 head bridge, 3 tail bridge).
   1 exotic case remains (pyreAVAX, no pool in catalog).
 
-Benchmark results to start with: 
-ubuntu@tokyo:~/defi-toolbox-avalanche$ go run ./benchmarks/swap-replay/ --limit 100 2>&1 | tail -n 1
-SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=38 router_under=12 router_over=7 router_unsupported=43 router_pass_1ppm=46/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=39 router_under=13 router_over=9 router_unsupported=39 router_pass_1ppm=49/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
 
 ## 2026-04-16 — Swap-replay: parallelize per-block processing
 

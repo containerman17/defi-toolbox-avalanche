@@ -337,72 +337,73 @@ func main() {
 	// Process blocks in parallel.
 	workers := runtime.NumCPU() * 2
 	sem := make(chan struct{}, workers)
-	blockResults := make([][]txResult, len(blockOrder))
+	var printMu sync.Mutex
 	var wg sync.WaitGroup
+	resultsCh := make(chan txResult, len(txs))
 
-	for i, blk := range blockOrder {
+	for _, blk := range blockOrder {
 		wg.Add(1)
 		sem <- struct{}{} // acquire slot
-		go func(idx int, bg *blockGroup) {
+		go func(bg *blockGroup) {
 			defer wg.Done()
 			defer func() { <-sem }() // release slot
 
 			clients := make(map[uint64]*lc.LightClient)
 			defer closeLightClients(clients)
 
-			results := make([]txResult, len(bg.txs))
-			for j, tx := range bg.txs {
-				results[j] = processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+			for _, tx := range bg.txs {
+				r := processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+				printMu.Lock()
+				fmt.Print(r.Line)
+				printMu.Unlock()
+				resultsCh <- r
 			}
-			blockResults[idx] = results
-		}(i, blockMap[blk])
+		}(blockMap[blk])
 	}
 	wg.Wait()
+	close(resultsCh)
 
-	// Aggregate and print in order.
+	// Aggregate.
 	origOK, origReverted := 0, 0
 	routerExact, routerUnder, routerOver, routerUnsupported := 0, 0, 0, 0
 	quoteExact, quoteUnder, quoteOver, quoteUnsupported := 0, 0, 0, 0
 	routerPass1PPM := 0
 	quotePass1PPM := 0
-	for _, results := range blockResults {
-		for _, r := range results {
-			fmt.Print(r.Line)
-			if r.OrigOK {
-				origOK++
-			} else {
-				origReverted++
-			}
-			if r.RouterExact {
-				routerExact++
-			}
-			if r.RouterUnder {
-				routerUnder++
-			}
-			if r.RouterOver {
-				routerOver++
-			}
-			if r.RouterUnsupported {
-				routerUnsupported++
-			}
-			if r.QuoteExact {
-				quoteExact++
-			}
-			if r.QuoteUnder {
-				quoteUnder++
-			}
-			if r.QuoteOver {
-				quoteOver++
-			}
-			if r.QuoteUnsupported {
-				quoteUnsupported++
-			}
-			if r.RouterPass1PPM {
-				routerPass1PPM++
-			}
-			if r.QuotePass1PPM {
-				quotePass1PPM++
-			}
+	for r := range resultsCh {
+		if r.OrigOK {
+			origOK++
+		} else {
+			origReverted++
+		}
+		if r.RouterExact {
+			routerExact++
+		}
+		if r.RouterUnder {
+			routerUnder++
+		}
+		if r.RouterOver {
+			routerOver++
+		}
+		if r.RouterUnsupported {
+			routerUnsupported++
+		}
+		if r.QuoteExact {
+			quoteExact++
+		}
+		if r.QuoteUnder {
+			quoteUnder++
+		}
+		if r.QuoteOver {
+			quoteOver++
+		}
+		if r.QuoteUnsupported {
+			quoteUnsupported++
+		}
+		if r.RouterPass1PPM {
+			routerPass1PPM++
+		}
+		if r.QuotePass1PPM {
+			quotePass1PPM++
 		}
 	}
 

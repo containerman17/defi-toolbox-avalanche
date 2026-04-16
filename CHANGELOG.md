@@ -10,6 +10,8 @@
   under single-threaded use: `keccakSlotCacheFast` and `v3LayoutBytesCache`
   converted to `sync.Map`; same for `balV2PoolInfos`, `balV3PoolInfos`,
   `v4PoolIds` registration maps. `rpcClient.nextID` now uses `atomic.AddInt64`.
+- Results stream to stdout as each block completes (out-of-order) instead of
+  buffering until all workers finish — gives progress visibility on long runs.
 - Verified: `--limit 20` produces identical results to sequential run
   (`router_pass_1ppm=12/20 quote_pass_1ppm=6/20`), wall time dropped from
   ~8 min (cold) / ~3.4s (cached) sequential to ~4s cached parallel.

@@ -671,12 +671,28 @@ func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]
 		lfjRouter.Address: true,
 	}
 	if detectSplit(traced.Transfers, exclude, catalog) {
-		return nil, fmt.Errorf("split route")
+		return replaySplitRoute(catalog, clients, wsURL, dataDir, tx, traced, oracleOut)
 	}
 
 	hops := extractPoolHops(traced.Transfers, catalog)
 	if len(hops) == 0 {
-		return nil, fmt.Errorf("no pool hops")
+		// Debug: show which addresses appeared in transfers but aren't in the catalog
+		unknownAddrs := make(map[common.Address]bool)
+		for _, t := range traced.Transfers {
+			for _, addr := range []common.Address{t.From, t.To} {
+				if addr == zeroAddress || addr == traced.Sender || addr == lfjRouter.Address || addr == pf.V4PoolManager {
+					continue
+				}
+				if !catalog.isKnownPool(addr) {
+					unknownAddrs[addr] = true
+				}
+			}
+		}
+		var addrs []string
+		for addr := range unknownAddrs {
+			addrs = append(addrs, addr.Hex())
+		}
+		return nil, fmt.Errorf("no pool hops (unknown: %s)", strings.Join(addrs, ", "))
 	}
 	if normalizeRouteToken(hops[0].TokenIn) != traced.InputToken {
 		if rs, ok := catalog.findStepByTokens(traced.InputToken, normalizeRouteToken(hops[0].TokenIn)); ok {
@@ -716,6 +732,241 @@ func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]
 		Steps:       steps,
 	}, nil
 }
+// splitStep is one atomic pool swap extracted from trace transfers, with its traced input amount.
+type splitStep struct {
+	Pool     common.Address
+	TokenIn  common.Address
+	TokenOut common.Address
+	AmountIn *big.Int
+	LogIndex int // for ordering
+}
+
+// extractSplitSteps extracts per-transfer pool steps from trace events.
+// Each incoming transfer to a known pool paired with an outgoing transfer becomes one step.
+func extractSplitSteps(transfers []transferEvent, catalog *poolCatalog) []splitStep {
+	// Collect incoming and outgoing transfers per known pool address
+	type poolIO struct {
+		incoming []transferEvent
+		outgoing []transferEvent
+	}
+	pools := make(map[common.Address]*poolIO)
+
+	for _, t := range transfers {
+		if t.From != zeroAddress && catalog.isKnownPool(t.To) {
+			pio := pools[t.To]
+			if pio == nil {
+				pio = &poolIO{}
+				pools[t.To] = pio
+			}
+			pio.incoming = append(pio.incoming, t)
+		}
+		if t.To != zeroAddress && catalog.isKnownPool(t.From) {
+			pio := pools[t.From]
+			if pio == nil {
+				pio = &poolIO{}
+				pools[t.From] = pio
+			}
+			pio.outgoing = append(pio.outgoing, t)
+		}
+	}
+
+	var steps []splitStep
+	for addr, pio := range pools {
+		if len(pio.incoming) == 0 || len(pio.outgoing) == 0 {
+			continue
+		}
+
+		// Group incoming by token, outgoing by token
+		inByToken := make(map[common.Address][]transferEvent)
+		outByToken := make(map[common.Address][]transferEvent)
+		for _, t := range pio.incoming {
+			inByToken[t.Token] = append(inByToken[t.Token], t)
+		}
+		for _, t := range pio.outgoing {
+			outByToken[t.Token] = append(outByToken[t.Token], t)
+		}
+
+		// For each (tokenIn, tokenOut) pair where tokenIn != tokenOut, create steps
+		for tokenIn, ins := range inByToken {
+			for tokenOut := range outByToken {
+				if tokenIn == tokenOut {
+					continue
+				}
+				// Create one step per incoming transfer
+				for _, in := range ins {
+					steps = append(steps, splitStep{
+						Pool:     addr,
+						TokenIn:  normalizeRouteToken(tokenIn),
+						TokenOut: normalizeRouteToken(tokenOut),
+						AmountIn: in.Amount,
+						LogIndex: in.LogIndex,
+					})
+				}
+			}
+		}
+	}
+
+	// Sort by log index for deterministic ordering
+	sort.Slice(steps, func(i, j int) bool { return steps[i].LogIndex < steps[j].LogIndex })
+	return steps
+}
+
+// splitPath is a sequence of steps forming one leg of a split route.
+type splitPath struct {
+	Steps    []splitStep
+	AmountIn *big.Int // amount entering the first step
+}
+
+// buildSplitPaths chains split steps into multi-hop paths.
+// Each path starts with a step whose tokenIn is the tx input token (or an unproduced token)
+// and extends greedily by matching tokenOut → tokenIn.
+func buildSplitPaths(steps []splitStep, inputToken, outputToken common.Address) []splitPath {
+	used := make([]bool, len(steps))
+	var paths []splitPath
+
+	// Find path starts: steps whose tokenIn is the input token
+	for i, s := range steps {
+		if s.TokenIn != inputToken {
+			continue
+		}
+		used[i] = true
+		path := splitPath{
+			Steps:    []splitStep{s},
+			AmountIn: s.AmountIn,
+		}
+
+		// Extend the path greedily
+		current := s.TokenOut
+		for current != outputToken {
+			found := false
+			for j, next := range steps {
+				if used[j] || next.TokenIn != current {
+					continue
+				}
+				used[j] = true
+				path.Steps = append(path.Steps, next)
+				current = next.TokenOut
+				found = true
+				break
+			}
+			if !found {
+				break
+			}
+		}
+		paths = append(paths, path)
+	}
+
+	return paths
+}
+
+func replaySplitRoute(catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx, traced *traceReplay, oracleOut *big.Int) (*replayOutcome, error) {
+	parentBlock := tx.Block - 1
+
+	inputToken := normalizeRouteToken(traced.InputToken)
+	outputToken := normalizeRouteToken(traced.OutputToken)
+
+	steps := extractSplitSteps(traced.Transfers, catalog)
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("split route (no steps)")
+	}
+
+	paths := buildSplitPaths(steps, inputToken, outputToken)
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("split route (no paths)")
+	}
+
+	// Extend paths that don't reach the output token using catalog tail repair
+	for i := range paths {
+		lastOut := paths[i].Steps[len(paths[i].Steps)-1].TokenOut
+		if lastOut == outputToken {
+			continue
+		}
+		if rs, ok := catalog.findStepByTokens(lastOut, outputToken); ok {
+			paths[i].Steps = append(paths[i].Steps, splitStep{
+				Pool:     rs.Step.Pool,
+				TokenIn:  lastOut,
+				TokenOut: outputToken,
+			})
+		}
+	}
+
+	// Flatten all paths into a single step sequence with per-step amounts
+	var flatSteps []pf.RouteStep
+	var flatAmounts []*uint256.Int
+	overrideTokens := []common.Address{inputToken}
+
+	for _, path := range paths {
+		if path.Steps[len(path.Steps)-1].TokenOut != outputToken {
+			continue // skip paths that don't reach output
+		}
+		for j, s := range path.Steps {
+			rs, ok := catalog.findStep(s.Pool, s.TokenIn, s.TokenOut)
+			if !ok {
+				// Try findStepByTokens as fallback (for tail repair steps without a specific pool)
+				rs, ok = catalog.findStepByTokens(s.TokenIn, s.TokenOut)
+				if !ok {
+					continue
+				}
+			}
+			flatSteps = append(flatSteps, rs.Step)
+			if j == 0 {
+				amt, _ := uint256.FromBig(path.AmountIn)
+				flatAmounts = append(flatAmounts, amt)
+			} else {
+				flatAmounts = append(flatAmounts, uint256.NewInt(0))
+			}
+		}
+	}
+
+	if len(flatSteps) == 0 {
+		return nil, fmt.Errorf("split route (no resolved steps)")
+	}
+
+	// Encode and execute
+	calldata := pf.EncodeFlatSwap(flatSteps, flatAmounts, uint256.NewInt(0))
+	client, err := lightClientForBlock(clients, wsURL, dataDir, parentBlock)
+	if err != nil {
+		return nil, fmt.Errorf("split lightclient: %w", err)
+	}
+
+	to := backrunRouter
+	ret, _, err := client.DirectCallWithState(lc.CallMsg{
+		From: dummySender,
+		To:   &to,
+		Data: calldata,
+		Gas:  50_000_000,
+	}, 0, func(sv *lc.StateView) {
+		sv.AddBalance(dummySender, new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)))
+		routercontracts.ApplyTokenOverrides(sv, dummySender, backrunRouter, overrideTokens)
+	})
+	if err != nil {
+		if reason := decodeRevertReason(ret); reason != "" {
+			return nil, fmt.Errorf("split replay: %w (%s)", err, reason)
+		}
+		return nil, fmt.Errorf("split replay: %w", err)
+	}
+
+	out := decodeSigned256(ret)
+	if out == nil {
+		return nil, fmt.Errorf("split replay: empty return")
+	}
+	if out.Sign() < 0 {
+		return nil, fmt.Errorf("split replay: negative output %s", out.String())
+	}
+
+	// Build resolvedSteps for output formatting
+	var resolved []resolvedStep
+	for _, s := range flatSteps {
+		resolved = append(resolved, resolvedStep{Step: s})
+	}
+
+	return &replayOutcome{
+		ExpectedOut: oracleOut,
+		ActualOut:   out,
+		Steps:       resolved,
+	}, nil
+}
+
 func fetchSwapLogs(rpc *rpcClient, router routerDef, startBlock, endBlock, chunkSize uint64, limit int) ([]replayTx, uint64, error) {
 	if endBlock == 0 {
 		latest, err := rpc.BlockNumber()

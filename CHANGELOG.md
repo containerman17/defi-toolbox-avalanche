@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-04-16 — Swap-replay: split route replay (v1)
+
+- When `detectSplit` fires, the benchmark now attempts split replay instead
+  of returning unsupported. Extracts per-transfer pool steps from trace events,
+  chains them into multi-hop paths, and replays all paths as a single
+  `EncodeFlatSwap` call with per-step amounts (first hop of each path gets
+  traced amountIn, downstream hops get 0 to consume accumulated balance).
+- Exported `EncodeFlatSwap` from pathfinder — wraps `encodeMergedSteps` to
+  encode steps with explicit per-step amounts into a single swap() call.
+- v1 limitations: no retry strategies, no proportional redistribution, no
+  topological reordering. Step extraction creates duplicate steps when a pool
+  has multiple incoming transfers of the same token (visible as inflated hop
+  counts on some routes). To be improved iteratively.
+
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=44 router_under=27 router_over=21 router_unsupported=8 router_pass_1ppm=66/100 quote_exact=22 quote_under=58 quote_over=12 quote_unsupported=8 quote_pass_1ppm=34/100`
+
 ## 2026-04-16 — Swap-replay: head/tail route repair
 
 - When `extractPoolHops` returns a hop chain that doesn't start at the input

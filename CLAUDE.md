@@ -52,6 +52,10 @@ Do not say a task is done unless it has been verified in the way the task actual
 If the work is supposed to function through a real script, pipeline, replay, or live startup
 path, run that path and confirm the practical result before closing it out.
 
+## RPC
+
+Local Avalanche C-Chain RPC is available at `http://localhost:9650/ext/bc/C/rpc` with debug APIs enabled. Much faster than public endpoints. Use this for `cast`, traces, and benchmarks.
+
 ## Useful API Spells
 
 Biglabs Avalanche arbitrages, filtered by sender and showing only block number + tx hash:

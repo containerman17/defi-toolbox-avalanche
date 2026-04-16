@@ -371,6 +371,13 @@ func EncodeSquishedWithQuoter(routes []SquishRoute, minOutput *uint256.Int, quot
 	return encodeMergedSteps(steps, amounts, minOutput)
 }
 
+// EncodeFlatSwap encodes multiple steps with explicit per-step amounts into a
+// single swap() call. Used for split route replay where each path's first hop
+// carries its traced amountIn and downstream hops use 0 (consume accumulated balance).
+func EncodeFlatSwap(steps []RouteStep, amounts []*uint256.Int, minOutput *uint256.Int) []byte {
+	return encodeMergedSteps(steps, amounts, minOutput)
+}
+
 func encodeMergedSteps(steps []RouteStep, amounts []*uint256.Int, minOutput *uint256.Int) []byte {
 	poolAddrs := make([]common.Address, len(steps))
 	poolTypes := make([]int, len(steps))

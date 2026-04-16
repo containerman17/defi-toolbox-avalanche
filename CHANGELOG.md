@@ -10,10 +10,9 @@
   under single-threaded use: `keccakSlotCacheFast` and `v3LayoutBytesCache`
   converted to `sync.Map`; same for `balV2PoolInfos`, `balV3PoolInfos`,
   `v4PoolIds` registration maps. `rpcClient.nextID` now uses `atomic.AddInt64`.
-- Blocks processed in sequential batches of NumCPU*2. Within each batch blocks
-  run in parallel; batches complete in order. Output prints in block order after
-  each batch, giving progress visibility. If interrupted, cached snapshots form
-  a contiguous prefix — a subsequent smaller `--limit` hits warm cache.
+- NumCPU*2 worker goroutines pull blocks from an ordered channel. Workers stay
+  busy (no batch stalling on the slowest block). Blocks are consumed roughly
+  in order, so interrupted runs cache a sequential prefix.
 - Verified: `--limit 20` produces identical results to sequential run
   (`router_pass_1ppm=12/20 quote_pass_1ppm=6/20`), wall time dropped from
   ~8 min (cold) / ~3.4s (cached) sequential to ~4s cached parallel.

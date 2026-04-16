@@ -334,84 +334,74 @@ func main() {
 		bg.txs = append(bg.txs, tx)
 	}
 
-	// Process blocks in batches of NumCPU*2, in order.
-	// Each batch completes before the next starts, so cached snapshots
-	// form a contiguous prefix if interrupted.
-	batchSize := runtime.NumCPU() * 2
-	origOK, origReverted := 0, 0
-	routerExact, routerUnder, routerOver, routerUnsupported := 0, 0, 0, 0
-	quoteExact, quoteUnder, quoteOver, quoteUnsupported := 0, 0, 0, 0
-	routerPass1PPM := 0
-	quotePass1PPM := 0
+	// Worker pool: N workers pull blocks from a channel in order.
+	numWorkers := runtime.NumCPU() * 2
+	work := make(chan *blockGroup, numWorkers)
+	var printMu sync.Mutex
+	var wg sync.WaitGroup
+	origOK, origReverted := int64(0), int64(0)
+	routerExact, routerUnder, routerOver, routerUnsupported := int64(0), int64(0), int64(0), int64(0)
+	quoteExact, quoteUnder, quoteOver, quoteUnsupported := int64(0), int64(0), int64(0), int64(0)
+	routerPass1PPM := int64(0)
+	quotePass1PPM := int64(0)
 
-	for batchStart := 0; batchStart < len(blockOrder); batchStart += batchSize {
-		batchEnd := batchStart + batchSize
-		if batchEnd > len(blockOrder) {
-			batchEnd = len(blockOrder)
-		}
-		batch := blockOrder[batchStart:batchEnd]
-
-		batchResults := make([][]txResult, len(batch))
-		var wg sync.WaitGroup
-		for i, blk := range batch {
-			wg.Add(1)
-			go func(idx int, bg *blockGroup) {
-				defer wg.Done()
-
+	for range numWorkers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for bg := range work {
 				clients := make(map[uint64]*lc.LightClient)
-				defer closeLightClients(clients)
-
-				results := make([]txResult, len(bg.txs))
-				for j, tx := range bg.txs {
-					results[j] = processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+				for _, tx := range bg.txs {
+					r := processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+					printMu.Lock()
+					fmt.Print(r.Line)
+					printMu.Unlock()
+					if r.OrigOK {
+						atomic.AddInt64(&origOK, 1)
+					} else {
+						atomic.AddInt64(&origReverted, 1)
+					}
+					if r.RouterExact {
+						atomic.AddInt64(&routerExact, 1)
+					}
+					if r.RouterUnder {
+						atomic.AddInt64(&routerUnder, 1)
+					}
+					if r.RouterOver {
+						atomic.AddInt64(&routerOver, 1)
+					}
+					if r.RouterUnsupported {
+						atomic.AddInt64(&routerUnsupported, 1)
+					}
+					if r.QuoteExact {
+						atomic.AddInt64(&quoteExact, 1)
+					}
+					if r.QuoteUnder {
+						atomic.AddInt64(&quoteUnder, 1)
+					}
+					if r.QuoteOver {
+						atomic.AddInt64(&quoteOver, 1)
+					}
+					if r.QuoteUnsupported {
+						atomic.AddInt64(&quoteUnsupported, 1)
+					}
+					if r.RouterPass1PPM {
+						atomic.AddInt64(&routerPass1PPM, 1)
+					}
+					if r.QuotePass1PPM {
+						atomic.AddInt64(&quotePass1PPM, 1)
+					}
 				}
-				batchResults[idx] = results
-			}(i, blockMap[blk])
-		}
-		wg.Wait()
-
-		// Print batch results in block order, then aggregate.
-		for _, results := range batchResults {
-			for _, r := range results {
-				fmt.Print(r.Line)
-				if r.OrigOK {
-					origOK++
-				} else {
-					origReverted++
-				}
-				if r.RouterExact {
-					routerExact++
-				}
-				if r.RouterUnder {
-					routerUnder++
-				}
-				if r.RouterOver {
-					routerOver++
-				}
-				if r.RouterUnsupported {
-					routerUnsupported++
-				}
-				if r.QuoteExact {
-					quoteExact++
-				}
-				if r.QuoteUnder {
-					quoteUnder++
-				}
-				if r.QuoteOver {
-					quoteOver++
-				}
-				if r.QuoteUnsupported {
-					quoteUnsupported++
-				}
-				if r.RouterPass1PPM {
-					routerPass1PPM++
-				}
-				if r.QuotePass1PPM {
-					quotePass1PPM++
-				}
+				closeLightClients(clients)
 			}
-		}
+		}()
 	}
+
+	for _, blk := range blockOrder {
+		work <- blockMap[blk]
+	}
+	close(work)
+	wg.Wait()
 
 	total := origOK + origReverted
 	fmt.Printf("SUMMARY total=%d orig_ok=%d orig_reverted=%d router_exact=%d router_under=%d router_over=%d router_unsupported=%d router_pass_1ppm=%d/%d quote_exact=%d quote_under=%d quote_over=%d quote_unsupported=%d quote_pass_1ppm=%d/%d\n",

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-04-16 — Swap-replay: dead end — proportional redistribution
+
+- Tried scaling extracted split amounts proportionally when sum < totalAmountIn.
+  Made things worse (67→66): the missing amounts genuinely go through unknown
+  pools (WooPP V3), so pushing more through known pools just increases slippage.
+- Reverted. The JS code used this as a retry strategy, but it only helped when
+  input was "lost" due to trace parsing bugs, not when paths are structurally
+  missing.
+
 ## 2026-04-16 — Swap-replay: filter partial split replays
 
 - When split replay gets <50% of expected output, the tx is reclassified as

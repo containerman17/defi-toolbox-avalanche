@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-04-17 — Wombat: fix sAVAX rate/quoteFactor/covRatio rounding (eliminate overquotes)
+
+- Formula used round-to-nearest `wDiv` for three calcs where Solidity does raw
+  truncating division (`x * 1e18 / y`):
+  1. sAVAX storage-based rate (`getPooledAvaxByShares(WAD)` is `totalPooledAvax * WAD / totalShares`)
+  2. `DynamicPoolV2._quoteFactor` (`fromAssetRate * WAD / toAssetRate`)
+  3. `finalCovRatio` / `initCovRatio` (`cash * 1e18 / liability`)
+- A 1-wei rate error gets amplified by `wMul(fromCash, scaleFactor)` with
+  fromCash ≈ 2.8e23, producing ~280k-wei shift in scaled cash/liability and
+  leaking through the curve as a few hundred wei of overquote on sAVAX→WAVAX.
+- Added `rawWadDiv(x, y) = (x * WAD) / y` helper using `Quo` (truncate toward
+  zero) and swapped the three call sites.
+
+Bench (top-500 pools × 10 blocks): overquotes 4→0. wombat 6/10 → 10/10 match. Total exact 79.29% → 79.37%.
+
+## 2026-04-17 — Quoter: limit to top 4000 most recently active pools
+
+- Pools not traded in ~1 week have no meaningful liquidity. Keeping them adds
+  noise to BFS (dead edges wasting beam slots) and risk (stale liquidity that
+  reverts on-chain).
+- pools.txt is sorted by latest swap block descending, so EmbeddedPools(4000)
+  gives the 4000 most recently traded pools.
+- Benchmark impact: quote_unsupported 8→15 (niche tokens fall outside top 4k),
+  quote_pass_1ppm 34→30. Acceptable — those tokens aren't HFT-relevant.
+
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 router_exact=43 router_under=25 router_over=22 router_unsupported=10 router_pass_1ppm=67/100 quote_exact=19 quote_under=55 quote_over=11 quote_unsupported=15 quote_pass_1ppm=30/100`
+
 ## 2026-04-16 — Swap-replay: dead end — proportional redistribution
 
 - Tried scaling extracted split amounts proportionally when sum < totalAmountIn.

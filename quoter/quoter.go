@@ -39,7 +39,7 @@ func New(maxHops int) *Quoter {
 		maxHops = 4
 	}
 	registry := formulas.LoadEmbeddedRegistry()
-	pools := poolcollector.EmbeddedPools(0) // 0 = all pools
+	pools := poolcollector.EmbeddedPools(4000) // top 4000 most recently active
 	adj := pf.BuildAdjacency(pools, registry)
 
 	return &Quoter{

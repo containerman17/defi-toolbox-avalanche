@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-18 — SnowyYields pool-specific FoT gate (→98.71%)
+
+SnowyYields (`0xcd0dcc37`) `_transfer` gates `taxAmount` on `from|to == uniswapV2Pair`.
+Source: slot 11 confirmed the registered pair is `0x57ba9107` (openTrading() calls
+`factory.createPair(this, WAVAX)`). Our `fotBps(400)` was applying the 4% tax to
+every SnowyYields pool, but only the WAVAX pair should pay it.
+
+Added three non-WAVAX SnowyYields pools to `FotExemptPools`:
+- `0x72de7ea2` (lfj_v1, 0x8729438e/SnowyYields)
+- `0xb56beab4` (lfj_v1, 0x420fca01/SnowyYields)
+- `0x0df8ec2e` (lfj_v1, 0x65378b69/SnowyYields)
+
+Pool `0x57ba9107` (the registered pair) keeps the tax and continues to match EVM.
+
+```
+TOTAL            39250  38745      0    505   2030
+exact=98.71% over=0.00% under=1.29% zero=5.17% non_zero=94.83%
+```
+
+lfj_v1 under: 165 → 135 (30 match wins = 3 pools × 10 blocks). 0 overquotes.
+
 ## 2026-04-18 — FoT tokens + pharaoh SubtractOne: real formula fixes (→98.64%)
 
 Four output tokens on V2-family pools had no FoT entry, causing ~5–6% overquote.

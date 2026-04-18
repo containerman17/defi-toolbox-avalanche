@@ -577,6 +577,15 @@ var FotExemptPools = map[string]bool{
 	"0x24208ef8e891db2b327a20eaefccf22206783e9a": true, // GOOD/WAVAX lfj_v1
 	"0x4d30d49735dc3cf20c39eb97ddcfa2b3258134ea": true, // GOOD/0x234b lfj_v1
 	"0x874d7fe773b3a73d6b26032ec543cf79ece89701": true, // GOOD/WAVAX lfj_v2
+
+	// SnowyYields (0xcd0d): _transfer gates taxAmount by `from|to == uniswapV2Pair`.
+	// Slot 11 confirms uniswapV2Pair = 0x57ba9107 (registered via openTrading() with
+	// factory.createPair(this, WAVAX)). Only that pool triggers the 4% tax.
+	// Other SnowyYields pools pair with non-WAVAX tokens and don't match the
+	// registered pair — they transfer fee-free.
+	"0x72de7ea2934e35949734302e29bb9d4281fad9f2": true, // 0x8729438e/SnowyYields lfj_v1
+	"0xb56beab415b4ef185da7a3937782087480e8db29": true, // 0x420fca01/SnowyYields lfj_v1
+	"0x0df8ec2e8b2b8076dee5038a950e193bb9f540c9": true, // 0x65378b69/SnowyYields lfj_v1
 }
 
 // FotPoolTokenOverrides maps (pool, token) to a custom FoT calculator.

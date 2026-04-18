@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-04-18 — Elimination split routing: beam=1 BFS + EVM-based volume sizing
+
+### Changes
+
+- **pathfinder/bfs.go**: Hardcoded beam=1 BFS (removed configurable BeamWidth and
+  FindTopFormulaRoutes). Beam>1 causes combinatorial explosion with non-linear
+  timing and worse route discovery than elimination. DO NOT reintroduce.
+
+- **pathfinder/bfs.go**: Added `FindRoutesElimination` — discovers diverse routes
+  by blacklisting every non-empty subset of the best route's pools (phase 1),
+  then greedy-disjoint rounds blacklisting ALL previously used pools (phase 2).
+  For a 2-hop best route [A,B]: tries {A},{B},{A+B} then keeps finding fully
+  disjoint routes. ~95% formula cache hits makes each BFS run near-free.
+
+- **pathfinder/bfs.go**: Added `OptimalSplit` (formula-based volume splitting,
+  greedy rebalancing). Used as fast approximation; benchmark overrides with
+  EVM-based sizing.
+
+- **quoter/quoter.go**: `QuotePair` now runs elimination search (up to 8 routes)
+  and returns split result. Added per-token pool activation: top-5 pools beyond
+  the base 4k are lazily added to the BFS graph when a token is queried, so
+  low-activity tokens like PSHARE still get edges.
+
+- **benchmarks/swap-replay/main.go**: Added `evmOptimalSplit` — coordinate-descent
+  volume optimizer using EVM simulation. Grid-searches 0-50% per alternative
+  route in 5% steps (coarse), then 1% steps (fine). ~50 EVM calls ≈ 150ms.
+  Handles shared pools correctly since EVM executes steps sequentially.
+  Added `--offset` flag for targeted single-tx investigation.
+
+### Results
+
+Tested on tx 0x5ac23729 (81.24 AVAX → XAVA, 4-way split in original):
+
+| Stage | Output (XAVA) |
+|-------|--------------|
+| Single route (beam=1) | 2767.08 |
+| Formula-sized split (4 routes) | 2766.95 (worse — shared pool interaction) |
+| EVM-sized split (8 candidates) | **2768.53** |
+| Oracle (LFJ aggregator) | 2768.40 |
+
+EVM split beats the LFJ aggregator by +0.13 XAVA. Found same 3 direct pools
+the original tx used (0x6079, 0x4215, 0x72c3) plus the 2-hop USDC path.
+
+```
+SUMMARY total=1 orig_ok=1 quote_over=1 quote_pass_1ppm=1/1
+```
+
+### Dead ends
+
+- **Formula-based volume sizing is useless for splits.** Formulas quote each route
+  independently — when routes share a pool (common pattern: different first hops
+  converging on the same second-hop pool), the formula overestimates total output.
+  In the XAVA case, formula said 2771.17 but EVM gave 2766.95 (worse than single
+  route). EVM sizing is the only correct approach.
+
 ## 2026-04-18 — v3: short-circuit drained pools + widen tickSpacing=1 bitmap (→98.89%, 0 overquotes)
 
 ### Problem

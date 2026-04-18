@@ -200,6 +200,7 @@ func main() {
 	wsURL := flag.String("ws", defaultWSURL, "WebSocket RPC URL for lightclient replay")
 	dataDir := flag.String("data-dir", filepath.Join("benchmarks", "swap-replay", ".lightclient"), "lightclient snapshot directory")
 	limit := flag.Int("limit", defaultLimit, "number of transactions to print (0 = all)")
+	offset := flag.Int("offset", 0, "skip the first N transactions")
 	startBlock := flag.Uint64("start-block", routercontracts.DeployedBlock, "first block to scan")
 	endBlock := flag.Uint64("end-block", 0, "last block to scan (0 = latest)")
 	chunkSize := flag.Uint64("chunk-size", defaultChunkSize, "block range per eth_getLogs request")
@@ -218,10 +219,19 @@ func main() {
 		metaCache: make(map[common.Address]tokenMeta),
 	}
 
-	txs, scannedEnd, err := fetchSwapLogs(rpc, lfjRouter, *startBlock, *endBlock, *chunkSize, *limit)
+	fetchLimit := *limit
+	if *offset > 0 && fetchLimit > 0 {
+		fetchLimit += *offset
+	}
+	txs, scannedEnd, err := fetchSwapLogs(rpc, lfjRouter, *startBlock, *endBlock, *chunkSize, fetchLimit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fetch logs: %v\n", err)
 		os.Exit(1)
+	}
+	if *offset > 0 && *offset < len(txs) {
+		txs = txs[*offset:]
+	} else if *offset >= len(txs) {
+		txs = nil
 	}
 	fmt.Fprintf(os.Stderr, "[swap-replay] router=%s start=%d end=%d found=%d\n", lfjRouter.Name, *startBlock, scannedEnd, len(txs))
 
@@ -408,6 +418,31 @@ func blindQuotePair(q *quoter.Quoter, client *lc.LightClient, inputToken, output
 	if result == nil || result.Route == nil || result.Route.AmountOut == nil || result.Route.AmountOut.IsZero() {
 		return nil, fmt.Errorf("no route")
 	}
+
+	// If multiple routes found, use EVM-based volume optimization.
+	if result.Split != nil && len(result.Split.Routes) > 1 {
+		routes := result.Split.Routes
+		bestOut, bestVols := evmOptimalSplit(client, routes, inputToken, amountIn)
+		if bestOut != nil {
+			fmt.Fprintf(os.Stderr, "[split] %d routes, evm best=%s (single route=%s)\n",
+				len(routes), bestOut.String(), result.Route.AmountOut.Dec())
+			for i, r := range routes {
+				var poolAddrs []string
+				for _, s := range r.Steps {
+					poolAddrs = append(poolAddrs, s.Pool.Hex()[:10])
+				}
+				fmt.Fprintf(os.Stderr, "[split]   route %d: vol=%s hops=%d pools=%v\n",
+					i, bestVols[i].Dec(), len(r.Steps), poolAddrs)
+			}
+			return &quoteOutcome{
+				QuotedOut: bestOut,
+				ActualOut: bestOut,
+				Route:     result.Route,
+			}, nil
+		}
+	}
+
+	// Single route fallback.
 	actualOut, err := replayPathfinderRouteOnLightClient(client, result.Route, inputToken, amountIn)
 	if err != nil {
 		return nil, fmt.Errorf("quote route replay: %w", err)
@@ -469,6 +504,113 @@ func replayPathfinderRouteOnLightClient(client *lc.LightClient, route *pf.Route,
 		return nil, fmt.Errorf("negative output %s", out.String())
 	}
 	return out, nil
+}
+
+// simulateSplitEVM runs a split route via EVM and returns the total output.
+// Returns nil on error.
+func simulateSplitEVM(client *lc.LightClient, routes []*pf.Route, volumes []*uint256.Int, inputToken common.Address) *big.Int {
+	var allSteps []pf.RouteStep
+	var allAmounts []*uint256.Int
+	for i, route := range routes {
+		if volumes[i].IsZero() {
+			continue
+		}
+		for j, step := range route.Steps {
+			allSteps = append(allSteps, step)
+			if j == 0 {
+				allAmounts = append(allAmounts, new(uint256.Int).Set(volumes[i]))
+			} else {
+				allAmounts = append(allAmounts, uint256.NewInt(0))
+			}
+		}
+	}
+	if len(allSteps) == 0 {
+		return nil
+	}
+
+	calldata := pf.EncodeFlatSwap(allSteps, allAmounts, uint256.NewInt(0))
+	to := backrunRouter
+	ret, _, err := client.DirectCallWithState(lc.CallMsg{
+		From: dummySender,
+		To:   &to,
+		Data: calldata,
+		Gas:  50_000_000,
+	}, 0, func(sv *lc.StateView) {
+		sv.AddBalance(dummySender, new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)))
+		routercontracts.ApplyTokenOverrides(sv, dummySender, backrunRouter, []common.Address{inputToken})
+	})
+	if err != nil {
+		return nil
+	}
+	out := decodeSigned256(ret)
+	if out == nil || out.Sign() <= 0 {
+		return nil
+	}
+	return out
+}
+
+// evmOptimalSplit finds the optimal volume split across routes using EVM simulation.
+// Uses coordinate descent: for each alternative route, grid-search its share (0-50%
+// in 5% steps), then refine around the best in 1% steps. Each trial is a single
+// EVM call (~2-3ms), so total cost is ~50 calls ≈ 150ms.
+func evmOptimalSplit(client *lc.LightClient, routes []*pf.Route, inputToken common.Address, totalAmountIn *big.Int) (*big.Int, []*uint256.Int) {
+	totalU256, overflow := uint256.FromBig(totalAmountIn)
+	if overflow || totalU256.IsZero() {
+		return nil, nil
+	}
+	n := len(routes)
+
+	// Start with 100% on route 0.
+	bestVols := make([]*uint256.Int, n)
+	bestVols[0] = new(uint256.Int).Set(totalU256)
+	for i := 1; i < n; i++ {
+		bestVols[i] = new(uint256.Int)
+	}
+	bestOut := simulateSplitEVM(client, routes, bestVols, inputToken)
+	if bestOut == nil {
+		return nil, nil
+	}
+
+	// Coordinate descent: 2 rounds of coarse then fine.
+	for round := 0; round < 2; round++ {
+		for i := 1; i < n; i++ {
+			// Coarse: 0-50% in 5% steps.
+			step := uint64(5)
+			if round > 0 {
+				step = 1 // fine pass
+			}
+			for pct := uint64(0); pct <= 50; pct += step {
+				trial := copyVolumes(bestVols)
+				trial[i] = new(uint256.Int).Mul(totalU256, uint256.NewInt(pct))
+				trial[i].Div(trial[i], uint256.NewInt(100))
+				// Route 0 gets the remainder.
+				var otherSum uint256.Int
+				for j := 1; j < n; j++ {
+					otherSum.Add(&otherSum, trial[j])
+				}
+				if otherSum.Gt(totalU256) {
+					continue
+				}
+				trial[0] = new(uint256.Int).Sub(totalU256, &otherSum)
+
+				out := simulateSplitEVM(client, routes, trial, inputToken)
+				if out != nil && out.Cmp(bestOut) > 0 {
+					bestOut = out
+					bestVols = trial
+				}
+			}
+		}
+	}
+
+	return bestOut, bestVols
+}
+
+func copyVolumes(vols []*uint256.Int) []*uint256.Int {
+	c := make([]*uint256.Int, len(vols))
+	for i, v := range vols {
+		c[i] = new(uint256.Int).Set(v)
+	}
+	return c
 }
 
 func formatQuoteRoute(route *pf.Route, rpc *rpcClient) string {

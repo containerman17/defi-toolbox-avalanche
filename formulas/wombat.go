@@ -158,13 +158,14 @@ func (p *WombatPool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Addre
 	}
 
 	// High coverage ratio fee (uses UNSCALED from-side)
+	// Solidity: (cash * 1e18) / liability — truncating integer division.
 	finalFromCash := new(big.Int).Add(fromCash, fromAmount)
-	finalCovRatio := wDiv(finalFromCash, fromLiab)
+	finalCovRatio := rawWadDiv(finalFromCash, fromLiab)
 	if finalCovRatio.Cmp(p.endCovRatio) > 0 {
 		return uint256.Int{} // would revert on-chain
 	}
 	if finalCovRatio.Cmp(p.startCovRatio) > 0 {
-		initCovRatio := wDiv(fromCash, fromLiab)
+		initCovRatio := rawWadDiv(fromCash, fromLiab)
 		highFee := wombatHighCovRatioFee(initCovRatio, finalCovRatio, p.startCovRatio, p.endCovRatio)
 		if highFee != nil && highFee.Sign() > 0 {
 			penalty := wMul(highFee, actualTo)
@@ -198,8 +199,8 @@ func (p *WombatPool) quoteFactor(fromAsset, toAsset common.Address) *big.Int {
 	if fromPrice == nil || toPrice == nil || toPrice.Sign() <= 0 {
 		return wad // fallback to 1:1
 	}
-	// scaleFactor = fromPrice * 1e18 / toPrice
-	return wDiv(fromPrice, toPrice)
+	// Solidity DynamicPoolV2._quoteFactor: (fromAssetRate * WAD) / toAssetRate — truncating.
+	return rawWadDiv(fromPrice, toPrice)
 }
 
 // sAVAX rate storage slots: totalPooledAvax at slot 201, totalShares at slot 202.
@@ -228,7 +229,8 @@ func (p *WombatPool) getRelativePrice(asset common.Address) *big.Int {
 	totalPooled := new(big.Int).SetBytes(totalPooledRaw[:])
 	totalShares := new(big.Int).SetBytes(totalSharesRaw[:])
 	if totalPooled.Sign() > 0 && totalShares.Sign() > 0 {
-		return wDiv(totalPooled, totalShares)
+		// Match sAVAX.getPooledAvaxByShares(WAD) = totalPooledAvax * WAD / totalShares (truncating).
+		return rawWadDiv(totalPooled, totalShares)
 	}
 
 	// Fallback: ERC-4626 convertToAssets(1e18) via EVM call (ggAVAX)
@@ -401,6 +403,18 @@ func wMul(x, y *big.Int) *big.Int {
 		product.Sub(product, wadHalf)
 	}
 	return product.Div(product, wad)
+}
+
+// rawWadDiv is truncating (x * WAD) / y, matching Solidity's raw integer division.
+// Use where Solidity uses `*1e18/y` (not `.wdiv(y)`): exchange rates, cov-ratio,
+// quoteFactor. wDiv rounds-to-nearest and produces off-by-one results that
+// propagate through the swap curve as hundreds of wei of overquote.
+func rawWadDiv(x, y *big.Int) *big.Int {
+	if y.Sign() == 0 {
+		return big.NewInt(0)
+	}
+	r := new(big.Int).Mul(x, wad)
+	return r.Quo(r, y)
 }
 
 func wDiv(x, y *big.Int) *big.Int {

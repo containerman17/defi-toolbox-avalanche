@@ -315,7 +315,7 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "[swap-replay] router=%s start=%d end=%d found=%d\n", lfjRouter.Name, *startBlock, scannedEnd, len(txs))
 
-	catalog := newPoolCatalog(poolcollector.EmbeddedPools(0))
+	catalog := newPoolCatalog(poolcollector.EmbeddedPools(4000))
 
 	// Group txs by block — one goroutine per block, one light client per block.
 	type blockGroup struct {
@@ -1120,7 +1120,6 @@ func lightClientForBlock(cache map[uint64]*lc.LightClient, wsURL, dataDir string
 		RPCURL:     wsURL,
 		DataDir:    dataDir,
 		FixedBlock: block,
-		Quiet:      true,
 	})
 	if err != nil {
 		return nil, err

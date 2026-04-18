@@ -87,7 +87,7 @@ func runFirstPass(snapPath, rpcURL string, concurrency, numBlocks int) {
 		blockHashes[blockNum] = bd.Hash
 		block := lightclient.BlockDataToTypesBlock(bd)
 
-		miss := fetcher.MissCallbacks(state)
+		miss := fetcher.MissCallbacks(state, &lightclient.FetchStats{})
 		sv := lightclient.NewStateView(state, blockNum-1, miss)
 
 		diff, err := lightclient.ExecuteBlock(block, sv, chainCfg, func(n uint64) common.Hash {
@@ -112,7 +112,7 @@ func runFirstPass(snapPath, rpcURL string, concurrency, numBlocks int) {
 
 	// Also execute a Call to WAVAX.totalSupply() to populate that contract's state.
 	{
-		miss := fetcher.MissCallbacks(state)
+		miss := fetcher.MissCallbacks(state, &lightclient.FetchStats{})
 		sv := lightclient.NewStateView(state, headNum, miss)
 
 		bd, err := fetcher.GetBlock(headNum)

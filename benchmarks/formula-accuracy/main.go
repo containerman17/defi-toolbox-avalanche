@@ -2,21 +2,25 @@
 //
 // For each pool in the registry, quotes via formula and via EVM (router
 // debugSwapSingle), reports match/mismatch/overquote stats per pool type.
+// Runs against one or more blocks starting from the router deployment block,
+// spaced 10 000 blocks apart. Uses the LightClient in fixed-block mode so
+// fetched state is persisted as snapshots and reused across runs.
 //
 // Usage:
 //
-//	go run ./benchmarks/formula-accuracy/ [--rpc ws://...] [--limit 4000]
+//	go run ./benchmarks/formula-accuracy/ [--blocks 1] [--limit 4000]
 package main
 
 import (
-	"encoding/json"
+	"context"
 	"flag"
 	"fmt"
-	"math/big"
 	"os"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	router "defi-toolbox/contracts"
@@ -26,14 +30,16 @@ import (
 	poolcollector "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
-	"github.com/ava-labs/libevm/params"
 	"github.com/holiman/uint256"
 )
 
 var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dEaD")
-var debugEVM = true
+var debugEVM = false
 
-const defaultPoolLimit = 4000
+const (
+	defaultPoolLimit = 4000
+	blockSpacing     = 10_000
+)
 
 var typeNames = map[int]string{
 	0:  "uniswap_v3",
@@ -67,35 +73,38 @@ type typeStats struct {
 	Zero       int // both returned zero
 }
 
+func (s *typeStats) add(o *typeStats) {
+	s.Quotes += o.Quotes
+	s.Match += o.Match
+	s.Overquote += o.Overquote
+	s.Underquote += o.Underquote
+	s.Zero += o.Zero
+}
+
+type quoteJob struct {
+	pool     pathfinder.Pool
+	tokenIn  common.Address
+	tokenOut common.Address
+	amount   *uint256.Int
+}
+
+type blockResult struct {
+	block      uint64
+	byType     map[int]*typeStats
+	overquotes int
+	jobs       int
+	elapsed    time.Duration
+}
+
 func main() {
 	rpcURL := flag.String("rpc", "ws://127.0.0.1:9650/ext/bc/C/ws", "WebSocket RPC URL")
 	concurrency := flag.Int("concurrency", 2*runtime.NumCPU(), "RPC pool size")
 	poolLimit := flag.Int("limit", defaultPoolLimit, "pool limit (default 4000, 0 = all)")
+	nBlocks := flag.Int("blocks", 10, "number of blocks to test, spaced 10k apart from deployment")
+	dataDir := flag.String("data-dir", "benchmarks/formula-accuracy/.lightclient", "lightclient snapshot directory")
 	flag.Parse()
 
-	pool, err := lc.NewRPCPool(*rpcURL, *concurrency)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "rpc: %v\n", err)
-		os.Exit(1)
-	}
-	defer pool.Close()
-
-	fetcher := lc.NewBlockFetcher(pool)
-	vs := lc.NewVersionedState()
-
-	headBlock, headTimestamp, baseFee, err := fetchHead(pool)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "head: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Fprintf(os.Stderr, "[bench] head block: %d\n", headBlock)
-
-	chainCfg, err := lc.FetchChainConfig(pool)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "chain config: %v\n", err)
-		os.Exit(1)
-	}
-
+	// Load pool and formula data (shared across all blocks).
 	pools := poolcollector.EmbeddedPools(*poolLimit)
 	registry := formulas.LoadEmbeddedRegistry()
 	tokenAmounts := formulas.LoadEmbeddedTokenAmounts()
@@ -108,6 +117,7 @@ func main() {
 		var poolIdHex string
 		var fee uint32
 		var tickSpacing int32
+		var hooks common.Address
 		for _, kv := range strings.Split(p.ExtraData, ",") {
 			parts := strings.SplitN(kv, "=", 2)
 			if len(parts) != 2 {
@@ -124,19 +134,18 @@ func main() {
 				var t int
 				fmt.Sscanf(parts[1], "%d", &t)
 				tickSpacing = int32(t)
+			case "hooks":
+				hooks = common.HexToAddress(parts[1])
 			}
 		}
 		if poolIdHex != "" && tickSpacing != 0 {
 			var poolId [32]byte
 			copy(poolId[:], common.FromHex(poolIdHex))
-			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0, common.Address{})
+			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0, hooks)
 		}
 	}
 
-	miss := fetcher.MissCallbacks(vs)
-	sv := lc.NewStateView(vs, headBlock, miss)
-
-	// Apply token overrides so EVM swap calls work (balance + allowance for sender).
+	// Collect all tokens for overrides.
 	allTokens := make([]common.Address, 0)
 	tokenSeen := make(map[common.Address]bool)
 	for _, p := range pools {
@@ -147,29 +156,8 @@ func main() {
 			}
 		}
 	}
-	router.ApplyTokenOverrides(sv, DUMMY_SENDER, router.DeployedRouter, allTokens)
-	fmt.Fprintf(os.Stderr, "[bench] applied token overrides for %d tokens\n", len(allTokens))
 
-	// Build PoolManager.
-	reader := func(addr common.Address, slot common.Hash) common.Hash {
-		return sv.GetState(addr, slot)
-	}
-	pm := formulas.NewPoolManager(registry, reader)
-	pm.SetBlockTimestamp(headTimestamp)
-	for _, p := range pools {
-		if len(p.Tokens) >= 2 {
-			pm.SetPoolTokens(p.Address, p.Tokens...)
-		}
-		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
-	}
-
-	// Filter to registered pools with known token amounts.
-	type quoteJob struct {
-		pool     pathfinder.Pool
-		tokenIn  common.Address
-		tokenOut common.Address
-		amount   *uint256.Int
-	}
+	// Build jobs (shared across all blocks).
 	var jobs []quoteJob
 	jobPools := make(map[common.Address]struct{})
 	for _, p := range pools {
@@ -188,27 +176,181 @@ func main() {
 						addedJob = true
 					}
 				}
-				break // one direction per pool is enough
+				break
 			}
 		}
 		if addedJob {
 			jobPools[p.Address] = struct{}{}
 		}
 	}
+
 	fmt.Fprintf(os.Stderr, "[bench] %d quote jobs across %d eligible pools (%d input pools)\n",
 		len(jobs), len(jobPools), len(pools))
 
-	// Run quotes.
-	byType := make(map[int]*typeStats)
+	// Run each block.
+	baseBlock := router.DeployedBlock
+	var results []blockResult
+	for i := 0; i < *nBlocks; i++ {
+		blockNum := baseBlock + uint64(i)*blockSpacing
+		fmt.Fprintf(os.Stderr, "\n[bench] === block %d (%d/%d) ===\n", blockNum, i+1, *nBlocks)
+		r := runBlock(blockNum, *rpcURL, *dataDir, *concurrency, pools, registry, allTokens, jobs)
+		results = append(results, r)
+		fmt.Fprintf(os.Stderr, "[bench] block %d: %d jobs, %d overquotes, %v\n",
+			blockNum, r.jobs, r.overquotes, r.elapsed.Round(time.Millisecond))
+	}
+
+	// Aggregate across all blocks.
+	totByType := make(map[int]*typeStats)
+	totalOverquotes := 0
+	for _, r := range results {
+		totalOverquotes += r.overquotes
+		for pt, st := range r.byType {
+			if totByType[pt] == nil {
+				totByType[pt] = &typeStats{}
+			}
+			totByType[pt].add(st)
+		}
+	}
+
+	// Print results.
+	totalQuotes, totalMatch, totalOver, totalUnder, totalZero := 0, 0, 0, 0, 0
+	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "type", "quotes", "match", "over", "under", "zero")
+	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "----", "------", "-----", "----", "-----", "----")
+	poolTypes := make([]int, 0, len(totByType))
+	for pt := range totByType {
+		poolTypes = append(poolTypes, pt)
+	}
+	sort.Ints(poolTypes)
+	for _, pt := range poolTypes {
+		st := totByType[pt]
+		name := typeNames[pt]
+		if name == "" {
+			name = fmt.Sprintf("type_%d", pt)
+		}
+		fmt.Printf("%-15s %6d %6d %6d %6d %6d\n", name, st.Quotes, st.Match, st.Overquote, st.Underquote, st.Zero)
+		totalQuotes += st.Quotes
+		totalMatch += st.Match
+		totalOver += st.Overquote
+		totalUnder += st.Underquote
+		totalZero += st.Zero
+	}
+	fmt.Printf("%-15s %6d %6d %6d %6d %6d\n", "TOTAL", totalQuotes, totalMatch, totalOver, totalUnder, totalZero)
+	fmt.Printf("\nblocks=%d input_pools=%d eligible_pools=%d quote_jobs=%d\n",
+		len(results), len(pools), len(jobPools), totalQuotes)
+	fmt.Printf("exact=%.2f%% over=%.2f%% under=%.2f%% zero=%.2f%% non_zero=%.2f%%\n",
+		pct(totalMatch, totalQuotes), pct(totalOver, totalQuotes), pct(totalUnder, totalQuotes),
+		pct(totalZero, totalQuotes), pct(totalQuotes-totalZero, totalQuotes))
+
+	if totalOver > 0 {
+		fmt.Fprintf(os.Stderr, "\nWARNING: %d overquotes detected!\n", totalOver)
+	}
+}
+
+// runBlock runs all quote jobs against a single block using a LightClient in
+// fixed-block mode. State is loaded from / saved to a snapshot automatically.
+func runBlock(
+	blockNum uint64,
+	rpcURL, dataDir string,
+	concurrency int,
+	pools []pathfinder.Pool,
+	registry *formulas.Registry,
+	allTokens []common.Address,
+	jobs []quoteJob,
+) blockResult {
+	client, err := lc.New(lc.Config{
+		RPCURL:      rpcURL,
+		DataDir:     dataDir,
+		FixedBlock:  blockNum,
+		Concurrency: concurrency,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lightclient new: %v\n", err)
+		os.Exit(1)
+	}
+	client.DebugLogging = false
+	defer client.Close()
+
+	if err := client.Start(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "lightclient start: %v\n", err)
+		os.Exit(1)
+	}
+
+	timestamp, err := client.BlockTimestamp(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "block timestamp: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Formula reader backed by LightClient state.
+	formulaSV, err := client.StateView(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "state view: %v\n", err)
+		os.Exit(1)
+	}
+	reader := func(addr common.Address, slot common.Hash) common.Hash {
+		return formulaSV.GetState(addr, slot)
+	}
+	pm := formulas.NewPoolManager(registry, reader)
+	pm.SetBlockTimestamp(timestamp)
+	// Wire EVMCaller so formulas that need view calls (LFJ V2 rebasing surplus
+	// via balanceOf, Balancer V3 rate providers, wombat ggAVAX oracle) get real
+	// on-chain values instead of silently falling through to defaults.
+	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+		ret, _, err := client.Call(lc.CallMsg{
+			From: DUMMY_SENDER,
+			To:   &to,
+			Data: data,
+		}, 0)
+		return ret, err == nil
+	})
+	for _, p := range pools {
+		if len(p.Tokens) >= 2 {
+			pm.SetPoolTokens(p.Address, p.Tokens...)
+		}
+		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
+	}
+
 	t0 := time.Now()
+
+	// Phase 1: parallel EVM quotes. Each call populates VersionedState via RPC
+	// miss callbacks, warming the cache for the formula phase. Concurrency
+	// matches the RPC pool so workers stay busy.
+	evmOuts := make([]*uint256.Int, len(jobs))
+	var done atomic.Int64
+	workers := concurrency
+	if workers > len(jobs) {
+		workers = len(jobs)
+	}
+	jobCh := make(chan int, len(jobs))
+	for i := range jobs {
+		jobCh <- i
+	}
+	close(jobCh)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobCh {
+				j := jobs[i]
+				evmOuts[i] = evmQuote(client, allTokens,
+					j.pool.Address, j.pool.PoolType, j.tokenIn, j.tokenOut, j.amount, j.pool.ExtraData)
+				if n := done.Add(1); n%500 == 0 {
+					fmt.Fprintf(os.Stderr, "  EVM %d/%d\n", n, len(jobs))
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	evmElapsed := time.Since(t0)
+	fmt.Fprintf(os.Stderr, "  EVM phase: %v\n", evmElapsed.Round(time.Millisecond))
+
+	// Phase 2: sequential formula quotes + comparison. State is warm.
+	tForm := time.Now()
+	byType := make(map[int]*typeStats)
 	overquotes := 0
-
 	for i, job := range jobs {
-		// EVM quote.
-		evmOut := evmQuote(sv, headTimestamp, baseFee, chainCfg,
-			job.pool.Address, job.pool.PoolType, job.tokenIn, job.tokenOut, job.amount, job.pool.ExtraData)
-
-		// Formula quote.
+		evmOut := evmOuts[i]
 		fOut := pm.Quote(job.pool.Address, job.amount, job.tokenIn, job.tokenOut)
 
 		st := byType[job.pool.PoolType]
@@ -228,6 +370,10 @@ func main() {
 			if !fIsZero {
 				st.Overquote++
 				overquotes++
+				fmt.Printf("OVERQUOTE block=%d %s type=%d %s→%s evm=0 formula=%s\n",
+					blockNum, job.pool.Address.Hex()[:10], job.pool.PoolType,
+					job.tokenIn.Hex()[:10], job.tokenOut.Hex()[:10],
+					fOut.Dec())
 			} else {
 				st.Underquote++
 			}
@@ -236,76 +382,38 @@ func main() {
 		} else if fOut.Gt(evmOut) {
 			st.Overquote++
 			overquotes++
-			fmt.Printf("OVERQUOTE %s type=%d %s→%s evm=%s formula=%s\n",
-				job.pool.Address.Hex()[:10], job.pool.PoolType,
+			fmt.Printf("OVERQUOTE block=%d %s type=%d %s→%s evm=%s formula=%s\n",
+				blockNum, job.pool.Address.Hex()[:10], job.pool.PoolType,
 				job.tokenIn.Hex()[:10], job.tokenOut.Hex()[:10],
 				evmOut.Dec(), fOut.Dec())
 		} else {
 			st.Underquote++
 		}
-
-		if (i+1)%500 == 0 {
-			fmt.Fprintf(os.Stderr, "  %d/%d (overquotes=%d)\n", i+1, len(jobs), overquotes)
-		}
 	}
+	fmt.Fprintf(os.Stderr, "  formula phase: %v\n", time.Since(tForm).Round(time.Millisecond))
 
-	elapsed := time.Since(t0)
-	fmt.Fprintf(os.Stderr, "\n[bench] done in %v\n\n", elapsed.Round(time.Millisecond))
-
-	// Print results.
-	totalQuotes, totalMatch, totalOver, totalUnder, totalZero := 0, 0, 0, 0, 0
-	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "type", "quotes", "match", "over", "under", "zero")
-	fmt.Printf("%-15s %6s %6s %6s %6s %6s\n", "----", "------", "-----", "----", "-----", "----")
-	poolTypes := make([]int, 0, len(byType))
-	for pt := range byType {
-		poolTypes = append(poolTypes, pt)
-	}
-	sort.Ints(poolTypes)
-	for _, pt := range poolTypes {
-		st := byType[pt]
-		if st == nil {
-			continue
-		}
-		name := typeNames[pt]
-		if name == "" {
-			name = fmt.Sprintf("type_%d", pt)
-		}
-		fmt.Printf("%-15s %6d %6d %6d %6d %6d\n", name, st.Quotes, st.Match, st.Overquote, st.Underquote, st.Zero)
-		totalQuotes += st.Quotes
-		totalMatch += st.Match
-		totalOver += st.Overquote
-		totalUnder += st.Underquote
-		totalZero += st.Zero
-	}
-	fmt.Printf("%-15s %6d %6d %6d %6d %6d\n", "TOTAL", totalQuotes, totalMatch, totalOver, totalUnder, totalZero)
-	fmt.Printf("\ninput_pools=%d eligible_pools=%d quote_jobs=%d\n", len(pools), len(jobPools), totalQuotes)
-	fmt.Printf("exact=%.2f%% over=%.2f%% under=%.2f%% zero=%.2f%% non_zero=%.2f%%\n",
-		pct(totalMatch, totalQuotes), pct(totalOver, totalQuotes), pct(totalUnder, totalQuotes),
-		pct(totalZero, totalQuotes), pct(totalQuotes-totalZero, totalQuotes))
-
-	if totalQuotes != len(jobs) {
-		fmt.Fprintf(os.Stderr, "\nWARNING: summarized %d jobs, but ran %d jobs\n", totalQuotes, len(jobs))
-	}
-
-	if totalOver > 0 {
-		fmt.Fprintf(os.Stderr, "\nWARNING: %d overquotes detected!\n", totalOver)
+	return blockResult{
+		block:      blockNum,
+		byType:     byType,
+		overquotes: overquotes,
+		jobs:       len(jobs),
+		elapsed:    time.Since(t0),
 	}
 }
 
-func pct(numer, denom int) float64 {
-	if denom == 0 {
-		return 0
-	}
-	return 100 * float64(numer) / float64(denom)
-}
-
-func evmQuote(sv *lc.StateView, timestamp uint64, baseFee *big.Int,
-	chainCfg *params.ChainConfig, poolAddr common.Address,
-	poolType int, tokenIn, tokenOut common.Address, amount *uint256.Int, extraData string,
+func evmQuote(client *lc.LightClient, allTokens []common.Address,
+	poolAddr common.Address, poolType int,
+	tokenIn, tokenOut common.Address, amount *uint256.Int, extraData string,
 ) *uint256.Int {
 	calldata := pathfinder.EncodeSwapSingleWithExtra(poolAddr, poolType, tokenIn, tokenOut, amount, extraData)
-	ret, _, err := lc.EVMCallOn(sv, timestamp, baseFee, chainCfg,
-		DUMMY_SENDER, router.DeployedRouter, calldata)
+	to := router.DeployedRouter
+	ret, _, err := client.DirectCallWithState(lc.CallMsg{
+		From: DUMMY_SENDER,
+		To:   &to,
+		Data: calldata,
+	}, 0, func(sv *lc.StateView) {
+		router.ApplyTokenOverrides(sv, DUMMY_SENDER, router.DeployedRouter, allTokens)
+	})
 	if err != nil {
 		if debugEVM {
 			fmt.Fprintf(os.Stderr, "  EVM err: %v (pool=%s)\n", err, poolAddr.Hex()[:10])
@@ -323,22 +431,9 @@ func evmQuote(sv *lc.StateView, timestamp uint64, baseFee *big.Int,
 	return &out
 }
 
-func fetchHead(pool *lc.RPCPool) (block uint64, timestamp uint64, baseFee *big.Int, err error) {
-	raw, err := pool.Call("eth_getBlockByNumber", []interface{}{"latest", false})
-	if err != nil {
-		return 0, 0, nil, err
+func pct(numer, denom int) float64 {
+	if denom == 0 {
+		return 0
 	}
-	var hdr struct {
-		Number    string `json:"number"`
-		Timestamp string `json:"timestamp"`
-		BaseFee   string `json:"baseFeePerGas"`
-	}
-	if err := json.Unmarshal(raw, &hdr); err != nil {
-		return 0, 0, nil, err
-	}
-	fmt.Sscanf(hdr.Number, "0x%x", &block)
-	fmt.Sscanf(hdr.Timestamp, "0x%x", &timestamp)
-	baseFee = new(big.Int)
-	baseFee.SetString(strings.TrimPrefix(hdr.BaseFee, "0x"), 16)
-	return
+	return 100 * float64(numer) / float64(denom)
 }

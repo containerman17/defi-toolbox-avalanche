@@ -1,12 +1,14 @@
 // discover — Formula registry discovery using the light client.
 //
-// For each pool not in registry.txt, probes formula vs EVM with up to 10
-// amounts. If all amounts match exactly → assigns the formula ID.
-// If any disagree → assigns -1 (broken formula).
-// Existing registry entries are never overwritten (append-only).
+// Probes every formula-eligible pool (including those currently marked -1 in
+// registry.txt) against EVM ground truth with up to 10 amounts. Prints the
+// discovered formula ID and the registry delta — pools that could be
+// un-blacklisted, pools that should be blacklisted, and new pools.
+//
+// Read-only: makes no changes to registry.txt. Edit by hand based on output.
 //
 // Usage:
-//   go run ./tools/discover/ [--write] [--rpc ws://...] [--limit 5000]
+//   go run ./tools/discover/ [--rpc ws://...] [--limit 5000]
 package main
 
 import (
@@ -53,8 +55,7 @@ var DUMMY_SENDER = common.HexToAddress("0x000000000000000000000000000000000000dE
 func main() {
 	rpcURL := flag.String("rpc", "ws://127.0.0.1:9650/ext/bc/C/ws", "WebSocket RPC URL")
 	concurrency := flag.Int("concurrency", 2*runtime.NumCPU(), "RPC pool size")
-	poolLimit := flag.Int("limit", 0, "pool limit (0 = all)")
-	doWrite := flag.Bool("write", false, "write results to registry.txt")
+	poolLimit := flag.Int("limit", 4000, "pool limit (top N most recently active; 0 = all)")
 	flag.Parse()
 
 	pool, err := lc.NewRPCPool(*rpcURL, *concurrency)
@@ -95,6 +96,7 @@ func main() {
 		var poolIdHex string
 		var fee uint32
 		var tickSpacing int32
+		var hooks common.Address
 		for _, kv := range strings.Split(p.ExtraData, ",") {
 			parts := strings.SplitN(kv, "=", 2)
 			if len(parts) != 2 {
@@ -111,12 +113,14 @@ func main() {
 				var t int
 				fmt.Sscanf(parts[1], "%d", &t)
 				tickSpacing = int32(t)
+			case "hooks":
+				hooks = common.HexToAddress(parts[1])
 			}
 		}
 		if poolIdHex != "" && tickSpacing != 0 {
 			var poolId [32]byte
 			copy(poolId[:], common.FromHex(poolIdHex))
-			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0, common.Address{})
+			formulas.RegisterV4Pool(strings.ToLower(p.Address.Hex()), poolId, tickSpacing, fee, 0, hooks)
 			v4Count++
 		}
 	}
@@ -125,7 +129,7 @@ func main() {
 	}
 
 	// Build miss callbacks for state fetching.
-	miss := fetcher.MissCallbacks(vs)
+	miss := fetcher.MissCallbacks(vs, &lc.FetchStats{})
 	sv := lc.NewStateView(vs, headBlock, miss)
 
 	// Apply token overrides so EVM swap calls work.
@@ -154,36 +158,44 @@ func main() {
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
 
-	// Filter to formula-eligible pools not already in registry.
+	// Every formula-eligible pool is a candidate. We deliberately re-probe
+	// pools that are already in the registry — including those blacklisted
+	// with -1 — so the output surfaces registry entries that disagree with
+	// current on-chain behavior.
 	type candidate struct {
-		pool      pathfinder.Pool
-		formulaID int
+		pool       pathfinder.Pool
+		formulaID  int // candidate formula for this pool type
+		existingID int // from registry.txt; math.MinInt if absent
 	}
+	const notInRegistry = -9999
 	var candidates []candidate
-	skipped := 0
 	for _, p := range pools {
 		fid, ok := formulaMap[p.PoolType]
 		if !ok || len(p.Tokens) < 2 {
 			continue
 		}
-		if _, known := registry.GetFormulaID(p.Address); known {
-			skipped++
-			continue
+		existing := notInRegistry
+		if id, known := registry.GetFormulaID(p.Address); known {
+			existing = id
 		}
-		candidates = append(candidates, candidate{pool: p, formulaID: fid})
+		candidates = append(candidates, candidate{pool: p, formulaID: fid, existingID: existing})
 	}
-	fmt.Fprintf(os.Stderr, "[discover] %d candidates (%d skipped, in registry)\n", len(candidates), skipped)
+	fmt.Fprintf(os.Stderr, "[discover] %d candidates\n", len(candidates))
 
 	// Discovery pass.
 	fmt.Fprintf(os.Stderr, "[discover] verifying (formula vs EVM, up to 10 amounts)...\n")
 	t0 := time.Now()
 
-	var results []fillResult
-	matched, mismatched := 0, 0
+	type probeResult struct {
+		addr       common.Address
+		existingID int // notInRegistry if absent
+		probedID   int // -1 on mismatch
+	}
+	var results []probeResult
 
 	for i, c := range candidates {
 		p := c.pool
-		bestFormulaID := -1
+		probed := -1
 
 		for _, dir := range [][2]int{{0, 1}, {1, 0}} {
 			tokenIn := p.Tokens[dir[0]]
@@ -194,19 +206,14 @@ func main() {
 				continue
 			}
 
-			// EVM quote via router.
 			evmOut := evmQuote(sv, headTimestamp, baseFee, chainCfg,
 				p.Address, p.PoolType, tokenIn, tokenOut, baseAmount, p.ExtraData)
-
-			// Formula quote.
 			pq := pm.BuildQuoterForFormulaID(p.Address, c.formulaID)
 			fOut := formulaQuote(pq, baseAmount, tokenIn, tokenOut)
-
 			if !amountsEqual(evmOut, fOut) {
 				continue
 			}
 
-			// Multi-amount verification.
 			allMatch := true
 			for mult := uint64(1); mult <= 10; mult++ {
 				testAmount := new(uint256.Int).Mul(baseAmount, uint256.NewInt(mult))
@@ -221,45 +228,62 @@ func main() {
 			}
 
 			if allMatch {
-				bestFormulaID = c.formulaID
+				probed = c.formulaID
 				break
 			}
 		}
 
-		results = append(results, fillResult{addr: p.Address, formulaID: bestFormulaID})
-		if bestFormulaID >= 0 {
-			matched++
-		} else {
-			mismatched++
-		}
+		results = append(results, probeResult{addr: p.Address, existingID: c.existingID, probedID: probed})
 
 		if (i+1)%100 == 0 {
-			fmt.Fprintf(os.Stderr, "  %d/%d (matched=%d, failed=%d)\n", i+1, len(candidates), matched, mismatched)
+			fmt.Fprintf(os.Stderr, "  %d/%d\n", i+1, len(candidates))
 		}
 	}
 
 	fmt.Fprintf(os.Stderr, "[discover] done in %v\n\n", time.Since(t0).Round(time.Millisecond))
-	fmt.Fprintf(os.Stderr, "Stats:\n")
-	fmt.Fprintf(os.Stderr, "  Formula match: %d\n", matched)
-	fmt.Fprintf(os.Stderr, "  Formula fail:  %d (assigned -1)\n", mismatched)
-	fmt.Fprintf(os.Stderr, "  Skipped:       %d (already in registry)\n", skipped)
 
-	byFormula := make(map[int]int)
+	// Bucket by change category. The actionable categories are the first two:
+	// un-blacklists (safe wins) and pools that should be newly registered.
+	var unblacklist, register, newlyBlacklist, agreement, stillBlacklist []probeResult
 	for _, r := range results {
-		byFormula[r.formulaID]++
-	}
-	fmt.Fprintf(os.Stderr, "\nBy formula:\n")
-	for _, id := range []int{0, 1, 2, 3, 4, 5, 6, 7, -1} {
-		if cnt := byFormula[id]; cnt > 0 {
-			fmt.Fprintf(os.Stderr, "  %s: %d\n", formulaNames[id], cnt)
+		switch {
+		case r.existingID == -1 && r.probedID >= 0:
+			unblacklist = append(unblacklist, r)
+		case r.existingID == notInRegistry && r.probedID >= 0:
+			register = append(register, r)
+		case r.existingID >= 0 && r.probedID == -1:
+			newlyBlacklist = append(newlyBlacklist, r)
+		case r.existingID == r.probedID && r.probedID >= 0:
+			agreement = append(agreement, r)
+		case r.existingID == -1 && r.probedID == -1:
+			stillBlacklist = append(stillBlacklist, r)
 		}
 	}
 
-	if *doWrite {
-		writeRegistry(results)
-	} else {
-		fmt.Fprintf(os.Stderr, "\nDry run — pass --write to append (%d new results)\n", len(results))
+	fmt.Printf("=== un-blacklist candidates: %d ===\n", len(unblacklist))
+	fmt.Printf("(pools currently :-1 whose formula matches EVM on 10 amounts)\n")
+	for _, r := range unblacklist {
+		fmt.Printf("%s:%d\n", strings.ToLower(r.addr.Hex()), r.probedID)
 	}
+
+	fmt.Printf("\n=== new registry entries: %d ===\n", len(register))
+	fmt.Printf("(pools not yet in registry whose formula matches EVM)\n")
+	for _, r := range register {
+		fmt.Printf("%s:%d\n", strings.ToLower(r.addr.Hex()), r.probedID)
+	}
+
+	fmt.Printf("\n=== newly-broken (disagree with EVM): %d ===\n", len(newlyBlacklist))
+	fmt.Printf("(pools with a valid formulaID today but re-probe now fails)\n")
+	for _, r := range newlyBlacklist {
+		fmt.Printf("%s:%d→-1\n", strings.ToLower(r.addr.Hex()), r.existingID)
+	}
+
+	fmt.Fprintf(os.Stderr, "\nSummary:\n")
+	fmt.Fprintf(os.Stderr, "  un-blacklist:    %d\n", len(unblacklist))
+	fmt.Fprintf(os.Stderr, "  new entries:     %d\n", len(register))
+	fmt.Fprintf(os.Stderr, "  newly broken:    %d\n", len(newlyBlacklist))
+	fmt.Fprintf(os.Stderr, "  still valid:     %d\n", len(agreement))
+	fmt.Fprintf(os.Stderr, "  still -1:        %d\n", len(stillBlacklist))
 }
 
 func evmQuote(sv *lc.StateView, timestamp uint64, baseFee *big.Int,
@@ -300,18 +324,6 @@ func amountsEqual(a, b *uint256.Int) bool {
 		b = uint256.NewInt(0)
 	}
 	return a.Eq(b)
-}
-
-func writeRegistry(results []fillResult) {
-	// This is a placeholder — full implementation reads existing registry,
-	// merges, and writes. See archive/tools/discover/main.go.txt for the
-	// complete version.
-	fmt.Fprintf(os.Stderr, "\nTODO: implement --write (see archived version)\n")
-}
-
-type fillResult struct {
-	addr      common.Address
-	formulaID int
 }
 
 func fetchHead(pool *lc.RPCPool) (block uint64, timestamp uint64, baseFee *big.Int, err error) {

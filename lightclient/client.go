@@ -58,9 +58,6 @@ type Config struct {
 	// Arguments: block number, list of changed (address, slot) pairs.
 	OnBlock func(blockNum uint64)
 
-	// Quiet suppresses informational client logs such as snapshot loads/saves and
-	// catch-up progress. Errors are still logged.
-	Quiet bool
 }
 
 func (cfg *Config) applyDefaults() {
@@ -95,10 +92,21 @@ type LightClient struct {
 	// blockHashes caches recent block hashes for the BLOCKHASH opcode.
 	blockHashes   map[uint64]common.Hash
 	blockHashesMu sync.RWMutex
+
+	// fetchStats tracks cumulative cache-miss RPC fetches. A background
+	// reporter prints per-interval deltas when any occurred.
+	fetchStats   FetchStats
+	reporterStop chan struct{}
+	reporterDone chan struct{}
+
+	// DebugLogging, when true, enables informational log lines such as
+	// snapshot loads/saves, catch-up progress, and per-block processing.
+	// Default is false (silent). Errors are always logged.
+	DebugLogging bool
 }
 
 func (c *LightClient) infof(format string, args ...interface{}) {
-	if c.cfg.Quiet {
+	if !c.DebugLogging {
 		return
 	}
 	log.Printf(format, args...)
@@ -126,14 +134,65 @@ func New(cfg Config) (*LightClient, error) {
 		return nil, fmt.Errorf("lightclient: chain config: %w", err)
 	}
 
-	return &LightClient{
-		cfg:         cfg,
-		pool:        pool,
-		fetcher:     NewBlockFetcher(pool),
-		state:       NewVersionedState(),
-		chainCfg:    chainCfg,
-		blockHashes: make(map[uint64]common.Hash),
-	}, nil
+	c := &LightClient{
+		cfg:          cfg,
+		pool:         pool,
+		fetcher:      NewBlockFetcher(pool),
+		state:        NewVersionedState(),
+		chainCfg:     chainCfg,
+		blockHashes:  make(map[uint64]common.Hash),
+		reporterStop: make(chan struct{}),
+		reporterDone: make(chan struct{}),
+	}
+	go c.runFetchReporter()
+	return c, nil
+}
+
+// runFetchReporter prints a line every 5 seconds when any cache-miss RPC
+// fetches occurred in that interval. A final line is emitted on shutdown if
+// there are pending fetches since the last tick.
+func (c *LightClient) runFetchReporter() {
+	defer close(c.reporterDone)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	var lastStorage, lastBalance, lastNonce, lastCode, lastSaved int64
+	tick := func(isFinal bool) {
+		s := c.fetchStats.Storage.Load()
+		b := c.fetchStats.Balance.Load()
+		n := c.fetchStats.Nonce.Load()
+		co := c.fetchStats.Code.Load()
+		ds := s - lastStorage
+		db := b - lastBalance
+		dn := n - lastNonce
+		dc := co - lastCode
+		total := ds + db + dn + dc
+		if total > 0 {
+			log.Printf("lightclient: fetched %d slots (storage=%d balance=%d nonce=%d code=%d)",
+				total, ds, db, dn, dc)
+		}
+		lastStorage, lastBalance, lastNonce, lastCode = s, b, n, co
+
+		// Fixed-block mode: snapshot on every tick that saw new fetches, and
+		// unconditionally on the final tick (Close always persists).
+		if c.cfg.FixedBlock != 0 {
+			cur := s + b + n + co
+			if isFinal || cur > lastSaved {
+				c.saveSnapshotIfNeeded(true)
+				lastSaved = cur
+			}
+		}
+	}
+
+	for {
+		select {
+		case <-c.reporterStop:
+			tick(true)
+			return
+		case <-ticker.C:
+			tick(false)
+		}
+	}
 }
 
 // LatestBlock returns the latest fully-processed block number.
@@ -163,7 +222,7 @@ func (c *LightClient) StateView(block uint64) (*StateView, error) {
 		return nil, fmt.Errorf("lightclient: no blocks processed yet")
 	}
 
-	miss := c.fetcher.MissCallbacks(c.state)
+	miss := c.fetcher.MissCallbacks(c.state, &c.fetchStats)
 	return NewStateView(c.state, block, miss), nil
 }
 
@@ -208,7 +267,7 @@ func (c *LightClient) CallWithState(msg CallMsg, block uint64, prepare func(*Sta
 		return nil, 0, fmt.Errorf("lightclient: no blocks processed yet")
 	}
 
-	miss := c.fetcher.MissCallbacks(c.state)
+	miss := c.fetcher.MissCallbacks(c.state, &c.fetchStats)
 	sv := NewStateView(c.state, block, miss)
 	if prepare != nil {
 		prepare(sv)
@@ -239,7 +298,7 @@ func (c *LightClient) DirectCallWithState(msg CallMsg, block uint64, prepare fun
 		return nil, 0, fmt.Errorf("lightclient: no blocks processed yet")
 	}
 
-	miss := c.fetcher.MissCallbacks(c.state)
+	miss := c.fetcher.MissCallbacks(c.state, &c.fetchStats)
 	sv := NewStateView(c.state, block, miss)
 	if prepare != nil {
 		prepare(sv)
@@ -364,7 +423,7 @@ func (c *LightClient) processBlock(blockNum uint64) error {
 	block := BlockDataToTypesBlock(bd)
 
 	// Create StateView at parent block.
-	miss := c.fetcher.MissCallbacks(c.state)
+	miss := c.fetcher.MissCallbacks(c.state, &c.fetchStats)
 	sv := NewStateView(c.state, blockNum-1, miss)
 
 	// Execute.
@@ -457,6 +516,11 @@ func (c *LightClient) snapshotPath() string {
 
 // Close persists the current snapshot and closes the RPC pool.
 func (c *LightClient) Close() {
+	if c.reporterStop != nil {
+		close(c.reporterStop)
+		<-c.reporterDone
+		c.reporterStop = nil
+	}
 	c.saveSnapshotIfNeeded(true)
 	if c.pool != nil {
 		c.pool.Close()

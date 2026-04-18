@@ -50,7 +50,7 @@ func main() {
 	}
 
 	block := lc.BlockDataToTypesBlock(bd)
-	miss := fetcher.MissCallbacks(state)
+	miss := fetcher.MissCallbacks(state, &lc.FetchStats{})
 	sv := lc.NewStateView(state, *blockNum-1, miss)
 
 	header := block.Header()

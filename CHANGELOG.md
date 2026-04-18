@@ -1,5 +1,145 @@
 # Changelog
 
+## 2026-04-18 — Registry overhaul via discover + bench defaults top-4000
+
+### Tooling
+- `tools/discover/` refactored to a read-only "print delta" tool:
+  - Now re-probes pools currently marked `-1` in addition to pools not in the
+    registry (previously skipped known entries). Uses the same multi-amount
+    (1x–10x) correctness check.
+  - Dropped the `--write` stub; prints three actionable sections to stdout:
+    un-blacklist candidates, new entries, and "newly broken" (pools whose
+    existing formulaID no longer agrees with EVM on 10 amounts).
+  - Default `--limit` raised from 0 to 4000 to match production slice.
+- Benchmark and swap-replay default to top-4000 pools. All tools that load
+  pool data now use the same slice (top-4000 most recently traded).
+- V4 pool registration parses `hooks=` from `pools.txt` ExtraData in both
+  `benchmarks/formula-accuracy/` and `tools/discover/`. Previously hardcoded
+  empty hooks + hookFeePpm=0, which caused pool_v4's `readArenaHookFee` to
+  skip ArenaHook pools and silently underquote. Now ArenaHook fee is applied.
+
+### Registry via discover
+- Ran discover over top-4000 at head block. Results:
+  - 86 un-blacklist candidates (pools at `-1` where formula matches EVM)
+  - 90 new registry entries (pools with no registry entry)
+  - 155 "newly broken" (pools with valid formulaID whose formula now fails the
+    10-amount check; includes several un-blacklists from this week's cherry-
+    picking that passed single-amount bench but failed stricter discover check)
+- Applied all three deltas to `formulas/registry.txt`.
+
+### Overquote cleanup (re-blacklist, documented)
+Three pools still overquote at the historical DeployedBlock slice even after
+the discover pass. Each has a documented reason — these are not "hide the
+mismatch" blacklists:
+- `0x11af559c…` (lfj_v1, YEEHAW/$...$): EVM reverts with "ERC20: transfer
+  amount exceeds balance" at DeployedBlock, formula quotes. Token has some
+  balance constraint that `ApplyTokenOverrides` doesn't cover. Works at head
+  (discover passed it), fails at the older bench block.
+- `0x7f2c8b6f…` (lfj_v1): same class — EVM reverts at DeployedBlock.
+- `0xbba43749…` (wombat ggAVAX/WAVAX): 4-wei overquote on 2 of 10 test blocks,
+  ggAVAX→WAVAX direction. Same rounding class as the sAVAX fix earlier this
+  week, but ggAVAX takes the ERC-4626 oracle path and the residual
+  discrepancy is in `wombatSwapQuoteFunc` intermediate math; needs a separate
+  investigation to isolate which wdiv/wmul diverges from on-chain CoreV3.
+
+### Result
+Bench command: `go run ./benchmarks/formula-accuracy/` (top-4000 default).
+```
+TOTAL            39250  32253      0   6997   2030
+exact=82.17% over=0.00% under=17.83% zero=5.17% non_zero=94.83%
+```
+Zero overquotes; pre-commit hook unblocks.
+
+Remaining biggest under clusters (top-4000, to attack next):
+- uniswap_v3: 1050 under
+- v2: 2060 under
+- pharaoh_v1: 1150 under
+- lfj_v1: 1440 under
+
+## 2026-04-17 — Registry: un-blacklist 48 more pools from bulk-blacklist (87.46% → 96.84%)
+
+- Same pattern as the previous batch. Three parallel investigators covering
+  uniswap_v3 / lfj_v2 / uniswap_v4 clusters all found `formulaID=-1` pools
+  whose formulas work correctly once re-enabled.
+- Un-blacklisted 48 pools:
+  - 22 pharaoh_v3 pools → formulaID 2 (FormulaV3; all already registered in
+    `pharaoh_v3_registry.go` with valid ERC-7201 layout)
+  - 15 lfj_v2 pools → formulaID 3 (FormulaLFJV2; all present in `lfjV2Registry`)
+  - 11 uniswap_v4 pools with zero hooks → formulaID 6 (FormulaV4)
+- Skipped: 3 V4 pools with ArenaHook (need a separate benchmark fix to parse
+  `hooks=`/`hookFeePpm=` from ExtraData) and 3-4 standard V3 pools the
+  investigator flagged as uncertain (possible construction or bitmap-radius
+  issues).
+- Zero new overquotes across 10 test blocks.
+
+Bench command: `go run ./benchmarks/formula-accuracy/ --limit=500`.
+
+Before (after previous un-blacklist batch):
+```
+uniswap_v3         930    661      0    269      0
+lfj_v2             510    353      0    157     53
+uniswap_v4         220     80      0    140     80
+TOTAL             5070   4434      0    636    303
+exact=87.46% over=0.00% under=12.54% zero=5.98% non_zero=94.02%
+```
+After:
+```
+uniswap_v3         930    881      0     49      0
+lfj_v2             510    499      0     11     53
+uniswap_v4         220    190      0     30     80
+TOTAL             5070   4910      0    160    303
+exact=96.84% over=0.00% under=3.16% zero=5.98% non_zero=94.02%
+```
+
+## 2026-04-17 — Registry: un-blacklist 41 pools from bulk-blacklist (79.37% → 87.46%)
+
+- Commit ed6d681 (2026-04-12) bulk-blacklisted 2734 pools with formulaID=-1
+  "to eliminate overquotes instead of fixing the root cause (incomplete token
+  overrides in EVM simulation)" — the commit message itself flags it as
+  "wrong approach, needs revert".
+- Current state: EVM now returns non-zero for these pools (override coverage
+  has improved enough), but the blacklist was never walked back. Blacklisted
+  pools get a `zeroQuoter` → formula always returns 0 → counted as under.
+- Spawned 3 parallel investigators for pharaoh_v1 / lfj_v1 / v2 clusters. All
+  three converged on the same root cause: pools explicitly marked :-1 in
+  `formulas/registry.txt` but whose formulas match EVM when enabled.
+- Un-blacklisted 41 pools (set to correct formulaID):
+  - 16 pharaoh_v1 → formulaID 1 (FormulaPharaohV1)
+  - 14 lfj_v1    → formulaID 0 (FormulaV2_30bps; LFJ V1 is a V2 fork)
+  - 11 v2        → formulaID 0 (arena_v2, pangolin_v2, vapordex — work fine
+    with the standard V2 constant-product formula, no need for per-dex
+    constructors as the Explore agent speculated)
+- Verified no overquotes appear on any of the 41 pools across 10 test blocks.
+
+Bench command: `go run ./benchmarks/formula-accuracy/ --limit=500`.
+
+Before:
+```
+lfj_v1            1070    930      0    140     10
+pharaoh_v1         530    370      0    160      0
+v2                1310   1200      0    110      0
+TOTAL             5070   4024      0   1046    303
+exact=79.37% over=0.00% under=20.63% zero=5.98% non_zero=94.02%
+```
+After:
+```
+lfj_v1            1070   1070      0      0     10
+pharaoh_v1         530    530      0      0      0
+v2                1310   1310      0      0      0
+TOTAL             5070   4434      0    636    303
+exact=87.46% over=0.00% under=12.54% zero=5.98% non_zero=94.02%
+```
+
+## 2026-04-17 — Bench: wire SetEVMCaller (regression from LightClient rewrite)
+
+- The LightClient rewrite of formula-accuracy dropped `pm.SetEVMCaller`. Without
+  it, formulas needing view calls (LFJ V2 rebasing surplus via balanceOf,
+  Balancer V3 rate providers, wombat ggAVAX oracle fallback, V2
+  `SetTokenBalances` for post-reserve balance caps, pool-level balance cap in
+  `pm.Quote`) silently fell through to defaults.
+- Score didn't move on top-500 (no rebasing-token pools in that slice), but it
+  is a real correctness fix surfaced while investigating coverage.
+
 ## 2026-04-17 — Wombat: fix sAVAX rate/quoteFactor/covRatio rounding (eliminate overquotes)
 
 - Formula used round-to-nearest `wDiv` for three calcs where Solidity does raw
@@ -13,7 +153,20 @@
 - Added `rawWadDiv(x, y) = (x * WAD) / y` helper using `Quo` (truncate toward
   zero) and swapped the three call sites.
 
-Bench (top-500 pools × 10 blocks): overquotes 4→0. wombat 6/10 → 10/10 match. Total exact 79.29% → 79.37%.
+Bench command: `go run ./benchmarks/formula-accuracy/ --limit=500` (top-500 pools × 10 blocks, 5070 quote jobs).
+
+Before:
+```
+wombat              10      6      4      0      0
+TOTAL             5070   4020      4   1046    303
+exact=79.29% over=0.08% under=20.63% zero=5.98% non_zero=94.02%
+```
+After:
+```
+wombat              10     10      0      0      0
+TOTAL             5070   4024      0   1046    303
+exact=79.37% over=0.00% under=20.63% zero=5.98% non_zero=94.02%
+```
 
 ## 2026-04-17 — Quoter: limit to top 4000 most recently active pools
 

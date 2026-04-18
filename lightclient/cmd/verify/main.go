@@ -108,13 +108,13 @@ func main() {
 		block := lc.BlockDataToTypesBlock(bd)
 
 		var stats lc.FetchStats
-		miss := fetcher.MissCallbacksWithStats(state, &stats)
+		miss := fetcher.MissCallbacks(state, &stats)
 		sv := lc.NewStateView(state, blockNum-1, miss)
 
 		var pfMiss *lc.MissCallbacks
 		var pfStats lc.FetchStats
 		if prefetchFetcher != nil {
-			m := prefetchFetcher.MissCallbacksWithStats(state, &pfStats)
+			m := prefetchFetcher.MissCallbacks(state, &pfStats)
 			pfMiss = &m
 		}
 

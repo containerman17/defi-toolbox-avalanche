@@ -235,8 +235,10 @@ func (s *FetchStats) Total() int {
 	return int(s.Storage.Load() + s.Balance.Load() + s.Nonce.Load() + s.Code.Load())
 }
 
-// MissCallbacksWithStats returns miss callbacks that count fetches into stats.
-func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *FetchStats) MissCallbacks {
+// MissCallbacks returns miss callbacks that count fetches into stats. stats
+// must be non-nil — callers that don't care about counts can pass a throwaway
+// FetchStats and ignore it.
+func (f *BlockFetcher) MissCallbacks(state *VersionedState, stats *FetchStats) MissCallbacks {
 	return MissCallbacks{
 		OnStorage: func(addr common.Address, slot common.Hash, block uint64) common.Hash {
 			stats.Storage.Add(1)
@@ -267,43 +269,6 @@ func (f *BlockFetcher) MissCallbacksWithStats(state *VersionedState, stats *Fetc
 		},
 		OnCode: func(addr common.Address, block uint64) []byte {
 			stats.Code.Add(1)
-			val, err := f.GetCode(addr, block)
-			if err != nil {
-				return nil
-			}
-			state.SetCode(addr, val, block)
-			return val
-		},
-	}
-}
-
-func (f *BlockFetcher) MissCallbacks(state *VersionedState) MissCallbacks {
-	return MissCallbacks{
-		OnStorage: func(addr common.Address, slot common.Hash, block uint64) common.Hash {
-			val, err := f.GetStorageAt(addr, slot, block)
-			if err != nil {
-				return common.Hash{}
-			}
-			state.SetStorage(addr, slot, val, block)
-			return val
-		},
-		OnBalance: func(addr common.Address, block uint64) *uint256.Int {
-			val, err := f.GetBalance(addr, block)
-			if err != nil {
-				return uint256.NewInt(0)
-			}
-			state.SetBalance(addr, val, block)
-			return val
-		},
-		OnNonce: func(addr common.Address, block uint64) uint64 {
-			val, err := f.GetNonce(addr, block)
-			if err != nil {
-				return 0
-			}
-			state.SetNonce(addr, val, block)
-			return val
-		},
-		OnCode: func(addr common.Address, block uint64) []byte {
 			val, err := f.GetCode(addr, block)
 			if err != nil {
 				return nil

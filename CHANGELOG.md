@@ -220,6 +220,16 @@ TOTAL             5070   4024      0   1046    303
 exact=79.37% over=0.00% under=20.63% zero=5.98% non_zero=94.02%
 ```
 
+## 2026-04-18 — Swap-replay: remove router replay stage
+
+- Stripped trace-based router replay and all supporting code (~1000 lines removed).
+  Router replay tested trace parsing quality, not routing quality.
+- Benchmark now only runs: oracle replay + blind pathfinder quote.
+  Single metric: quote_pass_1ppm.
+- No degradation: quote_pass_1ppm=44/100 unchanged.
+
+Bench: `SUMMARY total=100 orig_ok=100 orig_reverted=0 quote_exact=26 quote_under=49 quote_over=17 quote_unsupported=8 quote_pass_1ppm=44/100`
+
 ## 2026-04-17 — Quoter: limit to top 4000 most recently active pools
 
 - Pools not traded in ~1 week have no meaningful liquidity. Keeping them adds

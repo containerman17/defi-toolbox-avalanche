@@ -25,7 +25,7 @@ import (
 	lc "defi-toolbox/lightclient"
 	pf "defi-toolbox/pathfinder"
 	"defi-toolbox/quoter"
-	poolcollector "defi-toolbox/tools/pool-collector"
+	_ "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
 	"github.com/holiman/uint256"
@@ -43,20 +43,6 @@ var (
 	backrunRouter      = common.HexToAddress("0x000000000000000000000000cafebabe00facade")
 	zeroAddress        = common.Address{}
 	wavaxAddress       = common.HexToAddress("0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7")
-	transferTopic      = strings.ToLower("0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef")
-	woofiRouter        = common.HexToAddress("0x4c4af8dbc524681930a27b2f1af5bcc8062e6fb7")
-	wooPPAddress       = common.HexToAddress("0x5520385bfcf07ec87c4c53a7d8d65595dff69fa4")
-	wooPPV2Address     = common.HexToAddress("0xaba7ed514217d51630053d73d358ac2502d3f9bb")
-	balancerV2Vault    = common.HexToAddress("0xba12222222228d8ba445958a75a0704d566bf2c8")
-	cavalrePool        = common.HexToAddress("0x5f1e8ed8468232bab71eda9f4598bda3161f48ea")
-	bentoBox           = common.HexToAddress("0x0711b6026068f736bae6b213031fce978d48e026")
-	customFeeProviders = map[string]string{
-		"oliveswap": "fee=9980",
-		"vapordex":  "fee=9971",
-		"lydia":     "fee=9980",
-		"hakuswap":  "fee=9980",
-		"thorus":    "fee=9990",
-	}
 )
 
 // TODO(route-replay): port the archived TypeScript same-route replay logic into
@@ -75,30 +61,6 @@ var (
 //     TRANSFER_FROM simulation with token balance/allowance overrides.
 //   - Special pool decoding: V4 PoolManager + poolId lookup + native wrap flag,
 //     Wombat swap events, Synapse TokenSwap events, Balancer V3 buffered and
-//     half-buffered flows, Balancer V2 vault, WooPP/WooPP_V2, Cavalre,
-//     Trident/BentoBox, ERC4626 wrap/unwrap.
-//   - Custom per-provider extraData / fee encodings for replayed swap() calls.
-//   - Synthetic catalog helpers from TS: ERC4626 vault injection, generated
-//     Balancer buffered edges, and trace-discovered obscure pools missing from
-//     normal discovery.
-//   - Single-path hop extraction from transfers, including multi-swap pools that
-//     must pair in/out by log index and flash-swap pools that require token-chain
-//     ordering instead of raw log ordering.
-//   - Route repair helpers: missing head bridge into hop 0, missing tail hops to
-//     the output token, direct trace-detected pool bridges, Balancer+ERC4626
-//     tail paths, unwrap+AMM tails, and short 2-hop tails.
-//   - Diamond / parallel-path detection: convert an apparently single route into
-//     split replay when the transfer graph fans out and rejoins.
-//   - Split-step extraction and chaining: per-transfer split steps, V4-aware
-//     split detection, upstream/downstream token-flow ownership checks, sibling
-//     downstream reuse, duplicate-step suppression, and final output validation.
-//   - Flat split replay through one router swap() call so shared pool state
-//     carries across all steps, plus the old retry orderings
-//     (original/proportional/topological/greedy).
-//   - Router replay plumbing from TS test harness: router bytecode injection,
-//     token/hook overrides, single-route replay, split-route flat replay, and
-//     TRANSFER_FROM per-step overrides.
-
 var knownTokens = map[string]tokenMeta{
 	"0x0000000000000000000000000000000000000000": {Symbol: "AVAX", Name: "Avalanche", Decimals: 18, HasDecimals: true},
 	"0x2b2c81e08f1af8835a78bb2a90ae924ace0ea4be": {Symbol: "sAVAX", Name: "BENQI Liquid Staked AVAX", Decimals: 18, HasDecimals: true},
@@ -212,53 +174,6 @@ type chainReceipt struct {
 	Logs        []logEntry `json:"logs"`
 }
 
-type traceCall struct {
-	Error string      `json:"error"`
-	Logs  []traceLog  `json:"logs"`
-	Calls []traceCall `json:"calls"`
-}
-
-type traceLog struct {
-	Address string   `json:"address"`
-	Topics  []string `json:"topics"`
-	Data    string   `json:"data"`
-}
-
-type transferEvent struct {
-	Token    common.Address
-	From     common.Address
-	To       common.Address
-	Amount   *big.Int
-	LogIndex int
-}
-
-type poolHop struct {
-	Pool     common.Address
-	TokenIn  common.Address
-	TokenOut common.Address
-}
-
-type resolvedStep struct {
-	Step     pf.RouteStep
-	Provider string
-}
-
-type replayOutcome struct {
-	ExpectedOut *big.Int
-	ActualOut   *big.Int
-	Steps       []resolvedStep
-	Reason      string
-}
-
-type traceReplay struct {
-	ChainTx     *chainTx
-	Sender      common.Address
-	InputToken  common.Address
-	OutputToken common.Address
-	ExpectedOut *big.Int
-	Transfers   []transferEvent
-}
-
 type quoteOutcome struct {
 	QuotedOut *big.Int
 	ActualOut *big.Int
@@ -278,11 +193,6 @@ type txResult struct {
 	QuoteUnsupported bool
 	RouterPass1PPM   bool
 	QuotePass1PPM    bool
-}
-
-type poolCatalog struct {
-	pools  []pf.Pool
-	byAddr map[common.Address][]pf.Pool
 }
 
 func main() {
@@ -315,8 +225,6 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "[swap-replay] router=%s start=%d end=%d found=%d\n", lfjRouter.Name, *startBlock, scannedEnd, len(txs))
 
-	catalog := newPoolCatalog(poolcollector.EmbeddedPools(4000))
-
 	// Group txs by block — one goroutine per block, one light client per block.
 	type blockGroup struct {
 		block uint64
@@ -340,9 +248,7 @@ func main() {
 	var printMu sync.Mutex
 	var wg sync.WaitGroup
 	origOK, origReverted := int64(0), int64(0)
-	routerExact, routerUnder, routerOver, routerUnsupported := int64(0), int64(0), int64(0), int64(0)
 	quoteExact, quoteUnder, quoteOver, quoteUnsupported := int64(0), int64(0), int64(0), int64(0)
-	routerPass1PPM := int64(0)
 	quotePass1PPM := int64(0)
 
 	for range numWorkers {
@@ -352,7 +258,7 @@ func main() {
 			for bg := range work {
 				clients := make(map[uint64]*lc.LightClient)
 				for _, tx := range bg.txs {
-					r := processTx(rpc, catalog, clients, *wsURL, *dataDir, tx)
+					r := processTx(rpc, clients, *wsURL, *dataDir, tx)
 					printMu.Lock()
 					fmt.Print(r.Line)
 					printMu.Unlock()
@@ -360,18 +266,6 @@ func main() {
 						atomic.AddInt64(&origOK, 1)
 					} else {
 						atomic.AddInt64(&origReverted, 1)
-					}
-					if r.RouterExact {
-						atomic.AddInt64(&routerExact, 1)
-					}
-					if r.RouterUnder {
-						atomic.AddInt64(&routerUnder, 1)
-					}
-					if r.RouterOver {
-						atomic.AddInt64(&routerOver, 1)
-					}
-					if r.RouterUnsupported {
-						atomic.AddInt64(&routerUnsupported, 1)
 					}
 					if r.QuoteExact {
 						atomic.AddInt64(&quoteExact, 1)
@@ -384,9 +278,6 @@ func main() {
 					}
 					if r.QuoteUnsupported {
 						atomic.AddInt64(&quoteUnsupported, 1)
-					}
-					if r.RouterPass1PPM {
-						atomic.AddInt64(&routerPass1PPM, 1)
 					}
 					if r.QuotePass1PPM {
 						atomic.AddInt64(&quotePass1PPM, 1)
@@ -404,11 +295,11 @@ func main() {
 	wg.Wait()
 
 	total := origOK + origReverted
-	fmt.Printf("SUMMARY total=%d orig_ok=%d orig_reverted=%d router_exact=%d router_under=%d router_over=%d router_unsupported=%d router_pass_1ppm=%d/%d quote_exact=%d quote_under=%d quote_over=%d quote_unsupported=%d quote_pass_1ppm=%d/%d\n",
-		total, origOK, origReverted, routerExact, routerUnder, routerOver, routerUnsupported, routerPass1PPM, total, quoteExact, quoteUnder, quoteOver, quoteUnsupported, quotePass1PPM, total)
+	fmt.Printf("SUMMARY total=%d orig_ok=%d orig_reverted=%d quote_exact=%d quote_under=%d quote_over=%d quote_unsupported=%d quote_pass_1ppm=%d/%d\n",
+		total, origOK, origReverted, quoteExact, quoteUnder, quoteOver, quoteUnsupported, quotePass1PPM, total)
 }
 
-func processTx(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx) txResult {
+func processTx(rpc *rpcClient, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx) txResult {
 	inMeta := rpc.TokenMeta(tx.Summary.InputToken)
 	outMeta := rpc.TokenMeta(tx.Summary.OutputToken)
 
@@ -429,52 +320,12 @@ func processTx(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.Ligh
 	r := txResult{OrigOK: true}
 	oracleOut := decodePositiveAmountOut(ret)
 
-	routerStatus := "UNSUPPORTED"
-	routerExtra := ""
-	quoteStatus := "UNSUPPORTED"
 	quoteExtra := ""
 
 	if oracleOut == nil {
-		r.RouterUnsupported = true
 		r.QuoteUnsupported = true
-		routerExtra = fmt.Sprintf(" routerReason=undecoded_return(%d bytes)", len(ret))
 		quoteExtra = fmt.Sprintf(" quoteReason=undecoded_return(%d bytes)", len(ret))
 	} else {
-		traced, traceErr := traceOriginalSwap(rpc, tx)
-		if traceErr != nil {
-			r.RouterUnsupported = true
-			routerExtra = fmt.Sprintf(" routerReason=%s", traceErr.Error())
-		} else {
-			outcome, routeErr := replaySingleRoute(rpc, catalog, clients, wsURL, dataDir, tx, traced, oracleOut)
-			if routeErr != nil {
-				r.RouterUnsupported = true
-				routerExtra = fmt.Sprintf(" routerReason=%s", routeErr.Error())
-			} else {
-				route := formatRoute(outcome.Steps, rpc)
-				switch outcome.ActualOut.Cmp(oracleOut) {
-				case 0:
-					routerStatus = "MATCH"
-					r.RouterExact = true
-				case -1:
-					routerStatus = "UNDER"
-					r.RouterUnder = true
-				default:
-					routerStatus = "OVER"
-					r.RouterOver = true
-				}
-				if withinOnePPMOrBetter(outcome.ActualOut, oracleOut) {
-					r.RouterPass1PPM = true
-				}
-				routerExtra = fmt.Sprintf(" router=%s expected=%s actual=%s hops=%d route=%s",
-					routerStatus,
-					formatAmount(oracleOut, outMeta),
-					formatAmount(outcome.ActualOut, outMeta),
-					len(outcome.Steps),
-					route,
-				)
-			}
-		}
-
 		q := quoter.New(4)
 		parentBlock := tx.Block - 1
 		inputToken := normalizeRouteToken(tx.Summary.InputToken)
@@ -492,20 +343,17 @@ func processTx(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.Ligh
 				quoteRoute := formatQuoteRoute(quoted.Route, rpc)
 				switch quoted.ActualOut.Cmp(oracleOut) {
 				case 0:
-					quoteStatus = "MATCH"
 					r.QuoteExact = true
 				case -1:
-					quoteStatus = "UNDER"
 					r.QuoteUnder = true
 				default:
-					quoteStatus = "OVER"
 					r.QuoteOver = true
 				}
 				if withinOnePPMOrBetter(quoted.ActualOut, oracleOut) {
 					r.QuotePass1PPM = true
 				}
 				quoteExtra = fmt.Sprintf(" quote=%s expected=%s quoted=%s actual=%s hops=%d route=%s",
-					quoteStatus,
+					quoteLabel(r),
 					formatAmount(oracleOut, outMeta),
 					formatAmount(quoted.QuotedOut, outMeta),
 					formatAmount(quoted.ActualOut, outMeta),
@@ -516,56 +364,29 @@ func processTx(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.Ligh
 		}
 	}
 
-	r.Line = fmt.Sprintf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s%s\n",
+	r.Line = fmt.Sprintf("%s block=%d orig=OK in=%s amountIn=%s out=%s simulated=%s%s\n",
 		tx.Hash,
 		tx.Block,
 		tokenLabel(tx.Summary.InputToken, inMeta),
 		formatAmount(tx.Summary.AmountIn, inMeta),
 		tokenLabel(tx.Summary.OutputToken, outMeta),
 		formatAmount(oracleOut, outMeta),
-		routerExtra,
 		quoteExtra,
 	)
 	return r
 }
 
-func traceOriginalSwap(rpc *rpcClient, tx replayTx) (*traceReplay, error) {
-	chainTx, err := rpc.TransactionByHash(tx.Hash)
-	if err != nil {
-		return nil, fmt.Errorf("tx: %w", err)
+func quoteLabel(r txResult) string {
+	switch {
+	case r.QuoteExact:
+		return "MATCH"
+	case r.QuoteUnder:
+		return "UNDER"
+	case r.QuoteOver:
+		return "OVER"
+	default:
+		return "UNSUPPORTED"
 	}
-	parentBlock := tx.Block - 1
-
-	trace, err := rpc.DebugTraceCall(chainTx, parentBlock)
-	if err != nil {
-		return nil, fmt.Errorf("trace: %w", err)
-	}
-	if trace.Error != "" {
-		return nil, fmt.Errorf("trace reverted: %s", trace.Error)
-	}
-
-	traceLogs := collectTraceLogs(*trace)
-	transfers := parseTraceTransfers(traceLogs)
-	if len(transfers) == 0 {
-		return nil, fmt.Errorf("no transfer events")
-	}
-
-	sender := common.HexToAddress(chainTx.From)
-	inputToken := normalizeRouteToken(tx.Summary.InputToken)
-	outputToken := normalizeRouteToken(tx.Summary.OutputToken)
-	expectedOut := replayOutputAmount(transfers, outputToken, sender, lfjRouter.Address)
-	if expectedOut.Sign() == 0 {
-		return nil, fmt.Errorf("replay produced zero output")
-	}
-
-	return &traceReplay{
-		ChainTx:     chainTx,
-		Sender:      sender,
-		InputToken:  inputToken,
-		OutputToken: outputToken,
-		ExpectedOut: expectedOut,
-		Transfers:   transfers,
-	}, nil
 }
 
 func blindQuotePair(q *quoter.Quoter, client *lc.LightClient, inputToken, outputToken common.Address, amountIn *big.Int) (*quoteOutcome, error) {
@@ -663,317 +484,6 @@ func formatQuoteRoute(route *pf.Route, rpc *rpcClient) string {
 	return strings.Join(parts, " -> ")
 }
 
-func replaySingleRoute(rpc *rpcClient, catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx, traced *traceReplay, oracleOut *big.Int) (*replayOutcome, error) {
-	parentBlock := tx.Block - 1
-
-	exclude := map[common.Address]bool{
-		traced.Sender:     true,
-		lfjRouter.Address: true,
-	}
-	if detectSplit(traced.Transfers, exclude, catalog) {
-		return replaySplitRoute(catalog, clients, wsURL, dataDir, tx, traced, oracleOut)
-	}
-
-	hops := extractPoolHops(traced.Transfers, catalog)
-	if len(hops) == 0 {
-		// Debug: show which addresses appeared in transfers but aren't in the catalog
-		unknownAddrs := make(map[common.Address]bool)
-		for _, t := range traced.Transfers {
-			for _, addr := range []common.Address{t.From, t.To} {
-				if addr == zeroAddress || addr == traced.Sender || addr == lfjRouter.Address || addr == pf.V4PoolManager {
-					continue
-				}
-				if !catalog.isKnownPool(addr) {
-					unknownAddrs[addr] = true
-				}
-			}
-		}
-		var addrs []string
-		for addr := range unknownAddrs {
-			addrs = append(addrs, addr.Hex())
-		}
-		return nil, fmt.Errorf("no pool hops (unknown: %s)", strings.Join(addrs, ", "))
-	}
-	if normalizeRouteToken(hops[0].TokenIn) != traced.InputToken {
-		if rs, ok := catalog.findStepByTokens(traced.InputToken, normalizeRouteToken(hops[0].TokenIn)); ok {
-			hops = append([]poolHop{{Pool: rs.Step.Pool, TokenIn: traced.InputToken, TokenOut: normalizeRouteToken(hops[0].TokenIn)}}, hops...)
-		} else {
-			return nil, fmt.Errorf("missing head bridge: %s->%s", traced.InputToken.Hex()[:10], hops[0].TokenIn.Hex()[:10])
-		}
-	}
-	if normalizeRouteToken(hops[len(hops)-1].TokenOut) != traced.OutputToken {
-		lastOut := normalizeRouteToken(hops[len(hops)-1].TokenOut)
-		if rs, ok := catalog.findStepByTokens(lastOut, traced.OutputToken); ok {
-			hops = append(hops, poolHop{Pool: rs.Step.Pool, TokenIn: lastOut, TokenOut: traced.OutputToken})
-		} else {
-			return nil, fmt.Errorf("route ends at %s", hops[len(hops)-1].TokenOut.Hex()[:10])
-		}
-	}
-
-	steps, err := resolveSteps(catalog, hops)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := lightClientForBlock(clients, wsURL, dataDir, parentBlock)
-	if err != nil {
-		return nil, fmt.Errorf("lightclient: %w", err)
-	}
-
-	actualOut, err := replayRouteOnLightClient(client, steps, traced.InputToken, tx.Summary.AmountIn)
-	if err != nil {
-		probe := probeSingleRouteSteps(client, steps, tx.Summary.AmountIn)
-		return nil, fmt.Errorf("router replay: %w; route=%s; probe=%s", err, formatRoute(steps, rpc), probe)
-	}
-
-	return &replayOutcome{
-		ExpectedOut: oracleOut,
-		ActualOut:   actualOut,
-		Steps:       steps,
-	}, nil
-}
-// splitStep is one atomic pool swap extracted from trace transfers, with its traced input amount.
-type splitStep struct {
-	Pool     common.Address
-	TokenIn  common.Address
-	TokenOut common.Address
-	AmountIn *big.Int
-	LogIndex int // for ordering
-}
-
-// extractSplitSteps extracts per-transfer pool steps from trace events.
-// Each incoming transfer to a known pool paired with an outgoing transfer becomes one step.
-func extractSplitSteps(transfers []transferEvent, catalog *poolCatalog) []splitStep {
-	// Collect incoming and outgoing transfers per known pool address
-	type poolIO struct {
-		incoming []transferEvent
-		outgoing []transferEvent
-	}
-	pools := make(map[common.Address]*poolIO)
-
-	for _, t := range transfers {
-		if t.From != zeroAddress && catalog.isKnownPool(t.To) {
-			pio := pools[t.To]
-			if pio == nil {
-				pio = &poolIO{}
-				pools[t.To] = pio
-			}
-			pio.incoming = append(pio.incoming, t)
-		}
-		if t.To != zeroAddress && catalog.isKnownPool(t.From) {
-			pio := pools[t.From]
-			if pio == nil {
-				pio = &poolIO{}
-				pools[t.From] = pio
-			}
-			pio.outgoing = append(pio.outgoing, t)
-		}
-	}
-
-	var steps []splitStep
-	for addr, pio := range pools {
-		if len(pio.incoming) == 0 || len(pio.outgoing) == 0 {
-			continue
-		}
-
-		// Group incoming by token, outgoing by token
-		inByToken := make(map[common.Address][]transferEvent)
-		outByToken := make(map[common.Address][]transferEvent)
-		for _, t := range pio.incoming {
-			inByToken[t.Token] = append(inByToken[t.Token], t)
-		}
-		for _, t := range pio.outgoing {
-			outByToken[t.Token] = append(outByToken[t.Token], t)
-		}
-
-		// For each (tokenIn, tokenOut) pair where tokenIn != tokenOut, create steps
-		for tokenIn, ins := range inByToken {
-			for tokenOut := range outByToken {
-				if tokenIn == tokenOut {
-					continue
-				}
-				// Create one step per incoming transfer
-				for _, in := range ins {
-					steps = append(steps, splitStep{
-						Pool:     addr,
-						TokenIn:  normalizeRouteToken(tokenIn),
-						TokenOut: normalizeRouteToken(tokenOut),
-						AmountIn: in.Amount,
-						LogIndex: in.LogIndex,
-					})
-				}
-			}
-		}
-	}
-
-	// Sort by log index for deterministic ordering
-	sort.Slice(steps, func(i, j int) bool { return steps[i].LogIndex < steps[j].LogIndex })
-	return steps
-}
-
-// splitPath is a sequence of steps forming one leg of a split route.
-type splitPath struct {
-	Steps    []splitStep
-	AmountIn *big.Int // amount entering the first step
-}
-
-// buildSplitPaths chains split steps into multi-hop paths.
-// Each path starts with a step whose tokenIn is the tx input token (or an unproduced token)
-// and extends greedily by matching tokenOut → tokenIn.
-func buildSplitPaths(steps []splitStep, inputToken, outputToken common.Address) []splitPath {
-	used := make([]bool, len(steps))
-	var paths []splitPath
-
-	// Find path starts: steps whose tokenIn is the input token
-	for i, s := range steps {
-		if s.TokenIn != inputToken {
-			continue
-		}
-		used[i] = true
-		path := splitPath{
-			Steps:    []splitStep{s},
-			AmountIn: s.AmountIn,
-		}
-
-		// Extend the path greedily
-		current := s.TokenOut
-		for current != outputToken {
-			found := false
-			for j, next := range steps {
-				if used[j] || next.TokenIn != current {
-					continue
-				}
-				used[j] = true
-				path.Steps = append(path.Steps, next)
-				current = next.TokenOut
-				found = true
-				break
-			}
-			if !found {
-				break
-			}
-		}
-		paths = append(paths, path)
-	}
-
-	return paths
-}
-
-func replaySplitRoute(catalog *poolCatalog, clients map[uint64]*lc.LightClient, wsURL, dataDir string, tx replayTx, traced *traceReplay, oracleOut *big.Int) (*replayOutcome, error) {
-	parentBlock := tx.Block - 1
-
-	inputToken := normalizeRouteToken(traced.InputToken)
-	outputToken := normalizeRouteToken(traced.OutputToken)
-
-	steps := extractSplitSteps(traced.Transfers, catalog)
-	if len(steps) == 0 {
-		return nil, fmt.Errorf("split route (no steps)")
-	}
-
-	paths := buildSplitPaths(steps, inputToken, outputToken)
-	if len(paths) == 0 {
-		return nil, fmt.Errorf("split route (no paths)")
-	}
-
-	// Extend paths that don't reach the output token using catalog tail repair
-	for i := range paths {
-		lastOut := paths[i].Steps[len(paths[i].Steps)-1].TokenOut
-		if lastOut == outputToken {
-			continue
-		}
-		if rs, ok := catalog.findStepByTokens(lastOut, outputToken); ok {
-			paths[i].Steps = append(paths[i].Steps, splitStep{
-				Pool:     rs.Step.Pool,
-				TokenIn:  lastOut,
-				TokenOut: outputToken,
-			})
-		}
-	}
-
-	// Flatten all paths into a single step sequence with per-step amounts
-	var flatSteps []pf.RouteStep
-	var flatAmounts []*uint256.Int
-	overrideTokens := []common.Address{inputToken}
-
-	for _, path := range paths {
-		if path.Steps[len(path.Steps)-1].TokenOut != outputToken {
-			continue // skip paths that don't reach output
-		}
-		for j, s := range path.Steps {
-			rs, ok := catalog.findStep(s.Pool, s.TokenIn, s.TokenOut)
-			if !ok {
-				// Try findStepByTokens as fallback (for tail repair steps without a specific pool)
-				rs, ok = catalog.findStepByTokens(s.TokenIn, s.TokenOut)
-				if !ok {
-					continue
-				}
-			}
-			flatSteps = append(flatSteps, rs.Step)
-			if j == 0 {
-				amt, _ := uint256.FromBig(path.AmountIn)
-				flatAmounts = append(flatAmounts, amt)
-			} else {
-				flatAmounts = append(flatAmounts, uint256.NewInt(0))
-			}
-		}
-	}
-
-	if len(flatSteps) == 0 {
-		return nil, fmt.Errorf("split route (no resolved steps)")
-	}
-
-	// Encode and execute
-	calldata := pf.EncodeFlatSwap(flatSteps, flatAmounts, uint256.NewInt(0))
-	client, err := lightClientForBlock(clients, wsURL, dataDir, parentBlock)
-	if err != nil {
-		return nil, fmt.Errorf("split lightclient: %w", err)
-	}
-
-	to := backrunRouter
-	ret, _, err := client.DirectCallWithState(lc.CallMsg{
-		From: dummySender,
-		To:   &to,
-		Data: calldata,
-		Gas:  50_000_000,
-	}, 0, func(sv *lc.StateView) {
-		sv.AddBalance(dummySender, new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)))
-		routercontracts.ApplyTokenOverrides(sv, dummySender, backrunRouter, overrideTokens)
-	})
-	if err != nil {
-		if reason := decodeRevertReason(ret); reason != "" {
-			return nil, fmt.Errorf("split replay: %w (%s)", err, reason)
-		}
-		return nil, fmt.Errorf("split replay: %w", err)
-	}
-
-	out := decodeSigned256(ret)
-	if out == nil {
-		return nil, fmt.Errorf("split replay: empty return")
-	}
-	if out.Sign() < 0 {
-		return nil, fmt.Errorf("split replay: negative output %s", out.String())
-	}
-
-	// If we got <50% of expected, we're missing major split paths — report as unsupported
-	halfExpected := new(big.Int).Div(oracleOut, big.NewInt(2))
-	if out.Cmp(halfExpected) < 0 {
-		return nil, fmt.Errorf("split route (partial: %d/%d paths, got %s of %s expected)",
-			len(paths), len(steps), out.String(), oracleOut.String())
-	}
-
-	// Build resolvedSteps for output formatting
-	var resolved []resolvedStep
-	for _, s := range flatSteps {
-		resolved = append(resolved, resolvedStep{Step: s})
-	}
-
-	return &replayOutcome{
-		ExpectedOut: oracleOut,
-		ActualOut:   out,
-		Steps:       resolved,
-	}, nil
-}
-
 func fetchSwapLogs(rpc *rpcClient, router routerDef, startBlock, endBlock, chunkSize uint64, limit int) ([]replayTx, uint64, error) {
 	if endBlock == 0 {
 		latest, err := rpc.BlockNumber()
@@ -1041,17 +551,6 @@ func fetchSwapLogs(rpc *rpcClient, router routerDef, startBlock, endBlock, chunk
 	})
 
 	return txs, endBlock, nil
-}
-
-func newPoolCatalog(pools []pf.Pool) *poolCatalog {
-	c := &poolCatalog{
-		pools:  pools,
-		byAddr: make(map[common.Address][]pf.Pool),
-	}
-	for _, pool := range pools {
-		c.byAddr[pool.Address] = append(c.byAddr[pool.Address], pool)
-	}
-	return c
 }
 
 func closeLightClients(clients map[uint64]*lc.LightClient) {
@@ -1132,281 +631,6 @@ func lightClientForBlock(cache map[uint64]*lc.LightClient, wsURL, dataDir string
 	return client, nil
 }
 
-func replayRouteOnLightClient(client *lc.LightClient, steps []resolvedStep, inputToken common.Address, amountIn *big.Int) (*big.Int, error) {
-	amountU256, overflow := uint256.FromBig(amountIn)
-	if overflow || amountU256.IsZero() {
-		return nil, fmt.Errorf("invalid amountIn")
-	}
-
-	pools := make([]common.Address, len(steps))
-	poolTypes := make([]int, len(steps))
-	tokenPairs := make([]common.Address, 0, len(steps)*2)
-	extraDatas := make([]string, len(steps))
-	overrideTokens := []common.Address{inputToken}
-
-	for i, step := range steps {
-		pools[i] = step.Step.Pool
-		poolTypes[i] = step.Step.PoolType
-		tokenPairs = append(tokenPairs, step.Step.TokenIn, step.Step.TokenOut)
-		extraDatas[i] = step.Step.ExtraData
-	}
-
-	calldata := pf.EncodeSwapMulti(pools, poolTypes, tokenPairs, amountU256, extraDatas, uint256.NewInt(0))
-	to := backrunRouter
-	ret, _, err := client.DirectCallWithState(lc.CallMsg{
-		From: dummySender,
-		To:   &to,
-		Data: calldata,
-		Gas:  50_000_000,
-	}, 0, func(sv *lc.StateView) {
-		sv.AddBalance(dummySender, new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)))
-		routercontracts.ApplyTokenOverrides(sv, dummySender, backrunRouter, overrideTokens)
-	})
-	if err != nil {
-		if reason := decodeRevertReason(ret); reason != "" {
-			return nil, fmt.Errorf("%w (%s)", err, reason)
-		}
-		return nil, err
-	}
-
-	out := decodeSigned256(ret)
-	if out == nil {
-		return nil, fmt.Errorf("empty return")
-	}
-	if out.Sign() < 0 {
-		return nil, fmt.Errorf("negative output %s", out.String())
-	}
-	return out, nil
-}
-
-func probeSingleRouteSteps(client *lc.LightClient, steps []resolvedStep, amountIn *big.Int) string {
-	current := new(big.Int).Set(amountIn)
-	for i, step := range steps {
-		out, err := replayRouteOnLightClient(client, []resolvedStep{step}, step.Step.TokenIn, current)
-		if err != nil {
-			debugOut, debugErr := debugSwapSingleOnLightClient(client, step, current)
-			debugInfo := ""
-			if debugErr != nil {
-				debugInfo = fmt.Sprintf("; debugSwapSingle=%s", debugErr.Error())
-			} else {
-				debugInfo = fmt.Sprintf("; debugSwapSingleOut=%s", debugOut.String())
-			}
-			return fmt.Sprintf("hop=%d/%d %s %s->%s amountIn=%s err=%s",
-				i+1,
-				len(steps),
-				step.Provider,
-				step.Step.TokenIn.Hex()[:10],
-				step.Step.TokenOut.Hex()[:10],
-				current.String(),
-				err.Error(),
-			) + debugInfo
-		}
-		current = out
-	}
-	return fmt.Sprintf("all-single-hops-ok final=%s", current.String())
-}
-
-func debugSwapSingleOnLightClient(client *lc.LightClient, step resolvedStep, amountIn *big.Int) (*big.Int, error) {
-	amountU256, overflow := uint256.FromBig(amountIn)
-	if overflow || amountU256.IsZero() {
-		return nil, fmt.Errorf("invalid amountIn")
-	}
-
-	calldata := pf.EncodeSwapSingleWithExtra(
-		step.Step.Pool,
-		step.Step.PoolType,
-		step.Step.TokenIn,
-		step.Step.TokenOut,
-		amountU256,
-		step.Step.ExtraData,
-	)
-	to := backrunRouter
-	overrideTokens := []common.Address{step.Step.TokenIn}
-	ret, _, err := client.DirectCallWithState(lc.CallMsg{
-		From: dummySender,
-		To:   &to,
-		Data: calldata,
-		Gas:  50_000_000,
-	}, 0, func(sv *lc.StateView) {
-		sv.AddBalance(dummySender, new(uint256.Int).Exp(uint256.NewInt(10), uint256.NewInt(30)))
-		routercontracts.ApplyTokenOverrides(sv, dummySender, backrunRouter, overrideTokens)
-	})
-	if err != nil {
-		if reason := decodeRevertReason(ret); reason != "" {
-			return nil, fmt.Errorf("%w (%s)", err, reason)
-		}
-		return nil, err
-	}
-
-	out := decodeSigned256(ret)
-	if out == nil {
-		return nil, fmt.Errorf("empty return")
-	}
-	if out.Sign() < 0 {
-		return nil, fmt.Errorf("negative output %s", out.String())
-	}
-	return out, nil
-}
-
-func resolveSteps(catalog *poolCatalog, hops []poolHop) ([]resolvedStep, error) {
-	steps := make([]resolvedStep, 0, len(hops))
-	for _, hop := range hops {
-		step, ok := catalog.findStep(hop.Pool, normalizeRouteToken(hop.TokenIn), normalizeRouteToken(hop.TokenOut))
-		if !ok {
-			return nil, fmt.Errorf("missing pool %s %s->%s", hop.Pool.Hex()[:10], hop.TokenIn.Hex()[:10], hop.TokenOut.Hex()[:10])
-		}
-		steps = append(steps, step)
-	}
-	return steps, nil
-}
-
-func (c *poolCatalog) isKnownPool(addr common.Address) bool {
-	if len(c.byAddr[addr]) > 0 {
-		return true
-	}
-	switch addr {
-	case wooPPAddress, wooPPV2Address, balancerV2Vault, pf.V4PoolManager, cavalrePool, bentoBox:
-		return true
-	default:
-		return false
-	}
-}
-
-func (c *poolCatalog) findStep(addr, tokenIn, tokenOut common.Address) (resolvedStep, bool) {
-	if step, ok := c.findDirectStep(addr, tokenIn, tokenOut); ok {
-		return step, true
-	}
-
-	switch addr {
-	case wooPPAddress:
-		for _, pool := range c.pools {
-			if pool.PoolType == 5 && pool.Address == woofiRouter && poolHasTokens(pool, tokenIn, tokenOut) {
-				return resolvedStep{
-					Step:     pf.RouteStep{Pool: pool.Address, PoolType: pool.PoolType, TokenIn: tokenIn, TokenOut: tokenOut, ExtraData: pool.ExtraData},
-					Provider: pool.Dex,
-				}, true
-			}
-		}
-	case wooPPV2Address:
-		return resolvedStep{
-			Step:     pf.RouteStep{Pool: wooPPV2Address, PoolType: 14, TokenIn: tokenIn, TokenOut: tokenOut},
-			Provider: "woopp_v2",
-		}, true
-	case balancerV2Vault:
-		for _, pool := range c.pools {
-			if pool.PoolType == 16 && poolHasTokens(pool, tokenIn, tokenOut) {
-				return resolvedStep{
-					Step:     pf.RouteStep{Pool: pool.Address, PoolType: pool.PoolType, TokenIn: tokenIn, TokenOut: tokenOut, ExtraData: pool.ExtraData},
-					Provider: pool.Dex,
-				}, true
-			}
-		}
-	case pf.V4PoolManager:
-		for _, pool := range c.pools {
-			if pool.PoolType == 9 && poolHasTokens(pool, tokenIn, tokenOut) {
-				return resolvedStep{
-					Step:     pf.RouteStep{Pool: pool.Address, PoolType: pool.PoolType, TokenIn: tokenIn, TokenOut: tokenOut, ExtraData: pool.ExtraData},
-					Provider: pool.Dex,
-				}, true
-			}
-		}
-	case cavalrePool:
-		for _, pool := range c.pools {
-			if pool.PoolType == 17 && poolHasTokens(pool, tokenIn, tokenOut) {
-				return resolvedStep{
-					Step:     pf.RouteStep{Pool: pool.Address, PoolType: pool.PoolType, TokenIn: tokenIn, TokenOut: tokenOut, ExtraData: pool.ExtraData},
-					Provider: pool.Dex,
-				}, true
-			}
-		}
-	case bentoBox:
-		for _, pool := range c.pools {
-			if pool.PoolType == 20 && poolHasTokens(pool, tokenIn, tokenOut) {
-				return resolvedStep{
-					Step:     pf.RouteStep{Pool: pool.Address, PoolType: pool.PoolType, TokenIn: tokenIn, TokenOut: tokenOut, ExtraData: pool.ExtraData},
-					Provider: pool.Dex,
-				}, true
-			}
-		}
-	}
-
-	return resolvedStep{}, false
-}
-
-func (c *poolCatalog) findDirectStep(addr, tokenIn, tokenOut common.Address) (resolvedStep, bool) {
-	for _, pool := range c.byAddr[addr] {
-		if !poolHasTokens(pool, tokenIn, tokenOut) {
-			continue
-		}
-		extra := pool.ExtraData
-		if pool.PoolType == 8 && extra == "" {
-			if fee, ok := customFeeProviders[pool.Dex]; ok {
-				extra = fee
-			}
-		}
-		return resolvedStep{
-			Step: pf.RouteStep{
-				Pool:      pool.Address,
-				PoolType:  pool.PoolType,
-				TokenIn:   tokenIn,
-				TokenOut:  tokenOut,
-				ExtraData: extra,
-			},
-			Provider: pool.Dex,
-		}, true
-	}
-	return resolvedStep{}, false
-}
-
-func poolHasTokens(pool pf.Pool, tokenIn, tokenOut common.Address) bool {
-	hasIn := false
-	hasOut := false
-	altIn := tokenIn
-	altOut := tokenOut
-	if tokenIn == wavaxAddress {
-		altIn = zeroAddress
-	}
-	if tokenOut == wavaxAddress {
-		altOut = zeroAddress
-	}
-	for _, token := range pool.Tokens {
-		if token == tokenIn || token == altIn {
-			hasIn = true
-		}
-		if token == tokenOut || token == altOut {
-			hasOut = true
-		}
-	}
-	return hasIn && hasOut
-}
-
-// findStepByTokens scans all pools for one that supports the given token pair,
-// regardless of pool address. Used for head/tail route repair.
-func (c *poolCatalog) findStepByTokens(tokenIn, tokenOut common.Address) (resolvedStep, bool) {
-	for _, pool := range c.pools {
-		if !poolHasTokens(pool, tokenIn, tokenOut) {
-			continue
-		}
-		extra := pool.ExtraData
-		if pool.PoolType == 8 && extra == "" {
-			if fee, ok := customFeeProviders[pool.Dex]; ok {
-				extra = fee
-			}
-		}
-		return resolvedStep{
-			Step: pf.RouteStep{
-				Pool:      pool.Address,
-				PoolType:  pool.PoolType,
-				TokenIn:   tokenIn,
-				TokenOut:  tokenOut,
-				ExtraData: extra,
-			},
-			Provider: pool.Dex,
-		}, true
-	}
-	return resolvedStep{}, false
-}
-
 func normalizeRouteToken(token common.Address) common.Address {
 	if token == zeroAddress {
 		return wavaxAddress
@@ -1414,228 +638,6 @@ func normalizeRouteToken(token common.Address) common.Address {
 	return token
 }
 
-func replayOutputAmount(transfers []transferEvent, outputToken, user, router common.Address) *big.Int {
-	sum := new(big.Int)
-	for _, transfer := range transfers {
-		if transfer.Token == outputToken && transfer.To == user {
-			sum.Add(sum, transfer.Amount)
-		}
-	}
-	if sum.Sign() > 0 {
-		return sum
-	}
-	if outputToken == wavaxAddress {
-		for _, transfer := range transfers {
-			if transfer.Token == wavaxAddress && transfer.To == router {
-				sum.Add(sum, transfer.Amount)
-			}
-		}
-	}
-	return sum
-}
-
-func collectTraceLogs(call traceCall) []traceLog {
-	logs := make([]traceLog, 0, len(call.Logs))
-	logs = append(logs, call.Logs...)
-	for _, sub := range call.Calls {
-		logs = append(logs, collectTraceLogs(sub)...)
-	}
-	return logs
-}
-
-func parseTraceTransfers(traceLogs []traceLog) []transferEvent {
-	transfers := make([]transferEvent, 0)
-	for i, log := range traceLogs {
-		if len(log.Topics) < 3 || strings.ToLower(log.Topics[0]) != transferTopic {
-			continue
-		}
-		transfers = append(transfers, transferEvent{
-			Token:    common.HexToAddress(log.Address),
-			From:     common.HexToAddress(log.Topics[1]),
-			To:       common.HexToAddress(log.Topics[2]),
-			Amount:   mustParseBigHex(log.Data),
-			LogIndex: i,
-		})
-	}
-	return transfers
-}
-
-func parseReceiptTransfers(logs []logEntry) []transferEvent {
-	transfers := make([]transferEvent, 0)
-	for _, log := range logs {
-		if len(log.Topics) < 3 || strings.ToLower(log.Topics[0]) != transferTopic {
-			continue
-		}
-		transfers = append(transfers, transferEvent{
-			Token:    common.HexToAddress(log.Address),
-			From:     common.HexToAddress(log.Topics[1]),
-			To:       common.HexToAddress(log.Topics[2]),
-			Amount:   mustParseBigHex(log.Data),
-			LogIndex: int(parseHexUint64(log.LogIndex)),
-		})
-	}
-	sort.Slice(transfers, func(i, j int) bool { return transfers[i].LogIndex < transfers[j].LogIndex })
-	return transfers
-}
-
-func detectSplit(transfers []transferEvent, exclude map[common.Address]bool, catalog *poolCatalog) bool {
-	senders := make(map[common.Address]bool)
-	for _, transfer := range transfers {
-		senders[transfer.From] = true
-	}
-
-	fanOut := make(map[string]map[common.Address]bool)
-	for _, transfer := range transfers {
-		if exclude[transfer.From] || exclude[transfer.To] {
-			continue
-		}
-		if transfer.From == zeroAddress {
-			continue
-		}
-		if !senders[transfer.To] && transfer.To != pf.V4PoolManager {
-			continue
-		}
-		if !catalog.isKnownPool(transfer.From) && !catalog.isKnownPool(transfer.To) {
-			continue
-		}
-
-		key := transfer.From.Hex() + ":" + transfer.Token.Hex()
-		if fanOut[key] == nil {
-			fanOut[key] = make(map[common.Address]bool)
-		}
-		fanOut[key][transfer.To] = true
-		if len(fanOut[key]) >= 2 {
-			return true
-		}
-	}
-
-	return false
-}
-
-func extractPoolHops(transfers []transferEvent, catalog *poolCatalog) []poolHop {
-	multiSwapPools := map[common.Address]bool{
-		wooPPAddress:    true,
-		wooPPV2Address:  true,
-		balancerV2Vault: true,
-		cavalrePool:     true,
-	}
-
-	addresses := make(map[common.Address]bool)
-	for _, transfer := range transfers {
-		addresses[transfer.From] = true
-		addresses[transfer.To] = true
-	}
-
-	hops := make([]poolHop, 0)
-	seen := make(map[string]bool)
-	for addr := range addresses {
-		if addr == zeroAddress || addr == pf.V4PoolManager {
-			continue
-		}
-		if !catalog.isKnownPool(addr) {
-			continue
-		}
-
-		incoming := make([]transferEvent, 0)
-		outgoing := make([]transferEvent, 0)
-		for _, transfer := range transfers {
-			if transfer.To == addr && transfer.From != zeroAddress {
-				incoming = append(incoming, transfer)
-			}
-			if transfer.From == addr && transfer.To != zeroAddress {
-				outgoing = append(outgoing, transfer)
-			}
-		}
-		if len(incoming) == 0 || len(outgoing) == 0 {
-			continue
-		}
-
-		if multiSwapPools[addr] && len(incoming) > 1 && len(outgoing) > 1 {
-			sort.Slice(incoming, func(i, j int) bool { return incoming[i].LogIndex < incoming[j].LogIndex })
-			sort.Slice(outgoing, func(i, j int) bool { return outgoing[i].LogIndex < outgoing[j].LogIndex })
-			pairCount := len(incoming)
-			if len(outgoing) < pairCount {
-				pairCount = len(outgoing)
-			}
-			for i := 0; i < pairCount; i++ {
-				if incoming[i].Token == outgoing[i].Token {
-					continue
-				}
-				key := addr.Hex() + incoming[i].Token.Hex() + outgoing[i].Token.Hex() + fmt.Sprintf(":%d", i)
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				hops = append(hops, poolHop{Pool: addr, TokenIn: incoming[i].Token, TokenOut: outgoing[i].Token})
-			}
-			continue
-		}
-
-		tokenIn := incoming[0].Token
-		tokenOut := outgoing[0].Token
-		if tokenIn == tokenOut {
-			continue
-		}
-		key := addr.Hex() + tokenIn.Hex() + tokenOut.Hex()
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		hops = append(hops, poolHop{Pool: addr, TokenIn: tokenIn, TokenOut: tokenOut})
-	}
-
-	if len(hops) <= 1 {
-		return hops
-	}
-
-	produced := make(map[common.Address]bool)
-	for _, hop := range hops {
-		produced[normalizeRouteToken(hop.TokenOut)] = true
-	}
-	starts := make([]poolHop, 0)
-	for _, hop := range hops {
-		if !produced[normalizeRouteToken(hop.TokenIn)] {
-			starts = append(starts, hop)
-		}
-	}
-	if len(starts) == 0 {
-		starts = hops
-	}
-
-	best := make([]poolHop, 0)
-	for _, start := range starts {
-		chain := []poolHop{start}
-		used := map[string]bool{start.Pool.Hex() + start.TokenIn.Hex() + start.TokenOut.Hex(): true}
-		current := start
-		for len(chain) < len(hops) {
-			found := false
-			for _, candidate := range hops {
-				key := candidate.Pool.Hex() + candidate.TokenIn.Hex() + candidate.TokenOut.Hex()
-				if used[key] {
-					continue
-				}
-				if normalizeRouteToken(candidate.TokenIn) != normalizeRouteToken(current.TokenOut) {
-					continue
-				}
-				chain = append(chain, candidate)
-				used[key] = true
-				current = candidate
-				found = true
-				break
-			}
-			if !found {
-				break
-			}
-		}
-		if len(chain) > len(best) {
-			best = chain
-		}
-		if len(best) == len(hops) {
-			return best
-		}
-	}
-	return best
-}
 
 func decodeSigned256(data []byte) *big.Int {
 	if len(data) == 0 {
@@ -1685,16 +687,6 @@ func decodeRevertReason(data []byte) string {
 	default:
 		return fmt.Sprintf("revert(0x%x)", data[:4])
 	}
-}
-
-func formatRoute(steps []resolvedStep, rpc *rpcClient) string {
-	parts := make([]string, 0, len(steps))
-	for _, step := range steps {
-		inMeta := rpc.TokenMeta(step.Step.TokenIn)
-		outMeta := rpc.TokenMeta(step.Step.TokenOut)
-		parts = append(parts, fmt.Sprintf("%s(%s→%s)", step.Provider, tokenLabel(step.Step.TokenIn, inMeta), tokenLabel(step.Step.TokenOut, outMeta)))
-	}
-	return strings.Join(parts, " -> ")
 }
 
 func (c *rpcClient) BlockNumber() (uint64, error) {
@@ -1756,36 +748,6 @@ func (c *rpcClient) TransactionReceipt(hash string) (*chainReceipt, error) {
 		return nil, fmt.Errorf("missing receipt")
 	}
 	return &receipt, nil
-}
-
-func (c *rpcClient) DebugTraceCall(tx *chainTx, block uint64) (*traceCall, error) {
-	params := map[string]interface{}{
-		"from": tx.From,
-		"to":   tx.To,
-		"data": tx.Input,
-		"gas":  "0x1C9C380",
-	}
-	if tx.Value != "" && tx.Value != "0x0" {
-		params["value"] = tx.Value
-	}
-	raw, err := c.Call("debug_traceCall", []interface{}{
-		params,
-		hexUint64(block),
-		map[string]interface{}{
-			"tracer": "callTracer",
-			"tracerConfig": map[string]interface{}{
-				"withLog": true,
-			},
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	var trace traceCall
-	if err := json.Unmarshal(raw, &trace); err != nil {
-		return nil, err
-	}
-	return &trace, nil
 }
 
 func (c *rpcClient) Call(method string, params interface{}) (json.RawMessage, error) {

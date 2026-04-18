@@ -36,6 +36,13 @@ type V3Pool struct {
 	// Pre-loaded tick data: tickIdx -> liquidityNet
 	tickLiquidityNet map[int32]uint256.Int
 
+	// Count of initialized ticks at or below p.tick (ticks crossable when zeroForOne).
+	// Used to short-circuit the swap loop once all crossable ticks in the current
+	// direction have been crossed and liquidity=0 — no more output will accumulate,
+	// so avoid walking thousands of empty-word steps.
+	initTicksBelow int
+	initTicksAbove int
+
 	// Pre-computed swap steps for empty word boundaries.
 	// Key: boundary tick. For each empty word crossing between initialized ticks,
 	// we store the exact computeSwapStep result. Lossless.
@@ -123,7 +130,10 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 	// coverage relative to fee-induced price impact.
 	bitmapRadius := int16(200)
 	if tickSpacing <= 2 {
-		bitmapRadius = 500
+		// tickSpacing=1 pools (typically fee=100 stable pairs) often have very
+		// sparse liquidity and a low-L swap can traverse 100k+ ticks. Radius 1500
+		// = 384000 ticks per direction keeps most such swaps in-window.
+		bitmapRadius = 1500
 	} else if tickSpacing <= 5 {
 		bitmapRadius = 300
 	}
@@ -193,6 +203,18 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		}
 	}
 
+	// Count initialized ticks that lie on each side of current tick.
+	// Solidity's nextInitializedTickWithinOneWord (zeroForOne=true) finds ticks <= current.
+	// For oneForZero the search is strictly > current (via compressed+1).
+	initBelow, initAbove := 0, 0
+	for t := range tickLiquidityNet {
+		if t <= tick {
+			initBelow++
+		} else {
+			initAbove++
+		}
+	}
+
 	pool := &V3Pool{
 		addr:             addr,
 		fee:              fee,
@@ -204,6 +226,8 @@ func newV3Pool(addr common.Address, reader StorageReader) *V3Pool {
 		bitmapMinWord:    bitmapMinWord,
 		bitmapMaxWord:    bitmapMaxWord,
 		tickLiquidityNet: tickLiquidityNet,
+		initTicksBelow:   initBelow,
+		initTicksAbove:   initAbove,
 		preStepsDown:     make(map[int32]*v3PrecomputedStep),
 		preStepsUp:       make(map[int32]*v3PrecomputedStep),
 		heavyGas:         layout.heavyGas,
@@ -429,11 +453,34 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) 
 	const v3GasPerEmptyStep int64 = 7_000
 	const v3BaseGas int64 = 400_000
 	const v3GasLimit int64 = 4_800_000
-	const maxSwapSteps = 500 // hard cap as secondary guard
+	const maxSwapSteps = 2000 // hard cap as secondary guard (30M EVM gas / ~5K per empty step ≈ 6000)
+
+	// Count of initialized ticks remaining to cross in this direction. Once this
+	// hits zero and liquidity is also zero, no more output will accumulate and we
+	// can short-circuit instead of walking thousands of empty-word steps to the
+	// price limit. (On-chain, EVM traverses those cheaply within 30M gas but the
+	// formula's step cap is 500.)
+	var initRemaining int
+	if zeroForOne {
+		initRemaining = p.initTicksBelow
+	} else {
+		initRemaining = p.initTicksAbove
+	}
 
 	steps := 0
 	var estimatedGas int64 = v3BaseGas
 	for !amountRemaining.IsZero() && !sqrtPriceX96.Eq(&sqrtPriceLimitX96) {
+		// Short-circuit: liquidity is zero and no more initialized ticks ahead in
+		// the pre-loaded bitmap. With L=0 every further step produces zero output,
+		// so the accumulated amountOut is already final. Return it.
+		//
+		// Only safe for standard UniswapV3: pharaoh/ramses pools (heavyGas) have
+		// an empirically observed ~12bp discrepancy between computeSwapStep math
+		// and their actual swap output for the same step, so the short-circuit
+		// can overquote by that margin. Keep the old 0-return (underquote) for them.
+		if !p.heavyGas && liquidity.IsZero() && initRemaining == 0 {
+			return amountOut
+		}
 		if steps >= maxSwapSteps {
 			// Too many crossings — EVM would revert from gas exhaustion.
 			return uint256.Int{}
@@ -523,6 +570,9 @@ func (p *V3Pool) Quote(amountIn *uint256.Int, tokenIn, tokenOut common.Address) 
 
 		if newSqrtPriceX96.Eq(&sqrtPriceNextTickX96) {
 			if initialized {
+				if initRemaining > 0 {
+					initRemaining--
+				}
 				liquidityNet := p.tickLiquidityNet[nextTick]
 				if zeroForOne {
 					liquidity.Sub(&liquidity, &liquidityNet)

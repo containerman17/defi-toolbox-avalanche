@@ -1,5 +1,91 @@
 # Changelog
 
+## 2026-04-18 — v3: short-circuit drained pools + widen tickSpacing=1 bitmap (→98.89%, 0 overquotes)
+
+### Problem
+`uniswap_v3` category had ~8 underquotes per block × 10 blocks = ~79 aggregate
+underquote-jobs out of 3320 v3 jobs (formula returns 0 where EVM returns
+non-zero). Not the ERC-7201 storage layout hypothesis — the two pharaoh_v3
+pools in the set (0x44EC4131, 0xF9Ab90A5) are read correctly by the existing
+`v3LayoutPharaohV1`/`V2` resolver; their storage slots match on-chain values
+verified via `cast storage` at the documented offsets
+(`keccak256("states.storage") + 7` / 13 / 14 / 15 for Ramses v2 ClPool at
+`/tmp/routescan/0x77dd39F2B04a5095B287deab21943d81dCf91CcA/sources/contracts/v2/libraries/States.sol:147`;
+`0xf047b0c5…2800` + 0 / 8 / 9 / 10 for RamsesV3Pool at
+`/tmp/routescan/0xF9Ab90A565625652BF155d39c094D7eEaB8B12F1/sources/contracts/CL/core/libraries/PoolStorage.sol:102`).
+
+The real cause has two parts, both triggered only on sparse-liquidity
+`tickSpacing=1` pools:
+
+1. **Step cap after liquidity drain.** When a swap crosses all initialized
+   ticks in the preloaded bitmap window and `liquidity` becomes zero,
+   Solidity's loop walks empty-word boundaries with `amountIn=0` (liquidity=0
+   means `getAmount*Delta=0`) until `sqrtPrice` hits the limit. Our formula
+   had a hard `maxSwapSteps=500` cap, and for tickSpacing=1 pools 500 empty
+   steps covered only ~128k ticks — the rest of the traversal down to
+   MIN_TICK tripped the cap and returned 0. The EVM runs these steps
+   cheaply inside `debugSwapSingle`'s 30M gas budget and produces the real
+   answer.
+2. **Bitmap window too narrow for sparse pools.** For tickSpacing=1 pools
+   with only a handful of initialized positions spread across a wide tick
+   range, the default `bitmapRadius=500` words (=128k ticks) wasn't enough
+   and the swap ran `outOfRange` with non-zero L; `evmWouldComplete` only
+   clears to return the partial amount when `liquidity == 0`, so we
+   conservatively returned 0.
+
+Example: pool `0x175183B2` (fee=100, tickSpacing=1), tick=-258376, single
+initialized tick at -258406. Input 0.139 WAVAX. EVM crosses the one tick,
+outputs 112185 wei, then walks ~4500 empty words down to MIN_TICK in ~20M
+gas. Formula returned 0 because step cap hit.
+
+### Fix
+In `formulas/pool_v3.go`:
+
+1. **Track initialized-tick counts below/above current tick at construction**
+   (`initTicksBelow`, `initTicksAbove`). In `Quote`, after each crossing,
+   decrement the direction-specific counter. When `liquidity == 0 &&
+   initRemaining == 0`, short-circuit and return accumulated `amountOut` —
+   no further step can produce output, and the EVM's empty-word walk
+   doesn't contribute to the final amount.
+2. **Gate the short-circuit on `!p.heavyGas`**. Pharaoh/Ramses pools show a
+   ~12bp discrepancy between the `SwapMath.computeSwapStep` output our
+   formula computes and the actual on-chain swap output for the same
+   (current, target, L, fee) tuple. Verified by direct debug call to router
+   `debugSwapSingle` on pool 0x44EC4131: our math produces 37546565520380528884566
+   (= L × (sqrt_cur − sqrt_tgt) / Q96) while EVM returns 37503011504376887471062.
+   Source is identical whitespace-modulo to standard UniV3, so the divergence
+   appears to be in how the boosted-liquidity / reward machinery interacts
+   with per-step accounting. Keeping the 0 underquote for these pools is
+   safer than a 12bp overquote.
+3. **Raise bitmap radius for tickSpacing=1 to 1500 words** (=384k ticks per
+   side). The extra reads are mostly zero words (empty mapping slots) so
+   throughput impact is negligible; this keeps most low-L swaps in-window.
+4. **Raise `maxSwapSteps` from 500 to 2000**. Calibration: 30M EVM gas /
+   ~5K gas per empty-word step ≈ 6000, so 2000 remains a loose guardrail.
+
+### Before / After (10 blocks, top-4000)
+```
+Before:
+uniswap_v3        3320   3240      0     80     10
+TOTAL            39250  38764      0    486   1970   exact=98.76%
+
+After:
+uniswap_v3        3320   3290      0     30    100
+TOTAL            39250  38814      0    436   2030   exact=98.89%
+```
+Remaining 30 uniswap_v3 underquotes:
+- `0x8889D050` ×10: off-by-1 rounding (EVM=28604556, formula=28604555).
+- `0x44EC4131` ×10: pharaoh, kept as 0 (short-circuit would overquote 12bp).
+- `0xF9Ab90A5` ×10: drained RamsesV3 pool (L=0, 1003 wei token0, 9630 token1);
+  EVM returns most of the token1 balance through some non-standard path;
+  formula correctly returns 0 for a pool with no initialized ticks nearby.
+
+### Files
+- `formulas/pool_v3.go` — struct fields, construction counts, Quote
+  short-circuit + `maxSwapSteps=2000`, bitmapRadius=1500 for ts=1.
+- `benchmarks/formula-accuracy/main.go` — debug trace added during
+  investigation, reverted before commit.
+
 ## 2026-04-18 — balancer_v3: restore pool registration + MaxInRatio check (→98.76%)
 
 ### Problem

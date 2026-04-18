@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-04-18 — FoT tokens + pharaoh SubtractOne: real formula fixes (→98.64%)
+
+Four output tokens on V2-family pools had no FoT entry, causing ~5–6% overquote.
+Source fetched via routescan MCP (new `.mcp.json` entry, cached to
+`/tmp/routescan/<addr>/`), tax math decoded, added to `fotCalculators`:
+
+- **BillMaher.Finance (BMF)** `0x9e7890b2` — unverified source; empirical 599 bps.
+  `fotBps(600)` (conservative; underquotes by ~10B wei at 239e21 scale).
+- **Tjoma** `0x8d4a8522` — verified RFI reflection token (`_taxFee` applied via
+  `_getValues` with rate); empirical 599 bps. `fotBps(600)`. Precise reflection
+  modeling deferred (would use `reflectionTokenConfigs`).
+- **THORSMEAD** `0x245c2591` — verified RFI reflection; current `_taxFee=5`,
+  `_charityFee=_liquidityFee=0`. `fotBps(500)` matches exactly.
+- **SnowyYields** `0xcd0dcc37` — verified `_finalBuyTax=4` via
+  `amount.mul(4).div(100)`. `fotBps(400)` exact.
+
+**Pharaoh V1 pool `0x35331269`**: registry entry had `SubtractOne: false`, but
+empirical 1-wei overquote (formula=101185, EVM=101184) proved Pharaoh's
+`getAmountOut` returns `result - 1` (common Solidly safety pattern). Flipped
+`SubtractOne` to `true` in `pharaoh_v1_registry.go`.
+
+Bench command: `go run ./benchmarks/formula-accuracy/` (top-4000).
+
+```
+TOTAL            39250  38715      0    535   2030
+exact=98.64% over=0.00% under=1.36% zero=5.17% non_zero=94.83%
+```
+
+From 80 overquotes after the earlier bulk un-blacklist batch to 0, with zero
+new blacklist entries.
+
 ## 2026-04-18 — Registry overhaul via discover + bench defaults top-4000
 
 ### Tooling

@@ -144,6 +144,29 @@ var fotCalculators = map[string]fotCalc{
 	// Safemoon fork: fee = amount * 500 / 10000
 	"0x3960716779870ef8757aeb43f3c4f0c30cb2d557": fotBps(500),
 
+	// BillMaher.Finance (BMF, 0x9e78): bytecode unverified on routescan, empirical
+	// 599 bps tax on pool→router transfer. Suspected 6% tax with reflection-style
+	// rounding drift; using 600 underquotes safely by ~10B wei at 239e21 scale.
+	// Used by pools 0x04a47b49, 0x9cFDa80B, 0x9de728D3 (all pangolin_v2).
+	"0x9e7890b2e2de38d764a29b0de1e2b9b37c90ddb9": fotBps(600),
+
+	// Tjoma (0x8d4a): RFI reflection, _taxFee applied via _getValues with rate.
+	// Empirical 599 bps on bench-amount transfers. Using fotBps(600) underquotes
+	// safely. Precise RFI math would need reflectionTokenConfigs entry.
+	// Pools 0xAfAd3c7C, 0xc4877C4a (pangolin_v2).
+	"0x8d4a8522f2fb040d4755757c05d99976c0d29fce": fotBps(600),
+
+	// THORSMEAD (0x245c): RFI reflection, current _taxFee=5 (charityFee,
+	// liquidityFee are 0). transfer() applies 5% reflection fee per
+	// calculateTaxFee. Pool 0xb97F23A9 (lfj_v1).
+	"0x245c2591403e182e41d7a851eab53b01854844ce": fotBps(500),
+
+	// SnowyYields (0xcd0d): _finalSellTax=4, _finalBuyTax=4, applied as
+	// amount.mul(4).div(100) when from==pair or to==pair (bench path is
+	// pool→router, hitting the buy branch since router is not excluded).
+	// Pool 0x57Ba9107 (lfj_v1).
+	"0xcd0dcc37376a96078014561312e906cbabb2045c": fotBps(400),
+
 	// DejàVu: fee = amount * 51 / 10000
 	"0x78aed06eb93351aae6886d9c012888f87b64c918": fotBps(51),
 

@@ -15,6 +15,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/big"
 	"os"
 	"runtime"
 	"sort"
@@ -30,6 +31,7 @@ import (
 	poolcollector "defi-toolbox/tools/pool-collector"
 
 	"github.com/ava-labs/libevm/common"
+	"github.com/ava-labs/libevm/crypto"
 	"github.com/holiman/uint256"
 )
 
@@ -295,20 +297,26 @@ func runBlock(
 	// Wire EVMCaller so formulas that need view calls (LFJ V2 rebasing surplus
 	// via balanceOf, Balancer V3 rate providers, wombat ggAVAX oracle) get real
 	// on-chain values instead of silently falling through to defaults.
-	pm.SetEVMCaller(func(to common.Address, data []byte) ([]byte, bool) {
+	evmCaller := func(to common.Address, data []byte) ([]byte, bool) {
 		ret, _, err := client.Call(lc.CallMsg{
 			From: DUMMY_SENDER,
 			To:   &to,
 			Data: data,
 		}, 0)
 		return ret, err == nil
-	})
+	}
+	pm.SetEVMCaller(evmCaller)
 	for _, p := range pools {
 		if len(p.Tokens) >= 2 {
 			pm.SetPoolTokens(p.Address, p.Tokens...)
 		}
 		pm.SetPoolType(p.Address, p.PoolType, p.Dex)
 	}
+
+	// Register Balancer V3 pool configs (weights, amp, token types, rate providers)
+	// for this block. The static config is looked up via EVM calls + vault storage.
+	// This must happen per-block because amp can ramp over time on Stable pools.
+	registerBalancerV3Pools(pools, reader, evmCaller)
 
 	t0 := time.Now()
 
@@ -436,4 +444,152 @@ func pct(numer, denom int) float64 {
 		return 0
 	}
 	return 100 * float64(numer) / float64(denom)
+}
+
+// balV3VaultAddr is the Balancer V3 vault on Avalanche C-Chain.
+var balV3VaultAddr = common.HexToAddress("0xba1333333333a1ba1108e8412f11850a5c319ba9")
+
+// balV3ReadTokenInfo reads TokenInfo for a token from vault storage.
+// TokenInfo is packed as: byte0=tokenType, bytes1-20=rateProvider, byte21=paysYieldFees.
+// Stored in _poolTokenInfo[pool][token] at vault slot 4 (nested mapping).
+func balV3ReadTokenInfo(reader func(common.Address, common.Hash) common.Hash, pool, token common.Address) (tokenType uint8, rateProvider common.Address) {
+	// outer slot: keccak256(leftPad32(pool) ++ leftPad32(4))
+	var outerKey [64]byte
+	copy(outerKey[12:32], pool.Bytes())
+	outerKey[63] = 4
+	outerSlot := crypto.Keccak256Hash(outerKey[:])
+
+	// inner slot: keccak256(leftPad32(token) ++ outerSlot)
+	var innerKey [64]byte
+	copy(innerKey[12:32], token.Bytes())
+	copy(innerKey[32:64], outerSlot.Bytes())
+	innerSlot := crypto.Keccak256Hash(innerKey[:])
+
+	packed := reader(balV3VaultAddr, innerSlot)
+	val := new(big.Int).SetBytes(packed[:])
+
+	// byte 0 (LSB): tokenType
+	tokenType = uint8(val.Uint64() & 0xff)
+	// bytes 1-20: rateProvider address
+	mask160 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 160), big.NewInt(1))
+	rpInt := new(big.Int).And(new(big.Int).Rsh(val, 8), mask160)
+	rateProvider = common.BigToAddress(rpInt)
+	return
+}
+
+// Bit offsets in Balancer V3 _poolConfigBits[pool]. See PoolConfigConst.sol.
+// Bit 0: POOL_REGISTERED, 1: INITIALIZED, 2: PAUSED, 3: RECOVERY_MODE,
+// 4: UNBALANCED_LIQUIDITY, 5-7: ADD/REMOVE_LIQ_CUSTOM, DONATION,
+// 8: BEFORE_INITIALIZE, 9: ENABLE_HOOK_ADJUSTED_AMOUNTS, 10: AFTER_INITIALIZE,
+// 11: DYNAMIC_SWAP_FEE, 12: BEFORE_SWAP, 13: AFTER_SWAP, ...
+const (
+	balV3BitDynamicSwapFee = 11
+	balV3BitBeforeSwap     = 12
+	balV3BitAfterSwap      = 13
+	balV3BitHookAdjusted   = 9
+)
+
+// registerBalancerV3Pools probes each balancer_v3 pool (type 6) with
+// getAmplificationParameter (Stable) or getNormalizedWeights (Weighted), reads
+// per-token TokenInfo from vault storage, and registers the result with
+// formulas.RegisterBalancerV3Pool. Pools that don't respond to either probe
+// (e.g. GyroECLP) are left unregistered — newBalancerV3Pool returns nil and
+// the pool gets a zeroQuoter, preventing incorrect quotes.
+//
+// Pools that have swap-affecting hooks installed (dynamic fee, before/after
+// swap, hook-adjusted amounts) are also skipped: the static Weighted/Stable
+// math does not capture the hook's effect (e.g. StableSurgeHook charges a
+// surge fee on imbalancing swaps). Without modeling the hook, our formula
+// would overquote vs. EVM ground truth.
+func registerBalancerV3Pools(pools []pathfinder.Pool, reader func(common.Address, common.Hash) common.Hash, caller formulas.EVMCaller) {
+	ampSelector := common.FromHex("0x6daccffa")     // getAmplificationParameter()
+	weightsSelector := common.FromHex("0xf89f27ed") // getNormalizedWeights()
+
+	stable, weighted, skippedExotic, skippedHook := 0, 0, 0, 0
+	for _, p := range pools {
+		if p.PoolType != 6 || len(p.Tokens) < 2 {
+			continue
+		}
+		poolAddr := strings.ToLower(p.Address.Hex())
+
+		// Read the pool's config bits from vault slot 0 mapping to detect
+		// swap-affecting hooks. The mapping key is keccak256(pool ++ 0).
+		var cfgKey [64]byte
+		copy(cfgKey[12:32], p.Address.Bytes())
+		// slot index 0, nothing to write in the second half
+		cfgSlot := crypto.Keccak256Hash(cfgKey[:])
+		cfgBits := reader(balV3VaultAddr, cfgSlot)
+		cfgVal := new(big.Int).SetBytes(cfgBits[:])
+		hasSwapHook := cfgVal.Bit(balV3BitDynamicSwapFee) == 1 ||
+			cfgVal.Bit(balV3BitBeforeSwap) == 1 ||
+			cfgVal.Bit(balV3BitAfterSwap) == 1 ||
+			cfgVal.Bit(balV3BitHookAdjusted) == 1
+
+		if hasSwapHook {
+			// Hook alters the swap; static formula would overquote. Skip.
+			skippedHook++
+			continue
+		}
+
+		// Read per-token TokenInfo (type + rate provider) from vault storage.
+		tokenTypes := make([]formulas.BalV3TokenType, len(p.Tokens))
+		rateProviders := make([]common.Address, len(p.Tokens))
+		for i, tok := range p.Tokens {
+			tt, rp := balV3ReadTokenInfo(reader, p.Address, tok)
+			tokenTypes[i] = formulas.BalV3TokenType(tt)
+			rateProviders[i] = rp
+		}
+
+		// Try Stable first: getAmplificationParameter() returns (uint256 value, bool, uint256 precision).
+		if ampResult, ok := caller(p.Address, ampSelector); ok && len(ampResult) >= 96 {
+			ampVal := new(big.Int).SetBytes(ampResult[0:32])
+			if ampVal.Sign() > 0 {
+				formulas.RegisterBalancerV3Pool(poolAddr, &formulas.BalancerV3PoolInfo{
+					PoolType:      formulas.BalV3Stable,
+					NumTokens:     len(p.Tokens),
+					Tokens:        p.Tokens,
+					Amp:           ampVal,
+					TokenTypes:    tokenTypes,
+					RateProviders: rateProviders,
+				})
+				stable++
+				continue
+			}
+		}
+
+		// Try Weighted: getNormalizedWeights() returns uint256[].
+		if weightsResult, ok := caller(p.Address, weightsSelector); ok && len(weightsResult) >= 64 {
+			numWeights := new(big.Int).SetBytes(weightsResult[32:64]).Int64()
+			if numWeights == int64(len(p.Tokens)) && len(weightsResult) >= 64+int(numWeights)*32 {
+				weights := make([]*big.Int, numWeights)
+				allValid := true
+				for i := int64(0); i < numWeights; i++ {
+					off := 64 + i*32
+					weights[i] = new(big.Int).SetBytes(weightsResult[off : off+32])
+					if weights[i].Sign() <= 0 {
+						allValid = false
+						break
+					}
+				}
+				if allValid {
+					formulas.RegisterBalancerV3Pool(poolAddr, &formulas.BalancerV3PoolInfo{
+						PoolType:      formulas.BalV3Weighted,
+						NumTokens:     len(p.Tokens),
+						Tokens:        p.Tokens,
+						Weights:       weights,
+						TokenTypes:    tokenTypes,
+						RateProviders: rateProviders,
+					})
+					weighted++
+					continue
+				}
+			}
+		}
+
+		// GyroECLP or other exotic: no formula support. Leave unregistered so
+		// newBalancerV3Pool returns nil → zeroQuoter.
+		skippedExotic++
+	}
+	fmt.Fprintf(os.Stderr, "[bench] balancer_v3 registered: %d stable, %d weighted, %d skipped_hook, %d skipped_exotic\n",
+		stable, weighted, skippedHook, skippedExotic)
 }

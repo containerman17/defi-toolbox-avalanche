@@ -314,10 +314,21 @@ func fpPowUp(x, y *big.Int) *big.Int {
 
 // ── WeightedMath ──
 
+// _MAX_IN_RATIO caps the amountIn at 30% of balanceIn. Swaps beyond this ratio
+// revert on-chain with MaxInRatio. Expressed as 18-decimal FP (30e16).
+var fpMaxInRatio = new(big.Int).Mul(big.NewInt(30), new(big.Int).Exp(big.NewInt(10), big.NewInt(16), nil))
+
 // WeightedComputeOutGivenExactIn computes amountOut for a weighted pool swap.
 // All values are 18-decimal fixed point. Fee has already been deducted from amountIn.
 //   amountOut = balanceOut * (1 - (balanceIn / (balanceIn + amountIn)) ^ (weightIn / weightOut))
+// Returns nil if amountIn exceeds MAX_IN_RATIO (30% of balanceIn), matching the
+// on-chain revert in WeightedMath.computeOutGivenExactIn.
 func WeightedComputeOutGivenExactIn(balanceIn, weightIn, balanceOut, weightOut, amountIn *big.Int) *big.Int {
+	// MaxInRatio check: amountIn must be <= balanceIn * 30%.
+	maxIn := fpMulDown(balanceIn, fpMaxInRatio)
+	if amountIn.Cmp(maxIn) > 0 {
+		return nil // revert in Solidity → zero amountOut here
+	}
 	denominator := new(big.Int).Add(balanceIn, amountIn)
 	base := fpDivUp(balanceIn, denominator)
 	exponent := fpDivDown(weightIn, weightOut)

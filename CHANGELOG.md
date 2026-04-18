@@ -1,5 +1,86 @@
 # Changelog
 
+## 2026-04-18 — balancer_v3: restore pool registration + MaxInRatio check (→98.76%)
+
+### Problem
+`balancer_v3` pools had 6 underquotes per block × 10 blocks = 60 total (out of 80
+jobs). Root cause: the `registerBalancerV3Pools` function that probes each pool
+for `getAmplificationParameter()` / `getNormalizedWeights()` and calls
+`formulas.RegisterBalancerV3Pool` was archived during an earlier refactor and
+never re-implemented in the new `benchmarks/formula-accuracy/main.go`. Without
+registration, `newBalancerV3Pool` fails the `balV3PoolInfos.Load` lookup (line
+120 of `formulas/pool_balancer_v3.go`) and returns nil → `zeroQuoter` → formula
+returns 0 for every balancer_v3 quote.
+
+### Fix
+1. **Re-added `registerBalancerV3Pools`** in `benchmarks/formula-accuracy/main.go`.
+   Called per-block in `runBlock` (before the EVM phase). For each pool_type=6
+   pool in the set, it:
+   - Reads `_poolConfigBits[pool]` from vault slot 0 to detect pools with
+     swap-affecting hooks (bits 9/11/12/13 — `ENABLE_HOOK_ADJUSTED_AMOUNTS`,
+     `DYNAMIC_SWAP_FEE`, `BEFORE_SWAP`, `AFTER_SWAP`). These pools are skipped
+     because the static Weighted/Stable math does not model the hook
+     (e.g. `StableSurgeHook` on `0x82159488` charges a surge fee on imbalancing
+     swaps; without modeling it, our formula overquotes).
+   - Reads per-token `TokenInfo` from vault `_poolTokenInfo` mapping at slot 4
+     (nested mapping `pool → token → TokenInfo`) to extract tokenType and
+     rateProvider — needed for WITH_RATE / ERC4626 scaling via
+     `SetEVMCaller`-driven `getRate()` calls during `Quote`.
+   - Probes `getAmplificationParameter()` (0x6daccffa) for Stable pools.
+   - Probes `getNormalizedWeights()` (0xf89f27ed) for Weighted pools.
+   - Exotic types (GyroECLP) are left unregistered → zeroQuoter.
+
+2. **Added `MaxInRatio` check** in `formulas/balancer_v3.go`
+   (`WeightedComputeOutGivenExactIn`). Balancer V3 `WeightedMath` reverts with
+   `MaxInRatio()` when `amountIn > balanceIn * 30%`. Our formula now returns
+   nil in this case → pool returns zero (safe underquote) instead of computing
+   a value that EVM would reject. Confirmed via cast that pool `0x1550cc4F`
+   (80/20 weighted) reverted with `MaxInRatio()` (selector `0x340a4533`) when
+   amountIn was 6× balanceIn; source: `WeightedMath.sol:194` in
+   `/tmp/routescan/0x1550cc4f51a0a701ebc446d351c4891591d7912a/sources/@balancer-labs/v3-solidity-utils/contracts/math/WeightedMath.sol`.
+
+### Investigation
+Sources inspected via routescan MCP (cached under `/tmp/routescan/`):
+- `0x96c0adc9…` — **GyroECLPPool** (not Weighted/Stable; skipped_exotic).
+- `0x1550cc4F…` — WeightedPool; `WeightedMath.sol:194` revealed the
+  `_MAX_IN_RATIO = 30e16` hard cap.
+- `0x82159488…` — StablePool with `shouldCallComputeDynamicSwapFee=true` and
+  `shouldCallAfterSwap=true`. Hook contract `0x86705Ee1…` is
+  `StableSurgeHook.sol` (charges surge fee on imbalancing swaps, up to
+  `_defaultMaxSurgeFeePercentage`). Without modeling the hook we overquoted
+  by ~14× on a depleted 0.6 USDT / 0.65 USDC pool.
+- `0xba133333…` (Vault) — `PoolConfigConst.sol` + `PoolConfigLib.sol` for bit
+  layout (STATIC_SWAP_FEE_OFFSET=18, DECIMAL_SCALING_FACTORS_OFFSET=90,
+  per-token 5-bit diffs).
+- `0x34a528Da…` — `TokenTemplate` (OZ ERC20 + blacklist); no blacklist hit.
+
+### Before / After (10 blocks, top-4000)
+```
+Before (SnowyYields commit):
+balancer_v3          80      8      0     60     20  (formula always 0)
+TOTAL            39250  38745      0    505   2030   exact=98.71%
+
+After:
+balancer_v3          80     40      0     40     20  (20 real matches)
+TOTAL            39250  38765      0    485   2030   exact=98.76%
+```
+
+- balancer_v3 under: 60 → 40 (−20, 2 real pools × 10 blocks now matching EVM
+  exactly, the Stable `0xaf0303d1…` and two Weighted variants registered).
+- Overquotes: 0 → 0 (both hook pools and out-of-ratio inputs correctly return
+  zero before attempting math).
+- Remaining underquotes (40): 5 hook-skipped pools + 4 exotic pools minus those
+  with no tokenAmounts entry = static gaps, safe underquote.
+
+### Dead ends
+- Tried quoting the StableSurgeHook via EVM `getSurgeFeePercentage` — would
+  require calling `StablePool.onSwap` inside the hook, which needs the vault's
+  live balances staged as call params. Easier to skip; hook-pool quoting is
+  left as future work (~5 extra matches per block).
+- Considered modelling `TokenTemplate.blacklistedAddresses` but the blacklist
+  check passed for vault/router/sender; the `0x1550cc4F` revert turned out to
+  be `MaxInRatio`, not a blacklist.
+
 ## 2026-04-18 — SnowyYields pool-specific FoT gate (→98.71%)
 
 SnowyYields (`0xcd0dcc37`) `_transfer` gates `taxAmount` on `from|to == uniswapV2Pair`.
